@@ -1,4 +1,4 @@
-![Mysz Icon](https://raw.githubusercontent.com/mysz-lang/.github/main/images/mysz_icon.jpg)
+![Mysz Icon](https://raw.githubusercontent.com/mysz-lang/.github/main/images/mysz_logo_1x.jpg)
 
 # mysz-core
 A mouse-loving mouse-based mouse-enthusiastic programming language project.
