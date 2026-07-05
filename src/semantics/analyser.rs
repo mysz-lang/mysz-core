@@ -297,7 +297,7 @@ impl Analyser {
                 Ok(())
             }
 
-            Stmt::If { cond, then_branch } => {
+            Stmt::If { cond, then_branch, else_branch } => {
                 let cond_type = self.check_expr(cond)?;
                 if !self.check_truthiness(cond_type) {
                     return Err(format!(
@@ -311,6 +311,15 @@ impl Analyser {
                     self.check_stmt(block_stmt)?;
                 }
                 self.leave_scope();
+
+                if else_branch.is_some() {
+                    self.enter_scope();
+                    for block_stmt in else_branch.as_ref().unwrap() {
+                        self.check_stmt(&block_stmt)?;
+                    }
+                    self.leave_scope();
+                }
+
                 Ok(())
             }
             Stmt::Function { name, rttype, params, body } => {

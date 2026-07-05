@@ -95,7 +95,8 @@ pub enum Stmt {
     Expr(Expr),
     If{
         cond: Expr, 
-        then_branch: Vec<Stmt>
+        then_branch: Vec<Stmt>,
+        else_branch: Option<Vec<Stmt>>,
     },
     While{
         cond: Expr,

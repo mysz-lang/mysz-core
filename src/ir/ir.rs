@@ -230,11 +230,22 @@ impl IRGen {
                 self.gen_expr(expr);
             }
 
+            // normal if:
+            // iffalse cond goto end
+            // [body]
+            // end:
+            // ---
+            // if/else:
+            // iffalse cond goto end
+            // [then body]
+            // goto true_end
+            // end:
             Stmt::If {
                 cond,
                 then_branch,
+                else_branch
             } => {
-                let end = self.labels.next();
+                let end = self.labels.next(); // l2
 
                 let cond_val = self.gen_expr(cond);
 
@@ -247,7 +258,18 @@ impl IRGen {
                     self.gen_stmt(stmt);
                 }
 
-                self.code.push(Instruction::Label(end));
+                if else_branch.is_none() {
+                    self.code.push(Instruction::Label(end));
+                } else {
+                    let true_end = self.labels.next();
+                    self.code.push(Instruction::Jump(true_end.clone()));
+                    self.code.push(Instruction::Label(end));
+                    for stmt in else_branch.as_ref().unwrap() {
+                        self.gen_stmt(&stmt);
+                    }
+                    self.code.push(Instruction::Label(true_end));
+                    
+                }
             }
 
             Stmt::While { cond, body } => {

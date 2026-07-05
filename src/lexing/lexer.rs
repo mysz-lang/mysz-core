@@ -283,6 +283,11 @@ impl Lexer{
                 location: loc,
                 value
             }},
+            "else" => {return Token {
+                ttype: TokenType::ElseKeyword,
+                location: loc,
+                value
+            }}
             "while" => {return Token {
                 ttype: TokenType::WhileKeyword,
                 location: loc,

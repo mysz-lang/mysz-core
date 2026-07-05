@@ -37,6 +37,7 @@ pub enum TokenType {
     // keywords
     VarKeyword,
     IfKeyword,
+    ElseKeyword,
     WhileKeyword,
     FnKeyword,
     ReturnKeyword,

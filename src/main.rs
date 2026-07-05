@@ -26,7 +26,9 @@ use crate::tmp::{Cli, Commands};
 
 fn main() {
     let source: String =
-        "extern fn print_int(a: int); fn main() {var x = 60; print_int(x);};".to_string();
+        "fn main(): int {if (0) {var y = 0;} else {var y = 1;}; return 0;}"
+        
+        .to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();

@@ -1,3 +1,4 @@
+use crate::lexing::lexing::TokenType::ElseKeyword;
 use crate::lexing::lexing::{Token, TokenType};
 use crate::parse::parsing::{
     BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType, Program, Stmt, UnaryOp,
@@ -365,7 +366,13 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        Some(Stmt::If { cond, then_branch: body })
+        let else_branch = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::ElseKeyword)) {
+            self.advance();
+            self.expect(TokenType::LBrace);
+            Some(self.parse_block())
+        } else { None };
+
+        Some(Stmt::If { cond, then_branch: body, else_branch })
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
