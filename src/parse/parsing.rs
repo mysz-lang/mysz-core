@@ -17,6 +17,15 @@ impl Literal {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Type {
+    Int,
+    Bool,
+    Str,
+    Void,
+    Ptr(Box<Type>), // Boxed to allow nesting like ptr<ptr<int>>
+}
+
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
     Add,
@@ -35,7 +44,9 @@ pub enum BinaryOp {
 #[derive(Debug, Clone)]
 pub enum UnaryOp {
     Positive,
-    Negative
+    Negative,
+    AddressOf,
+    Deref,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +88,7 @@ pub struct Expr {
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub name: Identifier,
-    pub ptype: Option<Identifier>
+    pub ptype: Option<Type>
 }
 
 
@@ -85,12 +96,16 @@ pub struct Parameter {
 pub enum Stmt {
     Assignment{
         ident: Identifier,
-        vtype: Option<Identifier>,
+        vtype: Option<Type>,
         expr: Expr
     },
     Reassignment{
         ident: Identifier,
         expr: Expr
+    },
+    DerefReassignment{
+        target: Expr,
+        expr: Expr,
     },
     Expr(Expr),
     If{
@@ -104,7 +119,7 @@ pub enum Stmt {
     },
     Function{
         name: Identifier,
-        rttype: Option<Identifier>,
+        rttype: Option<Type>,
         params: Vec<Parameter>,
         body: Vec<Stmt>
     },
@@ -114,7 +129,7 @@ pub enum Stmt {
     },
     Extern{
         name: Identifier,
-        rttype: Option<Identifier>,
+        rttype: Option<Type>,
         params: Vec<Parameter>,
     }
 }

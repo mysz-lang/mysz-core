@@ -74,8 +74,6 @@ pub struct NasmBackend {
     frame: StackFrame,
     ctx: FunctionCtx,
     
-    // NEW: Global map to collect string literal constants across the entire program.
-    // Maps the raw string content to its uniquely generated assembly label name.
     rodata: HashMap<String, String>,
 }
 
@@ -93,7 +91,6 @@ impl NasmBackend {
         };
     }
 
-    // MODIFIED: Strings are now explicitly supported!
     fn lower_value(&self, v: &Value) -> String {
         match v {
             Value::Const(i) => i.to_string(),
@@ -101,7 +98,6 @@ impl NasmBackend {
             Value::Void => "0".to_string(),
             Value::Temp(t) | Value::Var(t) => self.frame.addr(t),
             
-            // Look up the registered label name for this string constant
             Value::Str(s) => match self.rodata.get(s) {
                 Some(label) => label.clone(),
                 None => panic!("String literal was never collected in pre-pass: {}", s),
@@ -109,7 +105,6 @@ impl NasmBackend {
         }
     }
 
-    // MODIFIED: If a string literal value is detected, allocate a global label for it.
     fn collect_value(&mut self, v: &Value) {
         match v {
             Value::Temp(t) | Value::Var(t) => self.frame.alloc(t),
@@ -182,18 +177,38 @@ impl NasmBackend {
                 self.emit_prologue();
             }
 
+            Instruction::Store { ptr, source } => {
+                let ptr_loc = self.lower_value(ptr);
+                
+                self.emit(&format!("mov rax, {}", ptr_loc));
+
+                let src_val = self.lower_value(source);
+
+                match source {
+                    Value::Const(_) | Value::Bool(_) | Value::Void => {
+                        self.emit(&format!("mov qword [rax], {}", src_val));
+                    }
+                    Value::Temp(_) | Value::Var(_) => {
+                        self.emit(&format!("mov r10, {}", src_val));
+                        self.emit("mov [rax], r10");
+                    }
+                    Value::Str(_) => {
+                        self.emit(&format!("lea r10, [rel {}]", src_val));
+                        self.emit("mov [rax], r10");
+                    }
+                }
+            }
+
             Instruction::Label(l) => self.emit(&format!("{}:", l)),
 
             Instruction::Assign { dst, src } => {
                 let dst_addr = self.frame.addr(dst);
                 let src_val = self.lower_value(src);
                 
-                // If both are memory expressions (e.g. stack slots), go through RAX.
                 if dst_addr.starts_with('[') && src_val.starts_with('[') {
                     self.emit(&format!("mov rax, {}", src_val));
                     self.emit(&format!("mov qword {}, rax", dst_addr));
                     } else if !src_val.starts_with('[') && !src_val.chars().all(|c| c.is_ascii_digit() || c == '-') {
-                        // FIX: Add 'rel' inside the brackets to enable RIP-relative addressing
                         self.emit(&format!("lea rax, [rel {}]", src_val));
                         self.emit(&format!("mov qword {}, rax", dst_addr));
                     } else {
@@ -252,16 +267,34 @@ impl NasmBackend {
             }
 
             Instruction::Unary { dst, op, value } => {
-                let dst = self.frame.addr(dst);
-                self.emit(&format!("mov rax, {}", self.lower_value(value)));
+                let dst_slot = self.frame.addr(dst);
 
                 match op {
-                    IrOp::Neg => self.emit("neg rax"),
-                    IrOp::Pos => {}
+                    IrOp::Ref => {
+                        let var_loc = self.lower_value(value);
+                        
+                        let raw_address = var_loc.trim_matches(|c| c == '[' || c == ']');
+                        
+                        self.emit(&format!("lea rax, [{}]", raw_address));
+                    }
+                    IrOp::DeRef => {
+                        let ptr_loc = self.lower_value(value);
+                        self.emit(&format!("mov rax, {}", ptr_loc));
+                        self.emit("mov rax, [rax]");
+                    }
+                    IrOp::Neg => {
+                        self.emit(&format!("mov rax, {}", self.lower_value(value)));
+                        self.emit("neg rax");
+                    }
+                    IrOp::Pos => {
+                        self.emit(&format!("mov rax, {}", self.lower_value(value)));
+                    }
+
                     _ => {}
                 }
 
-                self.emit(&format!("mov {}, rax", dst));
+                // Save the result back to the destination temporary/variable stack slot
+                self.emit(&format!("mov {}, rax", dst_slot));
             }
 
             Instruction::Jump(l) => self.emit(&format!("jmp {}", l)),
@@ -285,7 +318,6 @@ impl NasmBackend {
             Instruction::Arg { value } => {
                 let v = self.lower_value(value);
                 
-                // MODIFIED: If passing a raw string label, evaluate it via an address reference rather than direct numeric injection
                 let source_expr = if !v.starts_with('[') && !v.chars().all(|c| c.is_ascii_digit() || c == '-') {
                     self.emit(&format!("lea rax, [rel {}]", v));
                     "rax".to_string()
@@ -332,17 +364,13 @@ impl Backend for NasmBackend {
                 arg_index: 0,
                 param_index: 0,
             },
-            rodata: HashMap::new(), // Initialize the rodata storage map
+            rodata: HashMap::new(),
         }
     }
 
     fn emit_program(&mut self, program: &[Instruction]) -> String {
         self.out.clear();
-        self.rodata.clear(); // Empty old data references
-
-        // --- PRE-PASS FIRST SELECTION ---
-        // Run a universal collection loop over ALL instructions across the whole program to discover string literals
-        // and safely generate their labels BEFORE emitting text sections.
+        self.rodata.clear();
         for inst in program {
             match inst {
                 Instruction::Assign { src, .. } => self.collect_value(src),
@@ -359,24 +387,20 @@ impl Backend for NasmBackend {
 
         if !self.rodata.is_empty() {
             self.emit("section .rodata");
-            
-            // FIX: Extract and clone the label/string pairs into a temporary vector.
-            // This immediately drops the immutable borrow on `self.rodata`.
+
             let mut items: Vec<(String, String)> = self.rodata
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-                
-            // Optional: Sort them so your output assembly looks clean and deterministic
+
             items.sort_by(|a, b| a.1.cmp(&b.1));
 
             for (raw_str, label) in items {
                 self.emit(&format!("    {}: db \"{}\", 0", label, raw_str));
             }
-            self.emit(""); // Extra newline spacing
+            self.emit("");
         }
 
-        // 2. Emit Standard Code Execution Segment
         self.emit("section .text");
 
         for func in split_functions(program) {

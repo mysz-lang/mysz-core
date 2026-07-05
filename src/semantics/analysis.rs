@@ -1,24 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{parse::parsing::Identifier, utils::location::Location};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Type { Int, Str, Bool, Void }
-
-impl Type {
-    pub fn from_ident(ident: &Identifier) -> Result<Self, String> {
-        match ident.value.as_str() {
-            "int" => Ok(Type::Int),
-            "str" => Ok(Type::Str),
-            "bool" => Ok(Type::Bool),
-            "void" => Ok(Type::Void),
-            _ => Err(format!(
-                "Semantic Error [{}]: Unknown type annotation '{}'", 
-                ident.location, ident.value
-            )),
-        }
-    }
-}
+use crate::{parse::parsing::{Type}, utils::location::Location};
 
 pub struct Symbol {
     pub data_type: Type,

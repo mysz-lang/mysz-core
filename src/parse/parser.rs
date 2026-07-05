@@ -1,7 +1,6 @@
-use crate::lexing::lexing::TokenType::ElseKeyword;
 use crate::lexing::lexing::{Token, TokenType};
 use crate::parse::parsing::{
-    BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType, Program, Stmt, UnaryOp,
+    BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType, Program, Stmt, Type, UnaryOp,
 };
 use crate::utils::toident::{to_ident};
 
@@ -68,7 +67,7 @@ impl Parser {
         } else {
             self.throw(
                 ParserErrorType::UnexpectedTokenTypeError,
-                format!("Expected {:?}, found {:?}", ttype, tk.ttype),
+                format!("Expected {:?}, found {:?} '{:?}'", ttype, tk.ttype, tk.value),
             );
             None
         }
@@ -92,6 +91,42 @@ impl Parser {
         self.ast = Program { statements };
     }
 
+    fn parse_type(&mut self) -> Option<Type> {
+        let tk = self.get_token()?.clone();
+        
+        match tk.ttype {
+            TokenType::Identifier => {
+                match tk.value.as_str() {
+                    "int" => { self.advance(); Some(Type::Int) }
+                    "bool" => { self.advance(); Some(Type::Bool) }
+                    "str" => { self.advance(); Some(Type::Str) }
+                    "void" => { self.advance(); Some(Type::Void) }
+                    "ptr" => {
+                        self.advance();
+                        self.expect(TokenType::LessThan)?;
+                        let inner = self.parse_type()?;
+                        self.expect(TokenType::GreaterThan)?;
+                        Some(Type::Ptr(Box::new(inner)))
+                    }
+                    other => {
+                        self.throw(
+                            ParserErrorType::UnexpectedTokenTypeError,
+                            format!("Unknown type identifier: {}", other),
+                        );
+                        None
+                    }
+                }
+            }
+            _ => {
+                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    format!("Expected type metadata, found {:?}", tk.ttype),
+                );
+                None
+            }
+        }
+    }
+    
     fn parse_block(&mut self) -> Vec<Stmt> {
         let mut statements = Vec::new();
 
@@ -121,6 +156,19 @@ impl Parser {
             TokenType::ReturnKeyword => self.parse_return(),
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
+            TokenType::Star => {
+                self.advance();
+                
+                let pointer_expr = self.parse_unary()?; 
+                
+                self.expect(TokenType::Assign)?;
+                let value_expr = self.parse_expr()?;
+                
+                Some(Stmt::DerefReassignment {
+                    target: pointer_expr,
+                    expr: value_expr,
+                })
+            }
             _ => self.parse_expr().map(Stmt::Expr),
         };
 
@@ -129,7 +177,7 @@ impl Parser {
     }
 
     fn parse_extern(&mut self) -> Option<Stmt> {
-        self.advance(); // skip extern
+        self.advance();
         self.expect(TokenType::FnKeyword)?;
 
         let ident = self.expect(TokenType::Identifier)?;
@@ -138,9 +186,11 @@ impl Parser {
         
         let params = self.parse_params();
 
-        let rttype = match self.get_token()?.ttype {
-            TokenType::Colon => {to_ident(self.expect(TokenType::Identifier))}
-            _ => {None}
+        let rttype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
+            self.advance();
+            self.parse_type()
+        } else {
+            None
         };
 
         Some(Stmt::Extern {
@@ -152,10 +202,8 @@ impl Parser {
 
     fn parse_ident(&mut self) -> Option<Stmt> {
         let ident_tk = self.get_token()?.clone();
-        // println!("parse_ident: current={:?}", ident_tk);
 
         let next_ttype = self.tokens.get(self.token_idx + 1).map(|t| &t.ttype);
-        // println!("parse_ident: peeked next={:?}", next_ttype);
 
         if matches!(next_ttype, Some(TokenType::Assign)) {
             self.advance();
@@ -163,7 +211,6 @@ impl Parser {
         }
 
         let result = self.parse_expr().map(Stmt::Expr);
-        // println!("parse_ident: parse_expr result={:?}", result);
         result
     }
 
@@ -172,7 +219,7 @@ impl Parser {
         let mut params = Vec::new();
 
         if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RParen)) {
-            self.advance(); // consume ')'
+            self.advance();
             return params;
         }
 
@@ -192,21 +239,8 @@ impl Parser {
             };
 
             let ptype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
-                self.advance(); // skip ':'
-
-                match to_ident(self.get_token().cloned()) {
-                    Some(ty) => {
-                        self.advance();
-                        Some(ty)
-                    }
-                    None => {
-                        self.throw(
-                            ParserErrorType::UnexpectedTokenTypeError,
-                            "Expected type after ':'".to_string(),
-                        );
-                        None
-                    }
-                }
+                self.advance();
+                self.parse_type()
             } else {
                 None
             };
@@ -238,24 +272,24 @@ impl Parser {
     fn parse_args(&mut self) -> Vec<Expr> {
         let mut args = Vec::new();
 
-        // handle empty arg list: ()
+        // handle empty lists
         if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RParen)) {
-            self.advance(); // skip )
+            self.advance();
             return args;
         }
 
         loop {
             match self.parse_expr() {
                 Some(expr) => args.push(expr),
-                None => break, // error already recorded by parse_expr/parse_primary
+                None => break,
             }
 
             match self.get_token().map(|t| &t.ttype) {
                 Some(TokenType::Comma) => {
-                    self.advance(); // skip , and keep parsing more args
+                    self.advance();
                 }
                 Some(TokenType::RParen) => {
-                    self.advance(); // skip )
+                    self.advance();
                     break;
                 }
                 other => {
@@ -272,7 +306,7 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Option<Stmt> {
-        self.advance(); // skip fn
+        self.advance();
 
         let ident = self.expect(TokenType::Identifier)?;
 
@@ -280,23 +314,21 @@ impl Parser {
         let params = self.parse_params();
         
         let mut rttype = None;
-        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) { // type explicity
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
             self.advance();
-            let t = self.expect(TokenType::Identifier)?;
-            rttype = Some(t);
+            rttype = self.parse_type();
         }
 
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        Some(Stmt::Function { name: Identifier { value: ident.value, location: ident.location }, rttype: to_ident(rttype), params, body })
+        Some(Stmt::Function { name: Identifier { value: ident.value, location: ident.location }, rttype: rttype, params, body })
     }
 
     fn parse_return(&mut self) -> Option<Stmt> {
         let tk = self.get_token()?.clone();
-        self.advance(); // skip 'return'
+        self.advance();
 
-        // return; or return } — no expression follows
         let expr = match self.get_token().map(|t| &t.ttype) {
             Some(TokenType::SemiColon | TokenType::RBrace) => None,
             _ => Some(self.parse_expr()?),
@@ -315,17 +347,16 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Option<Stmt> {
-        self.advance(); // var keyword
+        self.advance();
 
-        let ident = self.expect(TokenType::Identifier)?; // ident
+        let ident = self.expect(TokenType::Identifier)?;
         let ident_loc = ident.location.clone();
 
-        let mut type_ident = None;
+        let mut vtype = None;
 
-        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) { // type explicity
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
             self.advance();
-            let t = self.expect(TokenType::Identifier)?;
-            type_ident = Some(t);
+            vtype = self.parse_type();
         }
 
         self.expect(TokenType::Assign)?;
@@ -336,18 +367,17 @@ impl Parser {
                 value: ident.value,
                 location: ident_loc,
             },
-            vtype: to_ident(type_ident),
+            vtype: vtype,
             expr,
         })
     }
 
     fn parse_while(&mut self) -> Option<Stmt> {
-        self.advance(); // skip while
+        self.advance();
 
 
         self.expect(TokenType::LParen)?;
         let cond = self.parse_expr()?;
-        // println!("{}", self.get_token().unwrap());
         self.expect(TokenType::RParen)?;
 
         self.expect(TokenType::LBrace)?;
@@ -357,10 +387,10 @@ impl Parser {
     }
 
     fn parse_if(&mut self) -> Option<Stmt> {
-        self.advance(); // skip if
+        self.advance();
 
-        self.expect(TokenType::LParen)?; // skip (
-        let cond = self.parse_expr()?; // condition expression
+        self.expect(TokenType::LParen)?;
+        let cond = self.parse_expr()?;
         self.expect(TokenType::RParen)?;
 
         self.expect(TokenType::LBrace)?;
@@ -551,6 +581,28 @@ impl Parser {
                     span: tk.location,
                 })
             }
+            TokenType::Ampersand => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Some(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::AddressOf,
+                        expr: Box::new(expr),
+                    },
+                    span: tk.location,
+                })
+            }
+            TokenType::Star => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Some(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        expr: Box::new(expr),
+                    },
+                    span: tk.location,
+                })
+            }
             _ => self.parse_primary(),
         }
     }
@@ -598,7 +650,7 @@ impl Parser {
                 let ident = tk.clone();
 
                 if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LParen)) {
-                    self.advance(); // skip (
+                    self.advance();
                     let args = self.parse_args();
                     return Some(Expr {
                         kind: ExprKind::Call {

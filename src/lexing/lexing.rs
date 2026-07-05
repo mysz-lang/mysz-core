@@ -10,8 +10,6 @@ pub enum TokenType {
     LessThanEquals,
     GreaterThanEquals,
 
-
-
     // generic signs
     Assign,
     LParen,
@@ -22,6 +20,10 @@ pub enum TokenType {
     Colon,
     Comma,
     
+    // pointers
+    Ampersand,
+    Star,
+
     // maths signs
     Add, // +
     Minus, // -

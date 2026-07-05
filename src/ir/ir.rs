@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    ir::tac::{Instruction, IrOp, Value}, parse::parsing::{
-        BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, UnaryOp,
-    }, semantics::analysis::Type,
+    ir::tac::{Instruction, IrOp, Value}, 
+    parse::parsing::{
+        BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, UnaryOp, Type,
+    },
 };
 
 pub struct TempGen {
@@ -39,6 +40,7 @@ impl LabelGen {
 pub struct FunctionGen {
     counter: usize,
 }
+
 impl FunctionGen {
     pub fn new() -> Self {
         Self { counter: 0 }
@@ -46,23 +48,7 @@ impl FunctionGen {
 
     pub fn next(&mut self, name: String) -> String {
         self.counter += 1;
-        format!("{}", name)
-    }
-}
-
-pub struct Codegen {
-    pub instrs: Vec<Instruction>,
-    pub temp_count: usize,
-}
-
-impl Codegen {
-    fn new_temp(&mut self) -> String {
-        self.temp_count += 1;
-        format!("t{}", self.temp_count)
-    }
-
-    fn emit(&mut self, instr: Instruction) {
-        self.instrs.push(instr);
+        name
     }
 }
 
@@ -128,9 +114,9 @@ impl IRGen {
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
-            ExprKind::Identifier(name) => self.var_types.get(name).copied(),
-            ExprKind::Binary { left, .. } => self.expr_type(left), // Add on Str yields Str, etc — simplistic but works for now
-            ExprKind::Call { .. } => None, // would need function return-type lookup too
+            ExprKind::Identifier(name) => self.var_types.get(name).cloned(),
+            ExprKind::Binary { left, .. } => self.expr_type(left), 
+            ExprKind::Call { .. } => None, 
             _ => None,
         }
     }
@@ -151,6 +137,8 @@ impl IRGen {
                 let ir_op = match op {
                     UnaryOp::Positive => IrOp::Pos,
                     UnaryOp::Negative => IrOp::Neg,
+                    UnaryOp::AddressOf => IrOp::Ref,
+                    UnaryOp::Deref => IrOp::DeRef,
                 };
 
                 self.emit_unary(ir_op, value)
@@ -160,7 +148,10 @@ impl IRGen {
                 let lhs = self.gen_expr(left);
                 let rhs = self.gen_expr(right);
 
-                if matches!(op, BinaryOp::Add) && (self.is_string_valued(&lhs) || self.expr_type(left) == Some(Type::Str)) && (self.is_string_valued(&rhs)|| self.expr_type(right) == Some(Type::Str)) {
+                if matches!(op, BinaryOp::Add) 
+                    && (self.is_string_valued(&lhs) || self.expr_type(left) == Some(Type::Str)) 
+                    && (self.is_string_valued(&rhs) || self.expr_type(right) == Some(Type::Str)) 
+                {
                     self.code.push(Instruction::Arg { value: lhs });
                     self.code.push(Instruction::Arg { value: rhs });
                     let dst = self.temps.next();
@@ -171,7 +162,6 @@ impl IRGen {
                     });
                     return Value::Temp(dst);
                 }
-
 
                 let ir_op = match op {
                     BinaryOp::Add => IrOp::Add,
@@ -230,22 +220,12 @@ impl IRGen {
                 self.gen_expr(expr);
             }
 
-            // normal if:
-            // iffalse cond goto end
-            // [body]
-            // end:
-            // ---
-            // if/else:
-            // iffalse cond goto end
-            // [then body]
-            // goto true_end
-            // end:
             Stmt::If {
                 cond,
                 then_branch,
                 else_branch
             } => {
-                let end = self.labels.next(); // l2
+                let end = self.labels.next();
 
                 let cond_val = self.gen_expr(cond);
 
@@ -265,20 +245,19 @@ impl IRGen {
                     self.code.push(Instruction::Jump(true_end.clone()));
                     self.code.push(Instruction::Label(end));
                     for stmt in else_branch.as_ref().unwrap() {
-                        self.gen_stmt(&stmt);
+                        self.gen_stmt(stmt);
                     }
                     self.code.push(Instruction::Label(true_end));
-                    
                 }
             }
 
             Stmt::While { cond, body } => {
-                let start = self.labels.next(); // l1
-                let end = self.labels.next(); // l2
+                let start = self.labels.next();
+                let end = self.labels.next();
 
                 self.code.push(Instruction::Label(start.clone()));
                 
-                let cond_val = self.gen_expr(cond); // cond
+                let cond_val = self.gen_expr(cond);
                 self.code.push(Instruction::JumpIfFalse { cond: cond_val, target: end.clone() });
 
                 for stmt in body {
@@ -287,7 +266,8 @@ impl IRGen {
                 self.code.push(Instruction::Jump(start));
                 self.code.push(Instruction::Label(end));
             }
-            Stmt::Function { name, rttype, params, body } => {
+
+            Stmt::Function { name, params, body, .. } => {
                 let start = self.functions.next(name.value.clone());
                 self.code.push(Instruction::FunctionLabel(start));
 
@@ -303,7 +283,8 @@ impl IRGen {
                     self.code.push(Instruction::Return { value: Value::Const(0) });
                 }
             },
-            Stmt::Return { value, span } => {
+
+            Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
                     let val = self.gen_expr(expr);
                     self.code.push(Instruction::Return { value: val });
@@ -311,8 +292,19 @@ impl IRGen {
                     self.code.push(Instruction::Return { value: Value::Const(0) })
                 }
             },
+
             Stmt::Extern { name, .. } => {
                 self.code.push(Instruction::Extern { fnname: name.value.clone() })
+            }
+            Stmt::DerefReassignment { target, expr } => {
+                let value = self.gen_expr(expr);
+
+                let ptr_val = self.gen_expr(target);
+
+                self.code.push(Instruction::Store {
+                    ptr: ptr_val,
+                    source: value,
+                });
             }
         }
     }
@@ -337,35 +329,27 @@ impl IRGen {
                 Instruction::Assign { dst, src } => {
                     println!("{dst} = {:?}", src);
                 }
-
                 Instruction::Binary { dst, op, lhs, rhs } => {
                     println!("{dst} = {:?} {:?} {:?}", lhs, op, rhs);
                 }
-
                 Instruction::Unary { dst, op, value } => {
                     println!("{dst} = {:?}{:?}", op, value);
                 }
-
                 Instruction::Label(label) => {
                     println!("{label}:");
                 }
-
                 Instruction::Jump(label) => {
                     println!("goto {label}");
                 }
-
                 Instruction::JumpIfFalse { cond, target } => {
                     println!("ifFalse {:?} goto {target}", cond);
                 }
-
                 Instruction::Param { p } => {
                     println!("param {}", p)
                 }
-
                 Instruction::FunctionLabel(label) => {
                     println!("{label}:")
                 }
-
                 Instruction::Return { value } => {
                     println!("return {:?}", value)
                 }
@@ -377,6 +361,9 @@ impl IRGen {
                 },
                 Instruction::Extern { fnname } => {
                     println!("extern {}", fnname)
+                }
+                Instruction::Store { ptr, source} => {
+                    println!("store {:?} to *{:?}", source, ptr)
                 }
             }
         }

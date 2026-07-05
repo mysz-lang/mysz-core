@@ -26,7 +26,17 @@ use crate::tmp::{Cli, Commands};
 
 fn main() {
     let source: String =
-        "fn main(): int {if (0) {var y = 0;} else {var y = 1;}; return 0;}"
+"extern fn print_int(a: int);
+fn main(): int {
+    var x = 20;
+    var y = &x;
+
+    ^y = 10;
+
+    print_int(x);
+
+    return 0;
+};"
         
         .to_string();
 
@@ -34,6 +44,8 @@ fn main() {
     lexer.lex();
 
     let tokens = lexer.tokens;
+
+    // println!("{:#?}", tokens);
 
     let mut parser = myszparser::new(tokens);
     parser.parse();

@@ -7,6 +7,8 @@ pub enum IrOp {
 
     Neg, // unary minus
     Pos, // unary plus
+    Ref, // unary &
+    DeRef, // unary ^
 
     Eq, // ==
     NEq, // !=
@@ -68,6 +70,8 @@ pub enum Instruction {
 
     Arg { value: Value },
     Call { dest: Option<String>, name: String, argc: usize },
+
+    Store {ptr: Value, source: Value},
 
 
     Extern { fnname: String }

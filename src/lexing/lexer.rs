@@ -84,6 +84,9 @@ impl Lexer{
                     '>' => {let t = self.lex_gt(); self.add_token(t);}
                     '<' => {let t = self.lex_lt(); self.add_token(t);}
 
+                    '&' => {self.single_char(TokenType::Ampersand);}
+                    '^' => {self.single_char(TokenType::Star);}
+
                     ';' => {self.single_char(TokenType::SemiColon);}
                     ':' => {self.single_char(TokenType::Colon);}
                     '(' => {self.single_char(TokenType::LParen);}
@@ -188,8 +191,8 @@ impl Lexer{
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
 
-            self.advance(); // first '='
-            self.advance(); // second '='
+            self.advance(); // =
+            self.advance(); // =
 
             return Token {
                 ttype: TokenType::Equals,
@@ -198,7 +201,7 @@ impl Lexer{
             };
         }
 
-        self.advance(); // '='
+        self.advance(); // =
 
         Token {
             ttype: TokenType::Assign,
@@ -212,14 +215,14 @@ impl Lexer{
 
         let mut string: Vec<char> = Vec::new();
 
-        self.advance(); // skip initial '"'
+        self.advance(); // "
 
         while let Some(ch) = self.get_char() {
             if ch != '"' {
                 string.push(ch);
                 self.advance();
             } else {
-                self.advance(); // skip closing '"'
+                self.advance(); // "
                 break;
             }
         }
@@ -250,7 +253,6 @@ impl Lexer{
         let value: String = numstring.into_iter().collect();
 
         Token {
-            // adjust these fields to your actual struct
             ttype: TokenType::IntLiteral,
             location: loc,
             value,

@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use crate::parse::parsing::*;
-use crate::semantics::analysis::{Scope, Symbol, Type, FunctionSignature};
+use crate::semantics::analysis::{Scope, Symbol, FunctionSignature};
 use crate::utils::location::Location;
-
 
 pub struct Analyser {
     pub scopes: Vec<Scope>,
@@ -12,6 +11,7 @@ pub struct Analyser {
     pub types: HashMap<String, Type>,
     current_return_type: Option<Type>,
 }
+
 impl Analyser {
     pub fn new() -> Self {
         Self {
@@ -46,7 +46,7 @@ impl Analyser {
                 span, name
             ));
         }
-        scope.symbols.insert(name.to_string(), Symbol { data_type });
+        scope.symbols.insert(name.to_string(), Symbol { data_type: data_type.clone() });
         self.types.insert(name.to_string(), data_type);
         Ok(())
     }
@@ -91,7 +91,7 @@ impl Analyser {
         self.functions.get(name)
     }
 
-    pub fn check_truthiness(&self, ty: Type) -> bool {
+    pub fn check_truthiness(&self, ty: &Type) -> bool {
         match ty {
             Type::Int => true,
             Type::Bool => true,
@@ -103,16 +103,13 @@ impl Analyser {
     pub fn check_expr(&self, expr: &Expr) -> Result<Type, String> {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
-                Literal::Int(val_str) => {
-                    val_str;
-                    Ok(Type::Int)
-                }
+                Literal::Int(_) => Ok(Type::Int),
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool)
             },
             ExprKind::Identifier(name) => {
                 if let Some(symbol) = self.resolve_variable(name) {
-                    Ok(symbol.data_type)
+                    Ok(symbol.data_type.clone())
                 } else {
                     Err(format!("Semantic Error [{}]: Variable '{}' is used before definition.", expr.span, name))
                 }
@@ -133,7 +130,7 @@ impl Analyser {
                 }
 
                 let param_types = sig.param_types.clone();
-                let return_type = sig.return_type;
+                let return_type = sig.return_type.clone();
 
                 for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
                     let arg_type = self.check_expr(arg)?;
@@ -176,7 +173,7 @@ impl Analyser {
                     }
                     BinaryOp::Eq | BinaryOp::NEq | BinaryOp::Gt | BinaryOp::GtE | BinaryOp::Lt | BinaryOp::LtE => {
                         if left_type == right_type {
-                            Ok(left_type)
+                            Ok(Type::Bool)
                         } else {
                             Err(format!(
                                 "Type Error [{}]: Operator '{:?}' expects same-type sides, lhs: {:?}, rhs: {:?}",
@@ -194,9 +191,21 @@ impl Analyser {
                             Ok(Type::Int)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Unary operator expects 'int', found '{:?}'", 
+                                "Type Error [{}]: Unary arithmetic operator expects 'int', found '{:?}'", 
                                 expr.span, expr_type
                             ))
+                        }
+                    }
+                    UnaryOp::AddressOf => {
+                        Ok(Type::Ptr(Box::new(expr_type)))
+                    }
+                    UnaryOp::Deref => {
+                        match expr_type {
+                            Type::Ptr(inner_type) => Ok(*inner_type),
+                            _ => Err(format!(
+                                "Type Error [{}]: Cannot dereference non-pointer type '{:?}'",
+                                expr.span, expr_type
+                            )),
                         }
                     }
                 }
@@ -208,7 +217,7 @@ impl Analyser {
         match stmt {
             Stmt::Extern { name, rttype, params } => {
                 let return_type = match rttype {
-                    Some(rt_ident) => Type::from_ident(rt_ident)?,
+                    Some(rt) => rt.clone(),
                     None => Type::Void,
                 };
                 let mut param_types = Vec::new();
@@ -219,26 +228,24 @@ impl Analyser {
                             param.name.location, param.name.value
                         )
                     })?;
-                    param_types.push(Type::from_ident(ptype)?);
+                    param_types.push(ptype.clone());
                 }
 
                 self.declare_function(&name.value, param_types, return_type, name.location.clone())?;
-
                 Ok(())
             }
 
             Stmt::Assignment { ident, vtype, expr } => {
                 let expr_type = self.check_expr(expr)?;
 
-                if let Some(type_ident) = vtype {
-                    let explicit_type = Type::from_ident(type_ident)?;
-                    if explicit_type != expr_type {
+                if let Some(explicit_type) = vtype {
+                    if *explicit_type != expr_type {
                         return Err(format!(
                             "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
                             expr.span, ident.value, explicit_type, expr_type
                         ));
                     }
-                    self.declare_variable(&ident.value, explicit_type, ident.location.clone())?;
+                    self.declare_variable(&ident.value, explicit_type.clone(), ident.location.clone())?;
                 } else {
                     if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
                         if existing_symbol.data_type != expr_type {
@@ -254,10 +261,34 @@ impl Analyser {
                 Ok(())
             }
 
+            Stmt::DerefReassignment { target, expr } => {
+                let expr_type = self.check_expr(expr)?;
+
+                let target_type = self.check_expr(target)?;
+
+                match target_type {
+                    Type::Ptr(inner_type) => {
+                        if *inner_type != expr_type {
+                            return Err(format!(
+                                "Type Error [{}]: Cannot assign type '{:?}' through pointer to '{:?}'",
+                                expr.span, expr_type, inner_type
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "Type Error [{}]: Cannot dereference non-pointer target type '{:?}' for assignment",
+                            target.span, target_type
+                        ));
+                    }
+                }
+
+                Ok(())
+            }
+
             Stmt::Reassignment { ident, expr } => {
                 let expr_type = self.check_expr(expr)?;
 
-                // must already exist
                 let symbol = self.resolve_variable(&ident.value).ok_or_else(|| {
                     format!(
                         "Semantic Error [{}]: Cannot reassign to undefined variable '{}'",
@@ -265,7 +296,6 @@ impl Analyser {
                     )
                 })?;
 
-                // must match type
                 if symbol.data_type != expr_type {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
@@ -282,7 +312,7 @@ impl Analyser {
 
             Stmt::While { cond, body } => {
                 let cond_type = self.check_expr(cond)?;
-                if !self.check_truthiness(cond_type) {
+                if !self.check_truthiness(&cond_type) {
                     return Err(format!(
                         "Type Error [{}]: 'while' condition is not truthy, found '{:?}'",
                         cond.span, cond_type
@@ -299,7 +329,7 @@ impl Analyser {
 
             Stmt::If { cond, then_branch, else_branch } => {
                 let cond_type = self.check_expr(cond)?;
-                if !self.check_truthiness(cond_type) {
+                if !self.check_truthiness(&cond_type) {
                     return Err(format!(
                         "Type Error [{}]: 'if' condition is not truthy, found '{:?}'",
                         cond.span, cond_type
@@ -312,10 +342,10 @@ impl Analyser {
                 }
                 self.leave_scope();
 
-                if else_branch.is_some() {
+                if let Some(else_stmts) = else_branch {
                     self.enter_scope();
-                    for block_stmt in else_branch.as_ref().unwrap() {
-                        self.check_stmt(&block_stmt)?;
+                    for block_stmt in else_stmts {
+                        self.check_stmt(block_stmt)?;
                     }
                     self.leave_scope();
                 }
@@ -324,7 +354,7 @@ impl Analyser {
             }
             Stmt::Function { name, rttype, params, body } => {
                 let return_type = match rttype {
-                    Some(rt_ident) => Type::from_ident(rt_ident)?,
+                    Some(rt) => rt.clone(),
                     None => Type::Void,
                 };
 
@@ -336,17 +366,17 @@ impl Analyser {
                             param.name.location, param.name.value
                         )
                     })?;
-                    param_types.push(Type::from_ident(ptype)?);
+                    param_types.push(ptype.clone());
                 }
 
-                self.declare_function(&name.value, param_types.clone(), return_type, name.location.clone())?;
+                self.declare_function(&name.value, param_types.clone(), return_type.clone(), name.location.clone())?;
 
                 self.enter_scope();
                 for (param, ptype) in params.iter().zip(param_types.into_iter()) {
                     self.declare_variable(&param.name.value, ptype, param.name.location.clone())?;
                 }
 
-                let prev_return_type = self.current_return_type.replace(return_type);
+                let prev_return_type = self.current_return_type.replace(return_type.clone());
                 let mut returns = false;
                 for block_stmt in body {
                     if let Stmt::Return { .. } = block_stmt {
@@ -364,7 +394,6 @@ impl Analyser {
                 }
 
                 self.leave_scope();
-
                 Ok(())
             },
             Stmt::Return { value, span } => {
@@ -373,7 +402,7 @@ impl Analyser {
                     None => Type::Void,
                 };
 
-                let expected = self.current_return_type.ok_or_else(|| {
+                let expected = self.current_return_type.clone().ok_or_else(|| {
                     format!("Semantic Error [{}]: 'return' used outside of a function", span)
                 })?;
 
