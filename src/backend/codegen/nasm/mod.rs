@@ -159,6 +159,16 @@ impl NasmBackend {
                     self.frame.alloc(p);
                 }
 
+                Instruction::Load { dst, ptr, .. } => {
+                    self.frame.alloc(dst);
+                    self.collect_value(ptr);
+                }
+                
+                Instruction::Store { ptr, source } => {
+                    self.collect_value(ptr);
+                    self.collect_value(source);
+                }
+                
                 _ => {}
             }
         }
@@ -392,6 +402,14 @@ impl Backend for NasmBackend {
                 Instruction::Unary { value, .. } => self.collect_value(value),
                 Instruction::Arg { value } => self.collect_value(value),
                 Instruction::Return { value } => self.collect_value(value),
+                Instruction::Store { ptr, val } => {
+                    self.collect_value(ptr);
+                    self.collect_value(val);
+                }
+                Instruction::Load { dst, val, .. } => {
+                    self.frame.alloc(dst);
+                    self.collect_value(val);
+                }
                 _ => {}
             }
         }
