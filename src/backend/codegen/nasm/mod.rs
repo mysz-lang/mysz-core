@@ -224,48 +224,47 @@ impl NasmBackend {
                 let dst = self.frame.addr(dst);
 
                 self.emit(&format!("mov rax, {}", self.lower_value(lhs)));
-                self.emit(&format!("mov rbx, {}", self.lower_value(rhs)));
+                self.emit(&format!("mov r10, {}", self.lower_value(rhs)));
 
                 match op {
-                    IrOp::Add => self.emit("add rax, rbx"),
-                    IrOp::Sub => self.emit("sub rax, rbx"),
-                    IrOp::Mul => self.emit("imul rax, rbx"),
+                    IrOp::Add => self.emit("add rax, r10"),
+                    IrOp::Sub => self.emit("sub rax, r10"),
+                    IrOp::Mul => self.emit("imul rax, r10"),
                     IrOp::Div => {
                         self.emit("cqo");
-                        self.emit("idiv rbx");
+                        self.emit("idiv r10");
                     }
                     IrOp::Eq => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("sete al");
                         self.emit("movzx rax, al");
                     }
                     IrOp::NEq => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("setne al");
                         self.emit("movzx rax, al");
                     }
                     IrOp::Gt => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("setg al");
                         self.emit("movzx rax, al");
                     }
                     IrOp::GtE => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("setge al");
                         self.emit("movzx rax, al");
                     }
                     IrOp::Lt => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("setl al");
                         self.emit("movzx rax, al");
                     }
                     IrOp::LtE => {
-                        self.emit("cmp rax, rbx");
+                        self.emit("cmp rax, r10");
                         self.emit("setle al");
                         self.emit("movzx rax, al");
                     }
-                    _ => {}
-                }
+                    unsup => self.emit(&format!("; unsupported IrOp used: {:?}", unsup)),                }
 
                 self.emit(&format!("mov {}, rax", dst));
             }
