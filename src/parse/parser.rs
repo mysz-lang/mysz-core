@@ -346,7 +346,7 @@ impl Parser {
 
         self.expect(TokenType::LParen)?;
         let cond = self.parse_expr()?;
-        println!("{}", self.get_token().unwrap());
+        // println!("{}", self.get_token().unwrap());
         self.expect(TokenType::RParen)?;
 
         self.expect(TokenType::LBrace)?;
