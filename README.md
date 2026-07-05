@@ -9,7 +9,7 @@ This is the core repository, which holds the rust source code for the Lexer, Par
 
 | OS | architecture | Supported |
 |---|---|---|
-| Linux (Generic) | x86_64 | Supported |
+| Linux (nasm) | x86_64 | Supported |
 | Windows | x86_64 | Planned (Not supported) |
 | MacOs | ARM_64 | Not Planned |
 
