@@ -121,32 +121,234 @@ impl IRGen {
         }
     }
 
-    pub fn gen_expr(&mut self, expr: &Expr) -> Value {
+    fn get_value_type(&self, value: &Value) -> Option<Type> {
+        match value {
+            Value::Var(name) => self.var_types.get(name).cloned(),
+            Value::Const(_) => Some(Type::Int),
+            Value::Bool(_) => Some(Type::Bool),
+            Value::Str(_) => Some(Type::Str),
+            Value::Void => Some(Type::Void),
+            Value::Temp(t) => {
+                self.code.iter().rev().find_map(|inst| match inst {
+                    Instruction::Load { dst, ty, .. } if dst == t => Some(ty.clone()),
+                    Instruction::Load { dst, .. } if dst == t => Some(Type::Int),
+                    Instruction::Binary { dst, op, .. } if dst == t => {
+                        if matches!(op, IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE) {
+                            Some(Type::Bool)
+                        } else {
+                            Some(Type::Int)
+                        }
+                    }
+                    Instruction::Unary { dst, op, value } if dst == t => {
+                        if matches!(op, IrOp::Ref) {
+                            self.get_value_type(value).map(|inner| Type::Ptr(Box::new(inner)))
+                        } else {
+                            Some(Type::Int)
+                        }
+                    }
+                    _ => None
+                })
+            }
+        }
+    }
+
+    pub fn gen_expr(&mut self, expr: &Expr, target_dest: Option<Value>) -> Value {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(v) => Value::Const(*v),
                 Literal::String(s) => Value::Str(s.clone()),
                 Literal::Bool(b) => Value::Bool(*b),
-            },
+                Literal::Arr { elements } => {
+                    let base_val = match target_dest {
+                        Some(dest) => dest,
+                        None => {
+                            let anon_name = format!("_anon_{}", self.temps.next());
+                            Value::Var(anon_name)
+                        }
+                    };
+
+                    for (index, element_expr) in elements.iter().enumerate() {
+                        let element_val = self.gen_expr(element_expr, None);
+                        
+                        let offset_temp = self.temps.next();
+                        self.code.push(Instruction::Binary {
+                            dst: offset_temp.clone(),
+                            op: IrOp::Mul,
+                            lhs: Value::Const(index as i64),
+                            rhs: Value::Const(8),
+                        });
+                        
+                        let base_addr_temp = self.temps.next();
+                        self.code.push(Instruction::Unary {
+                            dst: base_addr_temp.clone(),
+                            op: IrOp::Ref,
+                            value: base_val.clone(),
+                        });
+                        
+                        let slot_addr_temp = self.temps.next();
+                        self.code.push(Instruction::Binary {
+                            dst: slot_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: Value::Temp(base_addr_temp),
+                            rhs: Value::Temp(offset_temp),
+                        });
+                        
+                        self.code.push(Instruction::Store {
+                            ptr: Value::Temp(slot_addr_temp),
+                            source: element_val,
+                        });
+                    }
+                    
+                    base_val
+                }
+            }
+
+            ExprKind::Index { base, index } => {
+                let base_val = self.gen_expr(base, None);
+                let index_val = self.gen_expr(index, None);
+                let offset_temp = self.temps.next();
+                self.code.push(Instruction::Binary {
+                    dst: offset_temp.clone(),
+                    op: IrOp::Mul,
+                    lhs: index_val,
+                    rhs: Value::Const(8),
+                });
+                
+                let base_type = self.expr_type(base); 
+                let target_addr_temp = self.temps.next();
+
+                let element_type = match &base_type {
+                    Some(Type::Array { element_type, .. }) => *element_type.clone(),
+                    Some(Type::Ptr(inner)) => match &**inner {
+                        Type::Array { element_type, .. } => *element_type.clone(),
+                        other => other.clone(),
+                    }
+                    _ => Type::Int,
+                };
+
+                match base_type {
+                    Some(Type::Array { .. }) => {
+                        match base_val {
+                            Value::Var(_) => {
+                                let base_addr_temp = self.temps.next();
+                                self.code.push(Instruction::Unary {
+                                    dst: base_addr_temp.clone(),
+                                    op: IrOp::Ref,
+                                    value: base_val,
+                                });
+                                self.code.push(Instruction::Binary {
+                                    dst: target_addr_temp.clone(),
+                                    op: IrOp::Add,
+                                    lhs: Value::Temp(base_addr_temp),
+                                    rhs: Value::Temp(offset_temp),
+                                });
+                            }
+                            _ => {
+                                self.code.push(Instruction::Binary {
+                                    dst: target_addr_temp.clone(),
+                                    op: IrOp::Add,
+                                    lhs: base_val,
+                                    rhs: Value::Temp(offset_temp),
+                                });
+                            }
+                        }
+                    }
+                    Some(Type::Ptr(_)) => {
+                        self.code.push(Instruction::Binary {
+                            dst: target_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: base_val,
+                            rhs: Value::Temp(offset_temp),
+                        });
+                    }
+                    None => {
+                        match base_val {
+                            Value::Var(_) => {
+                                let base_addr_temp = self.temps.next();
+                                self.code.push(Instruction::Unary {
+                                    dst: base_addr_temp.clone(),
+                                    op: IrOp::Ref,
+                                    value: base_val,
+                                });
+                                self.code.push(Instruction::Binary {
+                                    dst: target_addr_temp.clone(),
+                                    op: IrOp::Add,
+                                    lhs: Value::Temp(base_addr_temp),
+                                    rhs: Value::Temp(offset_temp),
+                                });
+                            }
+                            _ => {
+                                self.code.push(Instruction::Binary {
+                                    dst: target_addr_temp.clone(),
+                                    op: IrOp::Add,
+                                    lhs: base_val,
+                                    rhs: Value::Temp(offset_temp),
+                                });
+                            }
+                        }
+                    }
+                    _ => unreachable!()
+                };
+
+                let result_temp = self.temps.next();
+                self.code.push(Instruction::Load {
+                    dst: result_temp.clone(),
+                    ptr: Value::Temp(target_addr_temp),
+                    ty: element_type,
+                });
+
+                Value::Temp(result_temp)
+            }
 
             ExprKind::Identifier(name) => Value::Var(name.clone()),
 
             ExprKind::Unary { op, expr } => {
-                let value = self.gen_expr(expr);
+                let value = self.gen_expr(expr, None);
 
-                let ir_op = match op {
-                    UnaryOp::Positive => IrOp::Pos,
-                    UnaryOp::Negative => IrOp::Neg,
-                    UnaryOp::AddressOf => IrOp::Ref,
-                    UnaryOp::Deref => IrOp::DeRef,
-                };
+                match op {
+                    UnaryOp::Positive => self.emit_unary(IrOp::Pos, value),
 
-                self.emit_unary(ir_op, value)
+                    UnaryOp::Negative => self.emit_unary(IrOp::Neg, value),
+
+
+                    UnaryOp::Deref => {
+                        let ptr_type = self.get_value_type(&value).unwrap_or_else(|| {
+                            panic!("Compiler Error: Could not resolve type for value: {:?}", value)
+                        });
+
+                        let target_type = match ptr_type {
+                            Type::Ptr(inner) => *inner,
+                            _ => panic!("Compiler Error: Attempted to dereference a non-pointer type: {:?}", ptr_type),
+                        };
+
+                        let temp = self.temps.next();
+
+                        self.code.push(Instruction::Load {
+                            dst: temp.clone(),
+                            ptr: value,
+                            ty: target_type, 
+                        });
+
+                        Value::Temp(temp)
+                    }
+                            
+                    UnaryOp::AddressOf => {
+                        let temp = self.temps.next();
+                        
+                        self.code.push(Instruction::Unary {
+                            dst: temp.clone(),
+                            op: IrOp::Ref,
+                            value,
+                        });
+                        
+                        Value::Temp(temp)
+                    }
+                }
             }
 
             ExprKind::Binary { left, op, right } => {
-                let lhs = self.gen_expr(left);
-                let rhs = self.gen_expr(right);
+                let lhs = self.gen_expr(left, None);
+                let rhs = self.gen_expr(right, None);
 
                 if matches!(op, BinaryOp::Add) 
                     && (self.is_string_valued(&lhs) || self.expr_type(left) == Some(Type::Str)) 
@@ -184,7 +386,7 @@ impl IRGen {
 
             ExprKind::Call { callee, args } => {
                 let arg_values: Vec<Value> = args.iter()
-                    .map(|arg| self.gen_expr(arg))
+                    .map(|arg| self.gen_expr(arg, None))
                     .collect();
 
                 for val in arg_values.iter() {
@@ -206,9 +408,27 @@ impl IRGen {
 
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Assignment { ident, expr, .. }
-            | Stmt::Reassignment { ident, expr } => {
-                let value = self.gen_expr(expr);
+
+            Stmt::Assignment { ident, vtype, expr } => {
+                let is_array = match vtype {
+                    Some(Type::Array { .. }) => true,
+                    _ => false,
+                };
+
+                let target_var = Value::Var(ident.value.clone());
+                
+                if is_array {
+                    self.gen_expr(expr, Some(target_var));
+                } else {
+                    let value = self.gen_expr(expr, None);
+                    self.code.push(Instruction::Assign {
+                        dst: ident.value.clone(),
+                        src: value,
+                    });
+                }
+            }
+            Stmt::Reassignment { ident, expr } => {
+                let value = self.gen_expr(expr, None);
 
                 self.code.push(Instruction::Assign {
                     dst: ident.value.clone(),
@@ -217,10 +437,9 @@ impl IRGen {
             }
 
                 Stmt::Expr(expr) => {
-                // not bind a destination temporary if it returns Void.
                 if let ExprKind::Call { callee, args } = &expr.kind {
                     let arg_values: Vec<Value> = args.iter()
-                        .map(|arg| self.gen_expr(arg))
+                        .map(|arg| self.gen_expr(arg, None))
                         .collect();
 
                     for val in arg_values.iter() {
@@ -233,7 +452,7 @@ impl IRGen {
                         argc: arg_values.len(),
                     });
                 } else {
-                    self.gen_expr(expr);
+                    self.gen_expr(expr, None);
                 }
             }
 
@@ -244,7 +463,7 @@ impl IRGen {
             } => {
                 let end = self.labels.next();
 
-                let cond_val = self.gen_expr(cond);
+                let cond_val = self.gen_expr(cond, None);
 
                 self.code.push(Instruction::JumpIfFalse {
                     cond: cond_val,
@@ -274,7 +493,7 @@ impl IRGen {
 
                 self.code.push(Instruction::Label(start.clone()));
                 
-                let cond_val = self.gen_expr(cond);
+                let cond_val = self.gen_expr(cond, None);
                 self.code.push(Instruction::JumpIfFalse { cond: cond_val, target: end.clone() });
 
                 for stmt in body {
@@ -303,7 +522,7 @@ impl IRGen {
 
             Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
-                    let val = self.gen_expr(expr);
+                    let val = self.gen_expr(expr, None);
                     self.code.push(Instruction::Return { value: val });
                 } else {
                     self.code.push(Instruction::Return { value: Value::Const(0) })
@@ -314,14 +533,60 @@ impl IRGen {
                 self.code.push(Instruction::Extern { fnname: name.value.clone() })
             }
             Stmt::DerefReassignment { target, expr } => {
-                let value = self.gen_expr(expr);
+                let value_to_store = self.gen_expr(expr, None);
 
-                let ptr_val = self.gen_expr(target);
+                if let ExprKind::Index { base, index } = &target.kind {
+                    let base_val = self.gen_expr(base, None);
+                    let index_val = self.gen_expr(index, None);
+                    
+                    let offset_temp = self.temps.next();
+                    self.code.push(Instruction::Binary {
+                        dst: offset_temp.clone(),
+                        op: IrOp::Mul,
+                        lhs: index_val,
+                        rhs: Value::Const(8),
+                    });
+                    
+                    let base_type = self.expr_type(base);
+                    let target_addr_temp = self.temps.next();
+                    
+                    match base_type {
+                        Some(Type::Array { .. }) => {
+                            let base_addr_temp = self.temps.next();
+                            self.code.push(Instruction::Unary {
+                                dst: base_addr_temp.clone(),
+                                op: IrOp::Ref,
+                                value: base_val,
+                            });
+                            self.code.push(Instruction::Binary {
+                                dst: target_addr_temp.clone(),
+                                op: IrOp::Add,
+                                lhs: Value::Temp(base_addr_temp),
+                                rhs: Value::Temp(offset_temp),
+                            });
+                        }
+                        Some(Type::Ptr(_)) => {
+                            self.code.push(Instruction::Binary {
+                                dst: target_addr_temp.clone(),
+                                op: IrOp::Add,
+                                lhs: base_val,
+                                rhs: Value::Temp(offset_temp),
+                            });
+                        }
+                        _ => unreachable!()
+                    };
 
-                self.code.push(Instruction::Store {
-                    ptr: ptr_val,
-                    source: value,
-                });
+                    self.code.push(Instruction::Store {
+                        ptr: Value::Temp(target_addr_temp),
+                        source: value_to_store,
+                    });
+                } else {
+                    let ptr_val = self.gen_expr(target, None);
+                    self.code.push(Instruction::Store {
+                        ptr: ptr_val,
+                        source: value_to_store,
+                    });
+                }
             }
         }
     }
@@ -382,6 +647,9 @@ impl IRGen {
                 Instruction::Store { ptr, source} => {
                     println!("store {:?} to *{:?}", source, ptr)
                 }
+                Instruction::Load { dst, ptr, ty } => {
+                    println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr)
+                },
             }
         }
     }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ir::tac::{Instruction, IrOp, Value};
 use crate::backend::codegen::{Target, Backend};
+use crate::parse::parsing::Type;
 
 fn split_functions(program: &[Instruction]) -> Vec<Vec<Instruction>> {
     let mut funcs = vec![];
@@ -47,12 +48,15 @@ impl StackFrame {
         if self.slots.contains_key(name) {
             return;
         }
+        self.slots.insert(name.to_string(), self.next_offset + 8);
+        
         self.next_offset += 8;
-        self.slots.insert(name.to_string(), self.next_offset);
     }
 
     fn finalize(&mut self) {
-        self.size = (self.next_offset + 15) & !15;
+        let total_bytes_used = self.next_offset;
+        
+        self.size = (total_bytes_used + 15) & !15;
     }
 
     fn addr(&self, name: &str) -> String {
@@ -277,11 +281,6 @@ impl NasmBackend {
                         
                         self.emit(&format!("lea rax, [{}]", raw_address));
                     }
-                    IrOp::DeRef => {
-                        let ptr_loc = self.lower_value(value);
-                        self.emit(&format!("mov rax, {}", ptr_loc));
-                        self.emit("mov rax, [rax]");
-                    }
                     IrOp::Neg => {
                         self.emit(&format!("mov rax, {}", self.lower_value(value)));
                         self.emit("neg rax");
@@ -293,7 +292,6 @@ impl NasmBackend {
                     _ => {}
                 }
 
-                // Save the result back to the destination temporary/variable stack slot
                 self.emit(&format!("mov {}, rax", dst_slot));
             }
 
@@ -349,6 +347,20 @@ impl NasmBackend {
                     self.emit(&format!("mov {}, {}", dst, reg));
                 }
                 self.ctx.param_index += 1;
+            }
+
+
+            Instruction::Load { dst, ptr, ty } => {
+                let ptr_loc = self.lower_value(ptr);
+                let dst_slot = self.frame.addr(dst);
+
+                self.emit(&format!("mov rax, {}", ptr_loc));
+                
+                if !matches!(ty, Type::Array { .. }) {
+                    self.emit("mov rax, [rax]");
+                }
+                
+                self.emit(&format!("mov {}, rax", dst_slot));
             }
         }
     }

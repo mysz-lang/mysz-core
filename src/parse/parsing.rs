@@ -6,7 +6,8 @@ use crate::utils::location::Location;
 pub enum Literal {
     Int(i64),
     String(String),
-    Bool(bool)
+    Bool(bool),
+    Arr { elements: Vec<Expr> }
 }
 impl Literal {
     pub fn to_i64(&self) -> i64 {
@@ -23,7 +24,8 @@ pub enum Type {
     Bool,
     Str,
     Void,
-    Ptr(Box<Type>), // Boxed to allow nesting like ptr<ptr<int>>
+    Ptr(Box<Type>),
+    Array { element_type: Box<Type>, size: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -57,9 +59,14 @@ pub struct Identifier {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    // building blocks
     Literal(Literal),
     Identifier(String),
+
+    // array indexing
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
 
     // basic maths
     Binary {

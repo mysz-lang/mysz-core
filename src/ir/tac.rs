@@ -1,3 +1,5 @@
+use crate::parse::parsing::Type;
+
 #[derive(Debug, Clone)]
 pub enum IrOp {
     Add,
@@ -8,7 +10,6 @@ pub enum IrOp {
     Neg, // unary minus
     Pos, // unary plus
     Ref, // unary &
-    DeRef, // unary ^
 
     Eq, // ==
     NEq, // !=
@@ -25,7 +26,6 @@ pub enum Value {
     Var(String),
     Void,
 
-    // specific type values
     Str(String),
     Bool(bool),
 }
@@ -73,6 +73,7 @@ pub enum Instruction {
 
     Store {ptr: Value, source: Value},
 
+    Load { dst: String, ptr: Value, ty: Type },
 
     Extern { fnname: String }
 }

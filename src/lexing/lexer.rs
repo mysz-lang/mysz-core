@@ -75,9 +75,9 @@ impl Lexer{
             } else {
 
                 match ch {
-                    '=' => {let t = self.lex_assign(); self.add_token(t);},
+                    '=' => {let t = self.lex_assign(); self.add_token(t);}
                     
-                    '"' => {let t = self.lex_string(); self.add_token(t);},
+                    '"' => {let t = self.lex_string(); self.add_token(t);}
 
                     '!' => {let t = self.lex_not(); self.add_token(t);}
 
@@ -92,9 +92,10 @@ impl Lexer{
                     '(' => {self.single_char(TokenType::LParen);}
                     ')' => {self.single_char(TokenType::RParen);}
                     '{' => {self.single_char(TokenType::LBrace);}
-                    '}' => {self.single_char(TokenType::RBrace);},
+                    '}' => {self.single_char(TokenType::RBrace);}
                     ',' => {self.single_char(TokenType::Comma);}
-                    
+                    '[' => {self.single_char(TokenType::LBracket);}
+                    ']' => {self.single_char(TokenType::RBracket);}
                     '+' => {self.single_char(TokenType::Add);}
                     '-' => {self.single_char(TokenType::Minus);}
                     '*' => {self.single_char(TokenType::Multiply);}

@@ -27,13 +27,12 @@ use crate::tmp::{Cli, Commands};
 fn main() {
     let source: String =
 "extern fn print_int(a: int);
+
 fn main(): int {
-    var x = 20;
-    var y = &x;
+    var x: [int;3] = [0,1,2];
+    var y: ptr<[int;3]> = &x;
 
-    ^y = 10;
-
-    print_int(x);
+    print_int((^y)[2]);
 
     return 0;
 };"
@@ -65,6 +64,8 @@ fn main(): int {
         println!("{}", e);
         return;
     }
+
+    // println!("{:#?}", program);
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);

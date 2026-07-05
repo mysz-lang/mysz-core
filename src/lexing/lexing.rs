@@ -19,7 +19,10 @@ pub enum TokenType {
     SemiColon,
     Colon,
     Comma,
-    
+    LBracket,
+    RBracket,
+
+
     // pointers
     Ampersand,
     Star,

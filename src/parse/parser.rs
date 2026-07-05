@@ -95,6 +95,24 @@ impl Parser {
         let tk = self.get_token()?.clone();
         
         match tk.ttype {
+            TokenType::LBracket => {
+                self.advance();
+
+                let element_type = self.parse_type()?;
+
+                self.expect(TokenType::SemiColon)?;
+
+                let size_tk = self.expect(TokenType::IntLiteral)?;
+                let size = size_tk.value.parse::<usize>().unwrap();
+                
+                self.expect(TokenType::RBracket)?;
+                
+                Some(Type::Array {
+                    element_type: Box::new(element_type),
+                    size,
+                })
+            }
+
             TokenType::Identifier => {
                 match tk.value.as_str() {
                     "int" => { self.advance(); Some(Type::Int) }
@@ -201,17 +219,26 @@ impl Parser {
     }
 
     fn parse_ident(&mut self) -> Option<Stmt> {
-        let ident_tk = self.get_token()?.clone();
+        let lhs_expr = self.parse_postfix()?;
 
-        let next_ttype = self.tokens.get(self.token_idx + 1).map(|t| &t.ttype);
-
-        if matches!(next_ttype, Some(TokenType::Assign)) {
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Assign)) {
             self.advance();
-            return self.parse_reassignment(ident_tk);
+            let value_expr = self.parse_expr()?;
+
+            if matches!(lhs_expr.kind, ExprKind::Index { .. }) {
+                return Some(Stmt::DerefReassignment {
+                    target: lhs_expr,
+                    expr: value_expr,
+                });
+            } else if let ExprKind::Identifier(name) = lhs_expr.kind {
+                return Some(Stmt::Reassignment {
+                    ident: Identifier { value: name, location: lhs_expr.span },
+                    expr: value_expr,
+                });
+            }
         }
 
-        let result = self.parse_expr().map(Stmt::Expr);
-        result
+        Some(Stmt::Expr(lhs_expr))
     }
 
     // ends with ), do not call self.advance(); to skip ). It is already skipped here
@@ -337,15 +364,6 @@ impl Parser {
         Some(Stmt::Return { value: expr, span: tk.location })
     }
 
-    fn parse_reassignment(&mut self, ident: Token) -> Option<Stmt> {
-        let ident_loc = ident.location.clone();
-
-        self.expect(TokenType::Assign)?;
-        let expr = self.parse_expr()?;
-
-        Some(Stmt::Reassignment { ident: Identifier { value: ident.value, location: ident_loc }, expr })
-    }
-
     fn parse_assignment(&mut self) -> Option<Stmt> {
         self.advance();
 
@@ -403,6 +421,48 @@ impl Parser {
         } else { None };
 
         Some(Stmt::If { cond, then_branch: body, else_branch })
+    }
+
+    fn parse_array_literal(&mut self) -> Option<Expr> {
+        let open_bracket = self.get_token()?.clone();
+        self.advance();
+
+        let mut elements = Vec::new();
+
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBracket)) {
+            self.advance();
+            return Some(Expr {
+                kind: ExprKind::Literal(Literal::Arr { elements }),
+                span: open_bracket.location,
+            });
+        }
+
+        loop {
+            let expr = self.parse_expr()?;
+            elements.push(expr);
+
+            match self.get_token().map(|t| &t.ttype) {
+                Some(TokenType::Comma) => {
+                    self.advance();
+                }
+                Some(TokenType::RBracket) => {
+                    self.advance();
+                    break;
+                }
+                other => {
+                    self.throw(
+                        ParserErrorType::UnexpectedTokenTypeError,
+                        format!("Expected ',' or ']', found {:?}", other),
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(Expr {
+            kind: ExprKind::Literal(Literal::Arr{elements}),
+            span: open_bracket.location,
+        })
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
@@ -603,8 +663,45 @@ impl Parser {
                     span: tk.location,
                 })
             }
-            _ => self.parse_primary(),
+            _ => self.parse_postfix(),
         }
+    }
+
+    fn parse_postfix(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            match self.get_token().map(|t| &t.ttype) {
+                Some(TokenType::LBracket) => {
+                    self.advance();
+                    let index_expr = self.parse_expr()?;
+                    let close_tk = self.expect(TokenType::RBracket)?;
+                    expr = Expr {
+                        kind: ExprKind::Index { base: Box::new(expr), index: Box::new(index_expr) },
+                        span: close_tk.location,
+                    };
+                }
+                Some(TokenType::LParen) => {
+                    if let ExprKind::Identifier(name) = &expr.kind {
+                        let callee_loc = expr.span.clone();
+                        self.advance();
+                        let args = self.parse_args();
+                        expr = Expr {
+                            kind: ExprKind::Call {
+                                callee: Identifier { value: name.clone(), location: callee_loc.clone() },
+                                args,
+                            },
+                            span: callee_loc,
+                        };
+                    } else {
+                        self.throw(ParserErrorType::UnexpectedTokenTypeError, "Expected function name before parenthesis".to_string());
+                        return None;
+                    }
+                }
+                _ => break,
+            }
+        }
+        Some(expr)
     }
 
     fn parse_primary(&mut self) -> Option<Expr> {
@@ -647,25 +744,13 @@ impl Parser {
 
             TokenType::Identifier => {
                 self.advance();
-                let ident = tk.clone();
-
-                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LParen)) {
-                    self.advance();
-                    let args = self.parse_args();
-                    return Some(Expr {
-                        kind: ExprKind::Call {
-                            callee: Identifier { value: ident.value, location: ident.location.clone() },
-                            args,
-                        },
-                        span: ident.location,
-                    });
-                }
-
                 Some(Expr {
                     kind: ExprKind::Identifier(tk.value),
                     span: tk.location
                 })
             }
+
+            TokenType::LBracket => self.parse_array_literal(),
 
             TokenType::LParen => {
                 self.advance();

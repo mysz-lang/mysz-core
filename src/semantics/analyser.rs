@@ -105,8 +105,48 @@ impl Analyser {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Ok(Type::Int),
                 Literal::String(_) => Ok(Type::Str),
-                Literal::Bool(_) => Ok(Type::Bool)
-            },
+                Literal::Bool(_) => Ok(Type::Bool),
+                Literal::Arr { elements } => {
+                    if elements.is_empty() {
+                        return Err("Type Error: Cannot infer type of an empty array literal.".to_string());
+                    }
+                    let element_type = self.check_expr(&elements[0])?;
+
+                    for el in elements {
+                        let el_type = self.check_expr(el)?;
+                        if el_type != element_type {
+                            return Err(format!(
+                                "Type Error: Heterogeneous arrays are not allowed. Expected {:?}, found {:?}",
+                                element_type, el_type
+                            ));
+                        }
+                    }
+
+                    Ok(Type::Array {
+                        element_type: Box::new(element_type),
+                        size: elements.len(),
+                    })
+                }
+            }
+
+            ExprKind::Index { base, index } => {
+                let base_type = self.check_expr(base)?;
+                let index_type = self.check_expr(index)?;
+
+                if index_type != Type::Int {
+                    return Err(format!("Array index must be an int."));
+                }
+
+                match base_type {
+                    Type::Array { element_type, .. } => {
+                        Ok(*element_type)
+                    }
+                    Type::Ptr(inner_type) => {
+                        Ok(*inner_type)
+                    }
+                    _ => Err(format!("Cannot index into non-indexable type '{:?}'", base_type)),
+                }
+            }
             ExprKind::Identifier(name) => {
                 if let Some(symbol) = self.resolve_variable(name) {
                     Ok(symbol.data_type.clone())

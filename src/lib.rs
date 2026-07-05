@@ -16,12 +16,15 @@ use backend::codegen::{Backend, Target};
 use backend::codegen::nasm::NasmBackend;
 
 pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> Result<(), String> {
-    // 1. Lexing
+
+    // lexing
+
     let mut lexer = Lexer::new(source.to_string());
     lexer.lex();
     let tokens = lexer.tokens;
 
-    // 2. Parsing
+    // parsing
+
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -31,17 +34,20 @@ pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> 
     }
     let program = parser.ast;
 
-    // 3. Semantics / Typechecking
+    // semantics
+
     let mut analyser = Analyser::new();
     if let Err(e) = analyser.analyse(&program) {
         return Err(e.to_string());
     }
 
-    // 4. Intermediate Representation (IR)
+    // IR generation
+
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
 
-    // 5. Code Generation Selection
+    // target selection && codegen
+
     match target_str {
         "x86_64_linux" => {
             let target = Target::LINUX_X86_64_GENERIC;
