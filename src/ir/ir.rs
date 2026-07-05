@@ -216,8 +216,25 @@ impl IRGen {
                 });
             }
 
-            Stmt::Expr(expr) => {
-                self.gen_expr(expr);
+                Stmt::Expr(expr) => {
+                // not bind a destination temporary if it returns Void.
+                if let ExprKind::Call { callee, args } = &expr.kind {
+                    let arg_values: Vec<Value> = args.iter()
+                        .map(|arg| self.gen_expr(arg))
+                        .collect();
+
+                    for val in arg_values.iter() {
+                        self.code.push(Instruction::Arg { value: val.clone() });
+                    }
+
+                    self.code.push(Instruction::Call {
+                        dest: None, 
+                        name: callee.value.clone(),
+                        argc: arg_values.len(),
+                    });
+                } else {
+                    self.gen_expr(expr);
+                }
             }
 
             Stmt::If {
