@@ -3,14 +3,16 @@
 # mysz-core
 A mouse-loving mouse-based mouse-enthusiastic programming language project.
 
-This is the core repository, which holds the rust source code for the Lexer, Parser, Semantic analyser, Intermediate Code Generator, Utils for core, and Compiler of Mysz.
+This is the core repository, which holds the rust source code for the Lexer, Parser, Semantic analyser, Intermediate Code Generator, Utils for core, and assembly code generator of Mysz.
 
 # Support
 
 | OS | architecture | Supported |
 |---|---|---|
-| Linux (Generic) | x86_64 | Supported |
-| Windows | x86_64 | Planned (Not supported) |
+| Linux (nasm) | x86_64 | Supported |
+| Linux (gas) | x86_64 | Planned (Not supported) |
+| Windows (masm) | x86_64 | Planned (Not supported) |
+| Windows (gas) | x86_64 | Planned (Not supported) |
 | MacOs | ARM_64 | Not Planned |
 
 ## Embedding the Core Engine
