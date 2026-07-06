@@ -36,3 +36,7 @@ fn main() {
     }
 }
 ```
+
+### About String concatenation
+
+To use string concatenation, "str1" + "str2", the developer must have a library that provides a function called "str_concat".

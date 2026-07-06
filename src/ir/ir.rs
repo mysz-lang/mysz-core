@@ -359,7 +359,7 @@ impl IRGen {
                     let dst = self.temps.next();
                     self.code.push(Instruction::Call {
                         dest: Some(dst.clone()),
-                        name: "__str_concat".to_string(),
+                        name: "str_concat".to_string(),
                         argc: 2,
                     });
                     return Value::Temp(dst);
