@@ -21,7 +21,7 @@ This is the core repository, which holds the rust source code for the Lexer, Par
 
 ```toml
 [dependencies]
-mysz-core = { git = "[https://github.com/mysz-lang/mysz-core.git](https://github.com/mysz-lang/mysz-core.git)", branch = "main" }
+mysz-core = { git = "https://github.com/mysz-lang/mysz-core.git", branch = "main" }
 ```
 
 ### Basic Compilation Example
