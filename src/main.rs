@@ -24,22 +24,12 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::Stmt;
 
 fn main() {
-    let source: String = "
-extern fn print_str(a: str);
-
-fn main(): int {
-    print_str(\"Hello, world!\");
-    return 0;
-};"
-        
-        .to_string();
+    let source: String = "".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();
 
     let tokens = lexer.tokens;
-
-    // println!("{:#?}", tokens);
 
     let mut parser = myszparser::new(tokens);
     parser.parse();
@@ -61,8 +51,6 @@ fn main(): int {
     }
 
     // println!("{:#?}", program);
-
-    println!("EDIT 11");
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);

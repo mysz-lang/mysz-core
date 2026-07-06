@@ -220,14 +220,7 @@ impl Analyser {
                         }
                     }
                     BinaryOp::Eq | BinaryOp::NEq | BinaryOp::Gt | BinaryOp::GtE | BinaryOp::Lt | BinaryOp::LtE => {
-                        if left_type == right_type {
-                            Ok(Type::Bool)
-                        } else {
-                            Err(format!(
-                                "Type Error [{}]: Operator '{:?}' expects same-type sides, lhs: {:?}, rhs: {:?}",
-                                expr.span, op, left_type, right_type
-                            ))
-                        }
+                        Ok(Type::Bool)
                     }
                 }
             }
