@@ -402,7 +402,7 @@ impl Backend for NasmBackend {
                 Instruction::Unary { value, .. } => self.collect_value(value),
                 Instruction::Arg { value } => self.collect_value(value),
                 Instruction::Return { value } => self.collect_value(value),
-                Instruction::Store { ptr, source } => self.collect_value(source);
+                Instruction::Store { ptr, source } => self.collect_value(source),
                 _ => {}
             }
         }
