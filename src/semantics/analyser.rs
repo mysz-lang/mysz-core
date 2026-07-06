@@ -100,20 +100,28 @@ impl Analyser {
         }
     }
 
-    pub fn check_expr(&self, expr: &Expr) -> Result<Type, String> {
+    pub fn check_expr(&self, expr: &Expr, expected_type: Option<&Type>) -> Result<Type, String> {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Ok(Type::Int),
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool),
                 Literal::Arr { elements } => {
-                    if elements.is_empty() {
-                        return Err("Type Error: Cannot infer type of an empty array literal.".to_string());
-                    }
-                    let element_type = self.check_expr(&elements[0])?;
+                    let element_type = if elements.is_empty() {
+                        // 🌟 Look at the expected context type to infer the empty array type
+                        if let Some(Type::Array { element_type, .. }) = expected_type {
+                            *element_type.clone()
+                        } else {
+                            return Err("Type Error: Cannot infer type of an empty array literal without explicit type context.".to_string());
+                        }
+                    } else {
+                        // If it's not empty, infer from the first element as usual
+                        self.check_expr(&elements[0], None)?
+                    };
 
+                    // Validate all elements match the inferred type
                     for el in elements {
-                        let el_type = self.check_expr(el)?;
+                        let el_type = self.check_expr(el, Some(&element_type))?;
                         if el_type != element_type {
                             return Err(format!(
                                 "Type Error: Heterogeneous arrays are not allowed. Expected {:?}, found {:?}",
@@ -130,8 +138,8 @@ impl Analyser {
             }
 
             ExprKind::Index { base, index } => {
-                let base_type = self.check_expr(base)?;
-                let index_type = self.check_expr(index)?;
+                let base_type = self.check_expr(base, None)?;
+                let index_type = self.check_expr(index, None)?;
 
                 if index_type != Type::Int {
                     return Err(format!("Array index must be an int."));
@@ -173,7 +181,7 @@ impl Analyser {
                 let return_type = sig.return_type.clone();
 
                 for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
-                    let arg_type = self.check_expr(arg)?;
+                    let arg_type = self.check_expr(arg, None)?;
                     if arg_type != *expected {
                         return Err(format!(
                             "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
@@ -185,8 +193,8 @@ impl Analyser {
                 Ok(return_type)
             }
             ExprKind::Binary { left, op, right } => {
-                let left_type = self.check_expr(left)?;
-                let right_type = self.check_expr(right)?;
+                let left_type = self.check_expr(left, None)?;
+                let right_type = self.check_expr(right, None)?;
 
                 match op {
                     BinaryOp::Add => {
@@ -224,7 +232,7 @@ impl Analyser {
                 }
             }
             ExprKind::Unary { op, expr: sub_expr } => {
-                let expr_type = self.check_expr(sub_expr)?;
+                let expr_type = self.check_expr(sub_expr, None)?;
                 match op {
                     UnaryOp::Positive | UnaryOp::Negative => {
                         if expr_type == Type::Int {
@@ -276,7 +284,7 @@ impl Analyser {
             }
 
             Stmt::Assignment { ident, vtype, expr } => {
-                let expr_type = self.check_expr(expr)?;
+                let expr_type = self.check_expr(expr, vtype.as_ref())?;
 
                 if let Some(explicit_type) = vtype {
                     if *explicit_type != expr_type {
@@ -302,32 +310,22 @@ impl Analyser {
             }
 
             Stmt::DerefReassignment { target, expr } => {
-                let expr_type = self.check_expr(expr)?;
+                let target_resolved_type = self.check_expr(target, None)?;
+                let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                let target_type = self.check_expr(target)?;
-
-                match target_type {
-                    Type::Ptr(inner_type) => {
-                        if *inner_type != expr_type {
-                            return Err(format!(
-                                "Type Error [{}]: Cannot assign type '{:?}' through pointer to '{:?}'",
-                                expr.span, expr_type, inner_type
-                            ));
-                        }
-                    }
-                    _ => {
-                        return Err(format!(
-                            "Type Error [{}]: Cannot dereference non-pointer target type '{:?}' for assignment",
-                            target.span, target_type
-                        ));
-                    }
+                if target_resolved_type != expr_type {
+                    return Err(format!(
+                        "Type Error [{}]: Cannot assign type '{:?}' to target location of type '{:?}'",
+                        expr.span, expr_type, target_resolved_type
+                    ));
                 }
+
 
                 Ok(())
             }
 
             Stmt::Reassignment { ident, expr } => {
-                let expr_type = self.check_expr(expr)?;
+                let expr_type = self.check_expr(expr, None)?;
 
                 let symbol = self.resolve_variable(&ident.value).ok_or_else(|| {
                     format!(
@@ -346,12 +344,12 @@ impl Analyser {
                 Ok(())
             }
             Stmt::Expr(expr) => {
-                self.check_expr(expr)?;
+                self.check_expr(expr, None)?;
                 Ok(())
             }
 
             Stmt::While { cond, body } => {
-                let cond_type = self.check_expr(cond)?;
+                let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(format!(
                         "Type Error [{}]: 'while' condition is not truthy, found '{:?}'",
@@ -368,7 +366,7 @@ impl Analyser {
             }
 
             Stmt::If { cond, then_branch, else_branch } => {
-                let cond_type = self.check_expr(cond)?;
+                let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(format!(
                         "Type Error [{}]: 'if' condition is not truthy, found '{:?}'",
@@ -438,7 +436,7 @@ impl Analyser {
             },
             Stmt::Return { value, span } => {
                 let actual_type = match value {
-                    Some(e) => self.check_expr(e)?,
+                    Some(e) => self.check_expr(e, None)?,
                     None => Type::Void,
                 };
 

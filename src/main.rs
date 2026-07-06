@@ -9,31 +9,26 @@ pub mod ir;
 pub mod backend;
 
 pub mod tmp;
-
 use std::fs::File;
 use std::io::Write;
 
-use clap::Parser;
+use cranelift::codegen::Context;
+use cranelift_frontend::FunctionBuilderContext;
 use lexing::lexer::Lexer;
 use parse::parser::Parser as myszparser;
 use semantics::analyser::Analyser;
 use ir::ir::IRGen;
+use backend::clback;
 
-use crate::backend::codegen::{Backend, Target};
-use crate::backend::codegen::nasm::NasmBackend;
-
-use crate::tmp::{Cli, Commands};
+use crate::ir::tac::Instruction;
+use crate::parse::parsing::Stmt;
 
 fn main() {
-    let source: String =
-"extern fn print_int(a: int);
+    let source: String = "
+extern fn print_str(a: str);
 
 fn main(): int {
-    var x: [int;3] = [0,1,2];
-    var y: ptr<[int;3]> = &x;
-
-    print_int((^y)[2]);
-
+    print_str(\"Hello, world!\");
     return 0;
 };"
         
@@ -67,44 +62,48 @@ fn main(): int {
 
     // println!("{:#?}", program);
 
+    println!("EDIT 11");
+
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
 
-    // irgen.dump();
+    irgen.dump();
 
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::Target { target: t } => {
-            match t.as_str() {
-                "x86_64_linux" => {
-                    let target = Target::LINUX_X86_64_GENERIC;
-                    let mut codegen = NasmBackend::new(target);
-                    let asm = codegen.emit_program(&irgen.code);
-
-                    let filename = "output.asm";
-                    match File::create(filename) {
-                        Ok(mut file) => {
-                            if let Err(e) = file.write_all(asm.as_bytes()) {
-                                eprintln!("Failed to write to {}: {}", filename, e);
-                            } else {
-                                println!("Successfully wrote assembly to {}", filename);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to create {}: {}", filename, e);
-                        }
-                    }
-                }
-
-                other => {
-                    eprintln!(
-                        "Unknown target: '{}'. Supported: x86_64_linux",
-                        other
-                    );
-                    std::process::exit(1);
-                }
-            }
+    let tac_instructions = irgen.code;
+    
+    let functions_to_compile: Vec<String> = program.statements.iter().filter_map(|stmt| {
+        match stmt {
+            Stmt::Function { name, .. } => Some(name.value.clone()), 
+            _ => None
         }
+    }).collect();
+
+    let mut backend = clback::CraneliftBackend::new();
+    
+    backend.scan_externs(&tac_instructions);
+
+    for func_name in functions_to_compile {
+        let func_instructions: Vec<&Instruction> = tac_instructions.iter()
+            .skip_while(|inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name))
+            .skip(1) 
+            .take_while(|inst| !matches!(inst, Instruction::FunctionLabel(_)))
+            .collect();
+
+        let mut ctx = Context::new();
+        let mut func_ctx = FunctionBuilderContext::new();
+
+        backend.compile_function(
+            &func_name, 
+            &func_instructions, 
+            &mut ctx, 
+            &mut func_ctx
+        );
     }
+    
+    let product = backend.finish(); 
+    let emit_result = product.emit().expect("Failed to emit object code");
+
+    let mut file = File::create("output.o").expect("Failed to create output file");
+    file.write_all(&emit_result).expect("Failed to write binary payload to disk");
+
 }

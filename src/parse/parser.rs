@@ -175,8 +175,6 @@ impl Parser {
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
             TokenType::Star => {
-                self.advance();
-                
                 let pointer_expr = self.parse_unary()?; 
                 
                 self.expect(TokenType::Assign)?;

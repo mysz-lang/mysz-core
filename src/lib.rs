@@ -8,12 +8,15 @@ pub mod backend;
 use std::fs::File;
 use std::io::Write;
 
+use cranelift::codegen::Context;
+use cranelift_frontend::FunctionBuilderContext;
 use lexing::lexer::Lexer;
 use parse::parser::Parser as myszparser;
 use semantics::analyser::Analyser;
 use ir::ir::IRGen;
-use backend::codegen::{Backend, Target};
-use backend::codegen::nasm::NasmBackend;
+
+use crate::backend::clback;
+use crate::ir::tac::Instruction;
 
 pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> Result<(), String> {
 
@@ -46,23 +49,22 @@ pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
 
-    // target selection && codegen
+    let tac_instructions = irgen.code;
 
-    match target_str {
-        "x86_64_linux" => {
-            let target = Target::LINUX_X86_64_GENERIC;
-            let mut codegen = NasmBackend::new(target);
-            let asm = codegen.emit_program(&irgen.code);
+    let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
 
-            // Write output to the current working directory
-            let mut file = File::create(output_filename)
-                .map_err(|e| format!("Failed to create {}: {}", output_filename, e))?;
-            
-            file.write_all(asm.as_bytes())
-                .map_err(|e| format!("Failed to write to {}: {}", output_filename, e))?;
-            
-            Ok(())
-        }
-        other => Err(format!("Unknown target: '{}'. Supported: x86_64_linux", other)),
-    }
+    let mut backend = clback::CraneliftBackend::new();
+
+    let mut ctx = Context::new();
+    let mut func_ctx = FunctionBuilderContext::new();
+
+    // entry point will always be main
+    backend.compile_function(
+        "main", 
+        &instruction_refs, 
+        &mut ctx, 
+        &mut func_ctx
+    );
+
+    Ok(())
 }

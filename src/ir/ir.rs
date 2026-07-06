@@ -117,6 +117,29 @@ impl IRGen {
             ExprKind::Identifier(name) => self.var_types.get(name).cloned(),
             ExprKind::Binary { left, .. } => self.expr_type(left), 
             ExprKind::Call { .. } => None, 
+            
+            ExprKind::Index { base, .. } => {
+                match self.expr_type(base)? {
+                    Type::Array { element_type, .. } => Some(*element_type),
+                    Type::Ptr(inner) => match *inner {
+                        Type::Array { element_type, .. } => Some(*element_type),
+                        other => Some(other),
+                    },
+                    _ => None,
+                }
+            }
+
+            ExprKind::Unary { op, expr: inner_expr } => {
+                let inner_type = self.expr_type(inner_expr)?;
+                match op {
+                    UnaryOp::AddressOf => Some(Type::Ptr(Box::new(inner_type))),
+                    UnaryOp::Deref => match inner_type {
+                        Type::Ptr(inner) => Some(*inner),
+                        _ => None,
+                    },
+                    UnaryOp::Positive | UnaryOp::Negative => Some(Type::Int),
+                }
+            }
             _ => None,
         }
     }
@@ -226,30 +249,46 @@ impl IRGen {
                     _ => Type::Int,
                 };
 
+                let is_base_variable_a_pointer = match &base_val {
+                    Value::Var(name) => matches!(self.var_types.get(name), Some(Type::Ptr(_))),
+                    _ => false,
+                };
+
                 match base_type {
                     Some(Type::Array { .. }) => {
-                        match base_val {
-                            Value::Var(_) => {
-                                let base_addr_temp = self.temps.next();
-                                self.code.push(Instruction::Unary {
-                                    dst: base_addr_temp.clone(),
-                                    op: IrOp::Ref,
-                                    value: base_val,
-                                });
-                                self.code.push(Instruction::Binary {
-                                    dst: target_addr_temp.clone(),
-                                    op: IrOp::Add,
-                                    lhs: Value::Temp(base_addr_temp),
-                                    rhs: Value::Temp(offset_temp),
-                                });
-                            }
-                            _ => {
-                                self.code.push(Instruction::Binary {
-                                    dst: target_addr_temp.clone(),
-                                    op: IrOp::Add,
-                                    lhs: base_val,
-                                    rhs: Value::Temp(offset_temp),
-                                });
+                        // If the underlying storage variable is a pointer, its value IS the address.
+                        if is_base_variable_a_pointer {
+                            self.code.push(Instruction::Binary {
+                                dst: target_addr_temp.clone(),
+                                op: IrOp::Add,
+                                lhs: base_val, // Emits: Temp = Var("y") Add Offset
+                                rhs: Value::Temp(offset_temp),
+                            });
+                        } else {
+                            // It's a normal local array variable like "x". We must get its stack address frame.
+                            match base_val {
+                                Value::Var(_) => {
+                                    let base_addr_temp = self.temps.next();
+                                    self.code.push(Instruction::Unary {
+                                        dst: base_addr_temp.clone(),
+                                        op: IrOp::Ref,
+                                        value: base_val,
+                                    });
+                                    self.code.push(Instruction::Binary {
+                                        dst: target_addr_temp.clone(),
+                                        op: IrOp::Add,
+                                        lhs: Value::Temp(base_addr_temp),
+                                        rhs: Value::Temp(offset_temp),
+                                    });
+                                }
+                                _ => {
+                                    self.code.push(Instruction::Binary {
+                                        dst: target_addr_temp.clone(),
+                                        op: IrOp::Add,
+                                        lhs: base_val,
+                                        rhs: Value::Temp(offset_temp),
+                                    });
+                                }
                             }
                         }
                     }
@@ -261,33 +300,42 @@ impl IRGen {
                             rhs: Value::Temp(offset_temp),
                         });
                     }
-                    None => {
-                        match base_val {
-                            Value::Var(_) => {
-                                let base_addr_temp = self.temps.next();
-                                self.code.push(Instruction::Unary {
-                                    dst: base_addr_temp.clone(),
-                                    op: IrOp::Ref,
-                                    value: base_val,
-                                });
-                                self.code.push(Instruction::Binary {
-                                    dst: target_addr_temp.clone(),
-                                    op: IrOp::Add,
-                                    lhs: Value::Temp(base_addr_temp),
-                                    rhs: Value::Temp(offset_temp),
-                                });
-                            }
-                            _ => {
-                                self.code.push(Instruction::Binary {
-                                    dst: target_addr_temp.clone(),
-                                    op: IrOp::Add,
-                                    lhs: base_val,
-                                    rhs: Value::Temp(offset_temp),
-                                });
+                    _ => {
+                        // Fallback safe catch-all
+                        if is_base_variable_a_pointer {
+                            self.code.push(Instruction::Binary {
+                                dst: target_addr_temp.clone(),
+                                op: IrOp::Add,
+                                lhs: base_val,
+                                rhs: Value::Temp(offset_temp),
+                            });
+                        } else {
+                            match base_val {
+                                Value::Var(_) => {
+                                    let base_addr_temp = self.temps.next();
+                                    self.code.push(Instruction::Unary {
+                                        dst: base_addr_temp.clone(),
+                                        op: IrOp::Ref,
+                                        value: base_val,
+                                    });
+                                    self.code.push(Instruction::Binary {
+                                        dst: target_addr_temp.clone(),
+                                        op: IrOp::Add,
+                                        lhs: Value::Temp(base_addr_temp),
+                                        rhs: Value::Temp(offset_temp),
+                                    });
+                                }
+                                _ => {
+                                    self.code.push(Instruction::Binary {
+                                        dst: target_addr_temp.clone(),
+                                        op: IrOp::Add,
+                                        lhs: base_val,
+                                        rhs: Value::Temp(offset_temp),
+                                    });
+                                }
                             }
                         }
                     }
-                    _ => unreachable!()
                 };
 
                 let result_temp = self.temps.next();
@@ -312,24 +360,7 @@ impl IRGen {
 
 
                     UnaryOp::Deref => {
-                        let ptr_type = self.get_value_type(&value).unwrap_or_else(|| {
-                            panic!("Compiler Error: Could not resolve type for value: {:?}", value)
-                        });
-
-                        let target_type = match ptr_type {
-                            Type::Ptr(inner) => *inner,
-                            _ => panic!("Compiler Error: Attempted to dereference a non-pointer type: {:?}", ptr_type),
-                        };
-
-                        let temp = self.temps.next();
-
-                        self.code.push(Instruction::Load {
-                            dst: temp.clone(),
-                            ptr: value,
-                            ty: target_type, 
-                        });
-
-                        Value::Temp(temp)
+                        value
                     }
                             
                     UnaryOp::AddressOf => {
@@ -378,7 +409,7 @@ impl IRGen {
                     BinaryOp::Lt => IrOp::Lt,
                     BinaryOp::LtE => IrOp::LtE,
 
-                    BinaryOp::Mod => todo!("Modulo IR not implemented"),
+                    BinaryOp::Mod => IrOp::Mod,
                 };
 
                 self.emit_binary(ir_op, lhs, rhs)
@@ -544,7 +575,7 @@ impl IRGen {
                         dst: offset_temp.clone(),
                         op: IrOp::Mul,
                         lhs: index_val,
-                        rhs: Value::Const(8),
+                        rhs: Value::Const(8), // Assuming 64-bit/8-byte elements
                     });
                     
                     let base_type = self.expr_type(base);
@@ -573,17 +604,22 @@ impl IRGen {
                                 rhs: Value::Temp(offset_temp),
                             });
                         }
-                        _ => unreachable!()
+                        _ => {
+                            panic!("Internal Compiler Error: Attempted IR index calculation on non-indexable type.");
+                        }
                     };
 
                     self.code.push(Instruction::Store {
                         ptr: Value::Temp(target_addr_temp),
                         source: value_to_store,
                     });
+
                 } else {
-                    let ptr_val = self.gen_expr(target, None);
+
+                    let target_ptr_val = self.gen_expr(target, None);
+
                     self.code.push(Instruction::Store {
-                        ptr: ptr_val,
+                        ptr: target_ptr_val,
                         source: value_to_store,
                     });
                 }

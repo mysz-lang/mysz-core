@@ -1,11 +1,12 @@
 use crate::parse::parsing::Type;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IrOp {
     Add,
     Sub,
     Mul,
     Div,
+    Mod, // %
 
     Neg, // unary minus
     Pos, // unary plus
