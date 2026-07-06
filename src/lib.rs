@@ -17,8 +17,9 @@ use ir::ir::IRGen;
 
 use crate::backend::clback;
 use crate::ir::tac::Instruction;
+use crate::parse::parsing::Stmt;
 
-pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> Result<(), String> {
+pub fn compile_source(source: &str, output_filename: &str) -> Result<(), String> {
 
     // lexing
 
@@ -50,21 +51,43 @@ pub fn compile_source(source: &str, target_str: &str, output_filename: &str) -> 
     irgen.gen_program(&program);
 
     let tac_instructions = irgen.code;
+    
+    let functions_to_compile: Vec<String> = program.statements.iter().filter_map(|stmt| {
+        match stmt {
+            Stmt::Function { name, .. } => Some(name.value.clone()), 
+            _ => None
+        }
+    }).collect();
 
-    let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
+    // codegen
 
     let mut backend = clback::CraneliftBackend::new();
+    
+    backend.scan_externs(&tac_instructions);
 
-    let mut ctx = Context::new();
-    let mut func_ctx = FunctionBuilderContext::new();
+    for func_name in functions_to_compile {
+        let func_instructions: Vec<&Instruction> = tac_instructions.iter()
+            .skip_while(|inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name))
+            .skip(1) 
+            .take_while(|inst| !matches!(inst, Instruction::FunctionLabel(_)))
+            .collect();
 
-    // entry point will always be main
-    backend.compile_function(
-        "main", 
-        &instruction_refs, 
-        &mut ctx, 
-        &mut func_ctx
-    );
+        let mut ctx = Context::new();
+        let mut func_ctx = FunctionBuilderContext::new();
+
+        backend.compile_function(
+            &func_name, 
+            &func_instructions, 
+            &mut ctx, 
+            &mut func_ctx
+        );
+    }
+    
+    let product = backend.finish(); 
+    let emit_result = product.emit().expect("Failed to emit object code");
+
+    let mut file = File::create(output_filename).expect("Failed to create output file");
+    file.write_all(&emit_result).expect("Failed to write binary payload to disk");
 
     Ok(())
 }

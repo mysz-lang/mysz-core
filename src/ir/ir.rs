@@ -144,37 +144,6 @@ impl IRGen {
         }
     }
 
-    fn get_value_type(&self, value: &Value) -> Option<Type> {
-        match value {
-            Value::Var(name) => self.var_types.get(name).cloned(),
-            Value::Const(_) => Some(Type::Int),
-            Value::Bool(_) => Some(Type::Bool),
-            Value::Str(_) => Some(Type::Str),
-            Value::Void => Some(Type::Void),
-            Value::Temp(t) => {
-                self.code.iter().rev().find_map(|inst| match inst {
-                    Instruction::Load { dst, ty, .. } if dst == t => Some(ty.clone()),
-                    Instruction::Load { dst, .. } if dst == t => Some(Type::Int),
-                    Instruction::Binary { dst, op, .. } if dst == t => {
-                        if matches!(op, IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE) {
-                            Some(Type::Bool)
-                        } else {
-                            Some(Type::Int)
-                        }
-                    }
-                    Instruction::Unary { dst, op, value } if dst == t => {
-                        if matches!(op, IrOp::Ref) {
-                            self.get_value_type(value).map(|inner| Type::Ptr(Box::new(inner)))
-                        } else {
-                            Some(Type::Int)
-                        }
-                    }
-                    _ => None
-                })
-            }
-        }
-    }
-
     pub fn gen_expr(&mut self, expr: &Expr, target_dest: Option<Value>) -> Value {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
