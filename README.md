@@ -22,7 +22,7 @@ This is the core repository, which holds the rust source code for the Lexer, Par
 mysz-core = { git = "https://github.com/mysz-lang/mysz-core.git", branch = "main" }
 ```
 
-`mysz-core` will output object files, it is the responsibility of the embedding environment, or developer to link it and output a binary.
+`mysz-core` will output object files, it is the responsibility of the embedding environment, or developer to link it and output a binary or library.
 
 ### Basic Compilation Example
 
