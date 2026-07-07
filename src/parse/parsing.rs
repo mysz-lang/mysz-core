@@ -7,7 +7,7 @@ pub enum Literal {
     Int(i64),
     String(String),
     Bool(bool),
-    Arr { elements: Vec<Expr> }
+    Arr { elements: Vec<Expr> },
 }
 impl Literal {
     pub fn to_i64(&self) -> i64 {
@@ -26,6 +26,7 @@ pub enum Type {
     Void,
     Ptr(Box<Type>),
     Array { element_type: Box<Type>, size: usize },
+    Any
 }
 
 #[derive(Debug, Clone)]

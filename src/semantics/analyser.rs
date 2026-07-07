@@ -182,7 +182,7 @@ impl Analyser {
 
                 for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
                     let arg_type = self.check_expr(arg, None)?;
-                    if arg_type != *expected {
+                    if *expected != Type::Any && arg_type != *expected {
                         return Err(format!(
                             "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
                             arg.span, i + 1, callee.value, expected, arg_type
@@ -200,8 +200,14 @@ impl Analyser {
                     BinaryOp::Add => {
                         if left_type == Type::Int && right_type == Type::Int {
                             Ok(Type::Int)
+                        } else if (left_type == Type::Int || left_type == Type::Any) && 
+                            (right_type == Type::Int || right_type == Type::Any) {
+                                Ok(Type::Int)
                         } else if left_type == Type::Str && right_type == Type::Str {
                             Ok(Type::Str)
+                        } else if (left_type == Type::Str || left_type == Type::Any) &&
+                            (right_type == Type::Str || right_type == Type::Any) {
+                                Ok(Type::Str)
                         } else {
                             Err(format!(
                                 "Type Error [{}]: Cannot add type '{:?}' and '{:?}'", 
@@ -263,12 +269,10 @@ impl Analyser {
                 };
                 let mut param_types = Vec::new();
                 for param in params {
-                    let ptype = param.ptype.as_ref().ok_or_else(|| {
-                        format!(
-                            "Type Error [{}]: Parameter '{}' must have an explicit type",
-                            param.name.location, param.name.value
-                        )
-                    })?;
+                    let ptype = match &param.ptype {
+                        Some(pt) => pt.clone(),
+                        None => Type::Any, 
+                    };
                     param_types.push(ptype.clone());
                 }
 
@@ -391,12 +395,10 @@ impl Analyser {
 
                 let mut param_types = Vec::new();
                 for param in params {
-                    let ptype = param.ptype.as_ref().ok_or_else(|| {
-                        format!(
-                            "Type Error [{}]: Parameter '{}' must have an explicit type",
-                            param.name.location, param.name.value
-                        )
-                    })?;
+                    let ptype = match &param.ptype {
+                        Some(pt) => pt.clone(),
+                        None => Type::Any, 
+                    };
                     param_types.push(ptype.clone());
                 }
 
