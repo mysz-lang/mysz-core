@@ -23,20 +23,7 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Program, Stmt};
 
 fn main() {
-    let source: String = "
-extern fn mysz_alloc(size: int): ptr<char>;
-extern fn mysz_calloc(count: int, size: int): ptr<char>;
-extern fn mysz_realloc(p: ptr<char>, size: int): ptr<char>;
-extern fn mysz_free(p: ptr<char>);
-
-extern fn mysz_panic(message: str);
-
-fn pub main(): int {
-    var buf: ptr<char> = mysz_alloc(64);
-    ^buf = 'H';
-    mysz_free(buf);
-    return 0;
-};"
+    let source: String = ""
     .to_string();
 
     let mut lexer = Lexer::new(source);

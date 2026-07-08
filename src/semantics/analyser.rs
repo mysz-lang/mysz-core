@@ -367,7 +367,7 @@ impl Analyser {
                     )?;
                 } else {
                     if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                        if existing_symbol.data_type != expr_type && (existing_symbol.data_type != Type::Any || expr_type != Type::Any) {
+                        if existing_symbol.data_type != expr_type && existing_symbol.data_type != Type::Any && expr_type != Type::Any {
                             return Err(format!(
                                 "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
                                 expr.span, expr_type, ident.value, existing_symbol.data_type
@@ -384,7 +384,7 @@ impl Analyser {
                 let target_resolved_type = self.check_expr(target, None)?;
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                if target_resolved_type != expr_type && (target_resolved_type != Type::Any || expr_type != Type::Any) {
+                if target_resolved_type != expr_type && target_resolved_type != Type::Any && expr_type != Type::Any {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to target location of type '{:?}'",
                         expr.span, expr_type, target_resolved_type
@@ -404,7 +404,7 @@ impl Analyser {
                     )
                 })?;
 
-                if symbol.data_type != expr_type && (symbol.data_type != Type::Any || expr_type != Type::Any) {
+                if symbol.data_type != expr_type && symbol.data_type != Type::Any && expr_type != Type::Any {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
                         expr.span, expr_type, ident.value, symbol.data_type
