@@ -9,7 +9,5 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    Target {
-        target: String,
-    }
+    Target { target: String },
 }

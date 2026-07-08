@@ -8,9 +8,15 @@ pub struct Lexer {
     pub col: usize,
     pub tokens: Vec<Token>,
 }
-impl Lexer{
+impl Lexer {
     pub fn new(source: String) -> Self {
-        Self { source, token_idx: 0 as usize, tokens: Vec::new(), line: 0 as usize, col: 0 as usize }
+        Self {
+            source,
+            token_idx: 0 as usize,
+            tokens: Vec::new(),
+            line: 0 as usize,
+            col: 0 as usize,
+        }
     }
 
     fn current_location(&self) -> Location {
@@ -48,7 +54,9 @@ impl Lexer{
 
     // used for single character tokens, just supply the TokenType and it will be added to tokens (I don't want to write a bunch of token definitions for single character tokens, lazy ahh bum)
     fn single_char(&mut self, ttype: TokenType) {
-        let ch = self.get_char().expect("Unexpected EOF while lexing single char token");
+        let ch = self
+            .get_char()
+            .expect("Unexpected EOF while lexing single char token");
 
         let t = Token {
             ttype,
@@ -62,50 +70,96 @@ impl Lexer{
 
     pub fn lex(&mut self) {
         while let Some(ch) = self.get_char() {
-
             if char::is_numeric(ch) {
                 let t = self.lex_numeric();
                 self.add_token(t);
-
             } else if char::is_alphabetic(ch) {
                 let t = self.lex_identifier_and_keyword();
                 self.add_token(t);
-
             } else {
-
                 match ch {
-                    '=' => {let t = self.lex_assign(); self.add_token(t);}
-                    
-                    '"' => {let t = self.lex_string(); self.add_token(t);}
+                    '=' => {
+                        let t = self.lex_assign();
+                        self.add_token(t);
+                    }
 
-                    '\'' => {let t = self.lex_char(); self.add_token(t);}
+                    '"' => {
+                        let t = self.lex_string();
+                        self.add_token(t);
+                    }
 
-                    '!' => {let t = self.lex_not(); self.add_token(t);}
+                    '\'' => {
+                        let t = self.lex_char();
+                        self.add_token(t);
+                    }
 
-                    '>' => {let t = self.lex_gt(); self.add_token(t);}
-                    '<' => {let t = self.lex_lt(); self.add_token(t);}
+                    '!' => {
+                        let t = self.lex_not();
+                        self.add_token(t);
+                    }
 
-                    '&' => {self.single_char(TokenType::Ampersand);}
-                    '^' => {self.single_char(TokenType::Star);}
+                    '>' => {
+                        let t = self.lex_gt();
+                        self.add_token(t);
+                    }
+                    '<' => {
+                        let t = self.lex_lt();
+                        self.add_token(t);
+                    }
 
-                    ':' => {let t = self.lex_colon(); self.add_token(t);}
-                    ';' => {self.single_char(TokenType::SemiColon);}
-                    '(' => {self.single_char(TokenType::LParen);}
-                    ')' => {self.single_char(TokenType::RParen);}
-                    '{' => {self.single_char(TokenType::LBrace);}
-                    '}' => {self.single_char(TokenType::RBrace);}
-                    ',' => {self.single_char(TokenType::Comma);}
-                    '[' => {self.single_char(TokenType::LBracket);}
-                    ']' => {self.single_char(TokenType::RBracket);}
-                    '+' => {self.single_char(TokenType::Add);}
-                    '-' => {self.single_char(TokenType::Minus);}
-                    '*' => {self.single_char(TokenType::Multiply);}
-                    '/' => {self.single_char(TokenType::Divide);}
-                    '%' => {self.single_char(TokenType::Modulo);}
+                    '&' => {
+                        self.single_char(TokenType::Ampersand);
+                    }
+                    '^' => {
+                        self.single_char(TokenType::Star);
+                    }
+
+                    ':' => {
+                        let t = self.lex_colon();
+                        self.add_token(t);
+                    }
+                    ';' => {
+                        self.single_char(TokenType::SemiColon);
+                    }
+                    '(' => {
+                        self.single_char(TokenType::LParen);
+                    }
+                    ')' => {
+                        self.single_char(TokenType::RParen);
+                    }
+                    '{' => {
+                        self.single_char(TokenType::LBrace);
+                    }
+                    '}' => {
+                        self.single_char(TokenType::RBrace);
+                    }
+                    ',' => {
+                        self.single_char(TokenType::Comma);
+                    }
+                    '[' => {
+                        self.single_char(TokenType::LBracket);
+                    }
+                    ']' => {
+                        self.single_char(TokenType::RBracket);
+                    }
+                    '+' => {
+                        self.single_char(TokenType::Add);
+                    }
+                    '-' => {
+                        self.single_char(TokenType::Minus);
+                    }
+                    '*' => {
+                        self.single_char(TokenType::Multiply);
+                    }
+                    '/' => {
+                        self.single_char(TokenType::Divide);
+                    }
+                    '%' => {
+                        self.single_char(TokenType::Modulo);
+                    }
 
                     _ => self.advance(),
                 }
-
             }
         }
     }
@@ -117,13 +171,14 @@ impl Lexer{
         if self.peek(1) == Some(':') {
             let next = self.peek(1).unwrap();
 
-            self.advance(); self.advance();
+            self.advance();
+            self.advance();
 
             return Token {
                 ttype: TokenType::DoubleColon,
                 location: loc,
-                value: format!("{}{}", current, next)
-            }
+                value: format!("{}{}", current, next),
+            };
         }
 
         self.advance();
@@ -132,7 +187,7 @@ impl Lexer{
             ttype: TokenType::Colon,
             location: loc,
             value: current.to_string(),
-        }
+        };
     }
 
     fn lex_gt(&mut self) -> Token {
@@ -142,13 +197,14 @@ impl Lexer{
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
 
-            self.advance(); self.advance();
+            self.advance();
+            self.advance();
 
             return Token {
                 ttype: TokenType::GreaterThanEquals,
                 location: loc,
-                value: format!("{}{}", current, next)
-            }
+                value: format!("{}{}", current, next),
+            };
         }
 
         self.advance();
@@ -156,7 +212,7 @@ impl Lexer{
         Token {
             ttype: TokenType::GreaterThan,
             location: loc,
-            value: current.to_string()
+            value: current.to_string(),
         }
     }
 
@@ -167,13 +223,14 @@ impl Lexer{
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
 
-            self.advance(); self.advance();
+            self.advance();
+            self.advance();
 
             return Token {
                 ttype: TokenType::LessThanEquals,
                 location: loc,
-                value: format!("{}{}", current, next)
-            }
+                value: format!("{}{}", current, next),
+            };
         }
 
         self.advance();
@@ -181,7 +238,7 @@ impl Lexer{
         Token {
             ttype: TokenType::LessThan,
             location: loc,
-            value: current.to_string()
+            value: current.to_string(),
         }
     }
 
@@ -198,8 +255,8 @@ impl Lexer{
             return Token {
                 ttype: TokenType::NotEquals,
                 location: loc,
-                value: format!("{}{}", current, next)
-            }
+                value: format!("{}{}", current, next),
+            };
         }
 
         self.advance();
@@ -207,7 +264,7 @@ impl Lexer{
         Token {
             ttype: TokenType::Not,
             location: loc,
-            value: current.to_string()
+            value: current.to_string(),
         }
     }
 
@@ -249,7 +306,7 @@ impl Lexer{
             Some('\\') => {
                 let escape_type = self.get_char();
                 self.advance();
-                
+
                 match escape_type {
                     Some('n') => '\n',
                     Some('t') => '\t',
@@ -299,7 +356,7 @@ impl Lexer{
         Token {
             ttype: TokenType::StringLiteral,
             location: loc,
-            value
+            value,
         }
     }
 
@@ -342,68 +399,90 @@ impl Lexer{
         let value: String = buf.into_iter().collect();
 
         match value.as_str() {
-            "var" => {return Token {
-                ttype: TokenType::VarKeyword,
-                location: loc,
-                value
-            }},
-            "if" => {return Token {
-                ttype: TokenType::IfKeyword,
-                location: loc,
-                value
-            }},
-            "else" => {return Token {
-                ttype: TokenType::ElseKeyword,
-                location: loc,
-                value
-            }}
-            "while" => {return Token {
-                ttype: TokenType::WhileKeyword,
-                location: loc,
-                value
-            }},
-            "fn" => {return Token {
-                ttype: TokenType::FnKeyword,
-                location: loc,
-                value
-            }},
-            "pub" => {return Token {
-                ttype: TokenType::PubKeyword,
-                location: loc,
-                value
-            }},
-            "use" => {return Token {
-                ttype: TokenType::UseKeyword,
-                location: loc,
-                value
-            }},
-            "for" => {return Token {
-                ttype: TokenType::ForKeyword,
-                location: loc,
-                value
-            }},
-            "return" => {return Token {
-                ttype: TokenType::ReturnKeyword,
-                location: loc,
-                value
-            }},
-            "extern" => {return Token {
-                ttype: TokenType::ExternKeyword,
-                location: loc,
-                value
-            }}
+            "var" => {
+                return Token {
+                    ttype: TokenType::VarKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "if" => {
+                return Token {
+                    ttype: TokenType::IfKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "else" => {
+                return Token {
+                    ttype: TokenType::ElseKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "while" => {
+                return Token {
+                    ttype: TokenType::WhileKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "fn" => {
+                return Token {
+                    ttype: TokenType::FnKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "pub" => {
+                return Token {
+                    ttype: TokenType::PubKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "use" => {
+                return Token {
+                    ttype: TokenType::UseKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "for" => {
+                return Token {
+                    ttype: TokenType::ForKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "return" => {
+                return Token {
+                    ttype: TokenType::ReturnKeyword,
+                    location: loc,
+                    value,
+                };
+            }
+            "extern" => {
+                return Token {
+                    ttype: TokenType::ExternKeyword,
+                    location: loc,
+                    value,
+                };
+            }
             "true" => {
                 return Token {
-                ttype: TokenType::True,
-                location: loc,
-                value
-            }},
+                    ttype: TokenType::True,
+                    location: loc,
+                    value,
+                };
+            }
             "false" => {
                 return Token {
                     ttype: TokenType::False,
                     location: loc,
-                    value
-            }},
+                    value,
+                };
+            }
 
             _ => {}
         }
@@ -411,7 +490,7 @@ impl Lexer{
         Token {
             ttype: TokenType::Identifier,
             location: loc,
-            value
+            value,
         }
     }
 }

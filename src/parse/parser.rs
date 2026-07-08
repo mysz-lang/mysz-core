@@ -1,8 +1,9 @@
 use crate::lexing::lexing::{Token, TokenType};
 use crate::parse::parsing::{
-    BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType, Program, Stmt, Type, UnaryOp,
+    BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType,
+    Program, Stmt, Type, UnaryOp,
 };
-use crate::utils::toident::{to_ident};
+use crate::utils::toident::to_ident;
 
 pub struct Parser {
     pub tokens: Vec<Token>,
@@ -16,7 +17,9 @@ impl Parser {
         Self {
             tokens,
             token_idx: 0,
-            ast: Program { statements: Vec::new() },
+            ast: Program {
+                statements: Vec::new(),
+            },
             parser_errs: Vec::new(),
         }
     }
@@ -67,7 +70,10 @@ impl Parser {
         } else {
             self.throw(
                 ParserErrorType::UnexpectedTokenTypeError,
-                format!("Expected {:?}, found {:?} '{:?}'", ttype, tk.ttype, tk.value),
+                format!(
+                    "Expected {:?}, found {:?} '{:?}'",
+                    ttype, tk.ttype, tk.value
+                ),
             );
             None
         }
@@ -89,7 +95,7 @@ impl Parser {
 
     fn parse_type(&mut self) -> Option<Type> {
         let tk = self.get_token()?.clone();
-        
+
         match tk.ttype {
             TokenType::LBracket => {
                 self.advance();
@@ -100,39 +106,55 @@ impl Parser {
 
                 let size_tk = self.expect(TokenType::IntLiteral)?;
                 let size = size_tk.value.parse::<usize>().unwrap();
-                
+
                 self.expect(TokenType::RBracket)?;
-                
+
                 Some(Type::Array {
                     element_type: Box::new(element_type),
                     size,
                 })
             }
 
-            TokenType::Identifier => {
-                match tk.value.as_str() {
-                    "int" => { self.advance(); Some(Type::Int) }
-                    "bool" => { self.advance(); Some(Type::Bool) }
-                    "str" => { self.advance(); Some(Type::Str) }
-                    "void" => { self.advance(); Some(Type::Void) }
-                    "ptr" => {
-                        self.advance();
-                        self.expect(TokenType::LessThan)?;
-                        let inner = self.parse_type()?;
-                        self.expect(TokenType::GreaterThan)?;
-                        Some(Type::Ptr(Box::new(inner)))
-                    },
-                    "any" => { self.advance(); Some(Type::Any) }
-                    "char" => { self.advance(); Some(Type::Char) }
-                    other => {
-                        self.throw(
-                            ParserErrorType::UnexpectedTokenTypeError,
-                            format!("Unknown type identifier: {}", other),
-                        );
-                        None
-                    }
+            TokenType::Identifier => match tk.value.as_str() {
+                "int" => {
+                    self.advance();
+                    Some(Type::Int)
                 }
-            }
+                "bool" => {
+                    self.advance();
+                    Some(Type::Bool)
+                }
+                "str" => {
+                    self.advance();
+                    Some(Type::Str)
+                }
+                "void" => {
+                    self.advance();
+                    Some(Type::Void)
+                }
+                "ptr" => {
+                    self.advance();
+                    self.expect(TokenType::LessThan)?;
+                    let inner = self.parse_type()?;
+                    self.expect(TokenType::GreaterThan)?;
+                    Some(Type::Ptr(Box::new(inner)))
+                }
+                "any" => {
+                    self.advance();
+                    Some(Type::Any)
+                }
+                "char" => {
+                    self.advance();
+                    Some(Type::Char)
+                }
+                other => {
+                    self.throw(
+                        ParserErrorType::UnexpectedTokenTypeError,
+                        format!("Unknown type identifier: {}", other),
+                    );
+                    None
+                }
+            },
             _ => {
                 self.throw(
                     ParserErrorType::UnexpectedTokenTypeError,
@@ -142,12 +164,11 @@ impl Parser {
             }
         }
     }
-    
+
     fn parse_block(&mut self) -> Vec<Stmt> {
         let mut statements = Vec::new();
 
-        while !self.eof()
-            && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
+        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
         {
             if let Some(stmt) = self.parse_statement(true) {
                 statements.push(stmt);
@@ -175,11 +196,11 @@ impl Parser {
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
             TokenType::Star => {
-                let pointer_expr = self.parse_unary()?; 
-                
+                let pointer_expr = self.parse_unary()?;
+
                 self.expect(TokenType::Assign)?;
                 let value_expr = self.parse_expr()?;
-                
+
                 Some(Stmt::DerefReassignment {
                     target: pointer_expr,
                     expr: value_expr,
@@ -248,7 +269,7 @@ impl Parser {
         let ident = self.expect(TokenType::Identifier)?;
 
         self.expect(TokenType::LParen)?;
-        
+
         let params = self.parse_params();
 
         let rttype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
@@ -261,7 +282,7 @@ impl Parser {
         Some(Stmt::Extern {
             name: to_ident(Some(ident))?,
             rttype,
-            params
+            params,
         })
     }
 
@@ -279,7 +300,10 @@ impl Parser {
                 });
             } else if let ExprKind::Identifier(name) = lhs_expr.kind {
                 return Some(Stmt::Reassignment {
-                    ident: Identifier { value: name, location: lhs_expr.span },
+                    ident: Identifier {
+                        value: name,
+                        location: lhs_expr.span,
+                    },
                     expr: value_expr,
                 });
             }
@@ -299,7 +323,12 @@ impl Parser {
 
         loop {
             let name = match to_ident(self.get_token().cloned()) {
-                Some(ident) if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Identifier)) => {
+                Some(ident)
+                    if matches!(
+                        self.get_token().map(|t| &t.ttype),
+                        Some(TokenType::Identifier)
+                    ) =>
+                {
                     self.advance();
                     ident
                 }
@@ -383,16 +412,18 @@ impl Parser {
         self.advance();
 
         let public = match self.get_token()?.ttype {
-            TokenType::PubKeyword => {self.advance(); true},
+            TokenType::PubKeyword => {
+                self.advance();
+                true
+            }
             _ => false,
         };
-        
 
         let ident = self.expect(TokenType::Identifier)?;
 
         self.expect(TokenType::LParen)?;
         let params = self.parse_params();
-        
+
         let mut rttype = None;
         if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
             self.advance();
@@ -402,7 +433,16 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        Some(Stmt::Function { name: Identifier { value: ident.value, location: ident.location }, public, rttype: rttype, params, body })
+        Some(Stmt::Function {
+            name: Identifier {
+                value: ident.value,
+                location: ident.location,
+            },
+            public,
+            rttype: rttype,
+            params,
+            body,
+        })
     }
 
     fn parse_return(&mut self) -> Option<Stmt> {
@@ -414,7 +454,10 @@ impl Parser {
             _ => Some(self.parse_expr()?),
         };
 
-        Some(Stmt::Return { value: expr, span: tk.location })
+        Some(Stmt::Return {
+            value: expr,
+            span: tk.location,
+        })
     }
 
     fn parse_assignment(&mut self) -> Option<Stmt> {
@@ -457,12 +500,16 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        Some(Stmt::For { init: Box::new(init), cond, step: Box::new(step), body })
+        Some(Stmt::For {
+            init: Box::new(init),
+            cond,
+            step: Box::new(step),
+            body,
+        })
     }
 
     fn parse_while(&mut self) -> Option<Stmt> {
         self.advance();
-
 
         self.expect(TokenType::LParen)?;
         let cond = self.parse_expr()?;
@@ -484,13 +531,22 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        let else_branch = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::ElseKeyword)) {
+        let else_branch = if matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::ElseKeyword)
+        ) {
             self.advance();
             self.expect(TokenType::LBrace);
             Some(self.parse_block())
-        } else { None };
+        } else {
+            None
+        };
 
-        Some(Stmt::If { cond, then_branch: body, else_branch })
+        Some(Stmt::If {
+            cond,
+            then_branch: body,
+            else_branch,
+        })
     }
 
     fn parse_array_literal(&mut self) -> Option<Expr> {
@@ -499,7 +555,10 @@ impl Parser {
 
         let mut elements = Vec::new();
 
-        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBracket)) {
+        if matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::RBracket)
+        ) {
             self.advance();
             return Some(Expr {
                 kind: ExprKind::Literal(Literal::Arr { elements }),
@@ -530,7 +589,7 @@ impl Parser {
         }
 
         Some(Expr {
-            kind: ExprKind::Literal(Literal::Arr{elements}),
+            kind: ExprKind::Literal(Literal::Arr { elements }),
             span: open_bracket.location,
         })
     }
@@ -578,7 +637,6 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Option<Expr> {
-        
         let mut left = self.parse_addsub()?;
 
         while matches!(
@@ -747,7 +805,10 @@ impl Parser {
                     let index_expr = self.parse_expr()?;
                     let close_tk = self.expect(TokenType::RBracket)?;
                     expr = Expr {
-                        kind: ExprKind::Index { base: Box::new(expr), index: Box::new(index_expr) },
+                        kind: ExprKind::Index {
+                            base: Box::new(expr),
+                            index: Box::new(index_expr),
+                        },
                         span: close_tk.location,
                     };
                 }
@@ -758,13 +819,19 @@ impl Parser {
                         let args = self.parse_args();
                         expr = Expr {
                             kind: ExprKind::Call {
-                                callee: Identifier { value: name.clone(), location: callee_loc.clone() },
+                                callee: Identifier {
+                                    value: name.clone(),
+                                    location: callee_loc.clone(),
+                                },
                                 args,
                             },
                             span: callee_loc,
                         };
                     } else {
-                        self.throw(ParserErrorType::UnexpectedTokenTypeError, "Expected function name before parenthesis".to_string());
+                        self.throw(
+                            ParserErrorType::UnexpectedTokenTypeError,
+                            "Expected function name before parenthesis".to_string(),
+                        );
                         return None;
                     }
                 }
@@ -803,7 +870,7 @@ impl Parser {
                     span: tk.location,
                 })
             }
-            
+
             TokenType::StringLiteral => {
                 self.advance();
                 Some(Expr {
@@ -824,7 +891,7 @@ impl Parser {
                 self.advance();
                 Some(Expr {
                     kind: ExprKind::Identifier(tk.value),
-                    span: tk.location
+                    span: tk.location,
                 })
             }
 

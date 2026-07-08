@@ -12,11 +12,11 @@ pub enum IrOp {
     Pos, // unary plus
     Ref, // unary &
 
-    Eq, // ==
+    Eq,  // ==
     NEq, // !=
-    Gt, // >
+    Gt,  // >
     GtE, // >=
-    Lt, // <
+    Lt,  // <
     LtE, // <=
 }
 
@@ -70,12 +70,27 @@ pub enum Instruction {
         value: Value,
     },
 
-    Arg { value: Value },
-    Call { dest: Option<String>, name: String, argc: usize },
+    Arg {
+        value: Value,
+    },
+    Call {
+        dest: Option<String>,
+        name: String,
+        argc: usize,
+    },
 
-    Store {ptr: Value, source: Value},
+    Store {
+        ptr: Value,
+        source: Value,
+    },
 
-    Load { dst: String, ptr: Value, ty: Type },
+    Load {
+        dst: String,
+        ptr: Value,
+        ty: Type,
+    },
 
-    Extern { fnname: String }
+    Extern {
+        fnname: String,
+    },
 }

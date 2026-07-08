@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{parse::parsing::{Type}, utils::location::Location};
+use crate::{parse::parsing::Type, utils::location::Location};
 
 pub struct Symbol {
     pub data_type: Type,

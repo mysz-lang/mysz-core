@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::parse::parsing::*;
-use crate::semantics::analysis::{Scope, Symbol, FunctionSignature};
+use crate::semantics::analysis::{FunctionSignature, Scope, Symbol};
 use crate::utils::location::Location;
 
 pub struct Analyser {
@@ -15,42 +15,59 @@ pub struct Analyser {
 impl Analyser {
     pub fn new() -> Self {
         Self {
-            scopes: vec![Scope { symbols: HashMap::new(), parent: None }],
+            scopes: vec![Scope {
+                symbols: HashMap::new(),
+                parent: None,
+            }],
             current_scope: 0,
             functions: HashMap::new(),
             types: HashMap::new(),
-            current_return_type: None
+            current_return_type: None,
         }
     }
 
     pub fn enter_scope(&mut self) {
         let parent_idx = self.current_scope;
-        let new_scope = Scope { symbols: HashMap::new(), parent: Some(parent_idx) };
+        let new_scope = Scope {
+            symbols: HashMap::new(),
+            parent: Some(parent_idx),
+        };
         self.scopes.push(new_scope);
         self.current_scope = self.scopes.len() - 1;
     }
 
     pub fn leave_scope(&mut self) {
-        let parent = self.scopes[self.current_scope].parent
+        let parent = self.scopes[self.current_scope]
+            .parent
             .expect("Attempted to leave global scope");
 
         self.scopes.pop();
         self.current_scope = parent;
     }
 
-    fn declare_variable(&mut self, name: &str, data_type: Type, span: Location) -> Result<(), String> {
+    fn declare_variable(
+        &mut self,
+        name: &str,
+        data_type: Type,
+        span: Location,
+    ) -> Result<(), String> {
         let scope = &mut self.scopes[self.current_scope];
         if scope.symbols.contains_key(name) {
             return Err(format!(
-                "Semantic Error [{}]: Variable '{}' already declared in this scope.", 
+                "Semantic Error [{}]: Variable '{}' already declared in this scope.",
                 span, name
             ));
         }
-        scope.symbols.insert(name.to_string(), Symbol { data_type: data_type.clone() });
+        scope.symbols.insert(
+            name.to_string(),
+            Symbol {
+                data_type: data_type.clone(),
+            },
+        );
         self.types.insert(name.to_string(), data_type);
         Ok(())
     }
-    
+
     fn resolve_variable(&self, name: &str) -> Option<&Symbol> {
         let mut current = self.current_scope;
         loop {
@@ -81,7 +98,11 @@ impl Analyser {
 
         self.functions.insert(
             name.to_string(),
-            FunctionSignature { param_types, return_type, location },
+            FunctionSignature {
+                param_types,
+                return_type,
+                location,
+            },
         );
 
         Ok(())
@@ -133,7 +154,7 @@ impl Analyser {
                         size: elements.len(),
                     })
                 }
-            }
+            },
 
             ExprKind::Index { base, index } => {
                 let base_type = self.check_expr(base, None)?;
@@ -144,20 +165,22 @@ impl Analyser {
                 }
 
                 match base_type {
-                    Type::Array { element_type, .. } => {
-                        Ok(*element_type)
-                    }
-                    Type::Ptr(inner_type) => {
-                        Ok(*inner_type)
-                    }
-                    _ => Err(format!("Cannot index into non-indexable type '{:?}'", base_type)),
+                    Type::Array { element_type, .. } => Ok(*element_type),
+                    Type::Ptr(inner_type) => Ok(*inner_type),
+                    _ => Err(format!(
+                        "Cannot index into non-indexable type '{:?}'",
+                        base_type
+                    )),
                 }
             }
             ExprKind::Identifier(name) => {
                 if let Some(symbol) = self.resolve_variable(name) {
                     Ok(symbol.data_type.clone())
                 } else {
-                    Err(format!("Semantic Error [{}]: Variable '{}' is used before definition.", expr.span, name))
+                    Err(format!(
+                        "Semantic Error [{}]: Variable '{}' is used before definition.",
+                        expr.span, name
+                    ))
                 }
             }
             ExprKind::Call { callee, args } => {
@@ -171,7 +194,10 @@ impl Analyser {
                 if args.len() != sig.param_types.len() {
                     return Err(format!(
                         "Type Error [{}]: Function '{}' expects {} argument(s), found {}",
-                        expr.span, callee.value, sig.param_types.len(), args.len()
+                        expr.span,
+                        callee.value,
+                        sig.param_types.len(),
+                        args.len()
                     ));
                 }
 
@@ -228,17 +254,19 @@ impl Analyser {
                     BinaryOp::Add => {
                         if left_type == Type::Int && right_type == Type::Int {
                             Ok(Type::Int)
-                        } else if (left_type == Type::Int || left_type == Type::Any) && 
-                            (right_type == Type::Int || right_type == Type::Any) {
-                                Ok(Type::Int)
+                        } else if (left_type == Type::Int || left_type == Type::Any)
+                            && (right_type == Type::Int || right_type == Type::Any)
+                        {
+                            Ok(Type::Int)
                         } else if left_type == Type::Str && right_type == Type::Str {
                             Ok(Type::Str)
-                        } else if (left_type == Type::Str || left_type == Type::Any) &&
-                            (right_type == Type::Str || right_type == Type::Any) {
-                                Ok(Type::Str)
+                        } else if (left_type == Type::Str || left_type == Type::Any)
+                            && (right_type == Type::Str || right_type == Type::Any)
+                        {
+                            Ok(Type::Str)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Cannot add type '{:?}' and '{:?}'", 
+                                "Type Error [{}]: Cannot add type '{:?}' and '{:?}'",
                                 expr.span, left_type, right_type
                             ))
                         }
@@ -248,14 +276,21 @@ impl Analyser {
                             Ok(Type::Int)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Operator '{:?}' expects '{:?}', but found '{:?}' and '{:?}'", 
-                                expr.span, op, Type::Int, left_type, right_type
+                                "Type Error [{}]: Operator '{:?}' expects '{:?}', but found '{:?}' and '{:?}'",
+                                expr.span,
+                                op,
+                                Type::Int,
+                                left_type,
+                                right_type
                             ))
                         }
                     }
-                    BinaryOp::Eq | BinaryOp::NEq | BinaryOp::Gt | BinaryOp::GtE | BinaryOp::Lt | BinaryOp::LtE => {
-                        Ok(Type::Bool)
-                    }
+                    BinaryOp::Eq
+                    | BinaryOp::NEq
+                    | BinaryOp::Gt
+                    | BinaryOp::GtE
+                    | BinaryOp::Lt
+                    | BinaryOp::LtE => Ok(Type::Bool),
                 }
             }
             ExprKind::Unary { op, expr: sub_expr } => {
@@ -266,23 +301,19 @@ impl Analyser {
                             Ok(Type::Int)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Unary arithmetic operator expects 'int', found '{:?}'", 
+                                "Type Error [{}]: Unary arithmetic operator expects 'int', found '{:?}'",
                                 expr.span, expr_type
                             ))
                         }
                     }
-                    UnaryOp::AddressOf => {
-                        Ok(Type::Ptr(Box::new(expr_type)))
-                    }
-                    UnaryOp::Deref => {
-                        match expr_type {
-                            Type::Ptr(inner_type) => Ok(*inner_type),
-                            _ => Err(format!(
-                                "Type Error [{}]: Cannot dereference non-pointer type '{:?}'",
-                                expr.span, expr_type
-                            )),
-                        }
-                    }
+                    UnaryOp::AddressOf => Ok(Type::Ptr(Box::new(expr_type))),
+                    UnaryOp::Deref => match expr_type {
+                        Type::Ptr(inner_type) => Ok(*inner_type),
+                        _ => Err(format!(
+                            "Type Error [{}]: Cannot dereference non-pointer type '{:?}'",
+                            expr.span, expr_type
+                        )),
+                    },
                 }
             }
         }
@@ -292,7 +323,11 @@ impl Analyser {
         match stmt {
             Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
 
-            Stmt::Extern { name, rttype, params } => {
+            Stmt::Extern {
+                name,
+                rttype,
+                params,
+            } => {
                 let return_type = match rttype {
                     Some(rt) => rt.clone(),
                     None => Type::Void,
@@ -301,12 +336,17 @@ impl Analyser {
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => pt.clone(),
-                        None => Type::Any, 
+                        None => Type::Any,
                     };
                     param_types.push(ptype.clone());
                 }
 
-                self.declare_function(&name.value, param_types, return_type, name.location.clone())?;
+                self.declare_function(
+                    &name.value,
+                    param_types,
+                    return_type,
+                    name.location.clone(),
+                )?;
                 Ok(())
             }
 
@@ -320,7 +360,11 @@ impl Analyser {
                             expr.span, ident.value, explicit_type, expr_type
                         ));
                     }
-                    self.declare_variable(&ident.value, explicit_type.clone(), ident.location.clone())?;
+                    self.declare_variable(
+                        &ident.value,
+                        explicit_type.clone(),
+                        ident.location.clone(),
+                    )?;
                 } else {
                     if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
                         if existing_symbol.data_type != expr_type {
@@ -346,7 +390,6 @@ impl Analyser {
                         expr.span, expr_type, target_resolved_type
                     ));
                 }
-
 
                 Ok(())
             }
@@ -392,7 +435,12 @@ impl Analyser {
                 Ok(())
             }
 
-            Stmt::For { init, cond, step, body } => {
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 self.enter_scope();
 
                 self.check_stmt(init.as_ref())?;
@@ -417,7 +465,11 @@ impl Analyser {
                 Ok(())
             }
 
-            Stmt::If { cond, then_branch, else_branch } => {
+            Stmt::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(format!(
@@ -442,7 +494,13 @@ impl Analyser {
 
                 Ok(())
             }
-            Stmt::Function { name, public: _, rttype, params, body } => {
+            Stmt::Function {
+                name,
+                public: _,
+                rttype,
+                params,
+                body,
+            } => {
                 let return_type = match rttype {
                     Some(rt) => rt.clone(),
                     None => Type::Void,
@@ -452,12 +510,17 @@ impl Analyser {
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => pt.clone(),
-                        None => Type::Any, 
+                        None => Type::Any,
                     };
                     param_types.push(ptype.clone());
                 }
 
-                self.declare_function(&name.value, param_types.clone(), return_type.clone(), name.location.clone())?;
+                self.declare_function(
+                    &name.value,
+                    param_types.clone(),
+                    return_type.clone(),
+                    name.location.clone(),
+                )?;
 
                 self.enter_scope();
                 for (param, ptype) in params.iter().zip(param_types.into_iter()) {
@@ -483,7 +546,7 @@ impl Analyser {
 
                 self.leave_scope();
                 Ok(())
-            },
+            }
             Stmt::Return { value, span } => {
                 let actual_type = match value {
                     Some(e) => self.check_expr(e, None)?,
@@ -491,7 +554,10 @@ impl Analyser {
                 };
 
                 let expected = self.current_return_type.clone().ok_or_else(|| {
-                    format!("Semantic Error [{}]: 'return' used outside of a function", span)
+                    format!(
+                        "Semantic Error [{}]: 'return' used outside of a function",
+                        span
+                    )
                 })?;
 
                 if actual_type != expected {
@@ -511,5 +577,5 @@ impl Analyser {
             self.check_stmt(stmt)?;
         }
         Ok(())
-    }  
+    }
 }

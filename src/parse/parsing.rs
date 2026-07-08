@@ -1,7 +1,5 @@
 use crate::utils::location::Location;
 
-
-
 #[derive(Debug, Clone)]
 pub enum Literal {
     Int(i64),
@@ -27,7 +25,10 @@ pub enum Type {
     Char,
     Void,
     Ptr(Box<Type>),
-    Array { element_type: Box<Type>, size: usize },
+    Array {
+        element_type: Box<Type>,
+        size: usize,
+    },
     Any,
 }
 
@@ -57,7 +58,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub struct Identifier {
     pub value: String,
-    pub location: Location
+    pub location: Location,
 }
 
 #[derive(Debug, Clone)]
@@ -75,18 +76,18 @@ pub enum ExprKind {
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
-        right: Box<Expr>
+        right: Box<Expr>,
     },
 
     Unary {
         op: UnaryOp,
-        expr: Box<Expr>
+        expr: Box<Expr>,
     },
 
     Call {
         callee: Identifier,
-        args: Vec<Expr>
-    }
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -98,60 +99,59 @@ pub struct Expr {
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub name: Identifier,
-    pub ptype: Option<Type>
+    pub ptype: Option<Type>,
 }
-
 
 #[derive(Debug)]
 pub enum Stmt {
-    Assignment{
+    Assignment {
         ident: Identifier,
         vtype: Option<Type>,
-        expr: Expr
+        expr: Expr,
     },
-    Reassignment{
+    Reassignment {
         ident: Identifier,
-        expr: Expr
+        expr: Expr,
     },
-    DerefReassignment{
+    DerefReassignment {
         target: Expr,
         expr: Expr,
     },
     Expr(Expr),
-    If{
-        cond: Expr, 
+    If {
+        cond: Expr,
         then_branch: Vec<Stmt>,
         else_branch: Option<Vec<Stmt>>,
     },
-    While{
+    While {
         cond: Expr,
-        body: Vec<Stmt>
+        body: Vec<Stmt>,
     },
-    For{
+    For {
         init: Box<Stmt>,
         cond: Expr,
         step: Box<Stmt>,
-        body: Vec<Stmt>
+        body: Vec<Stmt>,
     },
-    Function{
+    Function {
         name: Identifier,
         public: bool,
         rttype: Option<Type>,
         params: Vec<Parameter>,
-        body: Vec<Stmt>
+        body: Vec<Stmt>,
     },
-    Return{
+    Return {
         value: Option<Expr>,
-        span: Location
+        span: Location,
     },
-    Extern{
+    Extern {
         name: Identifier,
         rttype: Option<Type>,
         params: Vec<Parameter>,
     },
-    Use{
+    Use {
         path: Vec<String>,
-    }
+    },
 }
 
 #[derive(Debug)]
@@ -159,28 +159,25 @@ pub struct Program {
     pub statements: Vec<Stmt>,
 }
 
-
 #[derive(Debug)]
 pub enum ParserErrorType {
     MalformedStatementError,
     UnexpectedTokenTypeError,
-    UnimplementedError
+    UnimplementedError,
 }
 
 #[derive(Debug)]
 pub struct ParserError {
     pub etype: ParserErrorType,
     pub message: String,
-    pub location: Location
+    pub location: Location,
 }
 impl std::fmt::Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "! Parser Error :{}: {:?}: {}",
-            self.location,
-            self.etype,
-            self.message
+            self.location, self.etype, self.message
         )
     }
 }
