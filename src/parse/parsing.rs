@@ -135,6 +135,7 @@ pub enum Stmt {
     },
     Function{
         name: Identifier,
+        public: bool,
         rttype: Option<Type>,
         params: Vec<Parameter>,
         body: Vec<Stmt>

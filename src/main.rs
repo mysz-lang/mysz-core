@@ -24,10 +24,22 @@ use crate::parse::parsing::{Stmt, Program};
 
 fn main() {
     let source: String = "
-use std::io;
+use stdlib::io;
+use stdlib::string;
 
-fn main(): int {
-    print_str(\"Hello, world!\");
+fn pub main(): int {
+    var message = \"Hello, world!!!\";
+    var x = String(message);
+
+    var len = String_len(x);
+
+    for (var i = 0; i < len; i = i + 1) {
+        print_char(x[i], false);
+    };
+    
+    print_char('\n', false);
+
+    String_free(x);
     return 0;
 };".to_string();
 
@@ -89,9 +101,9 @@ fn main(): int {
 
     let tac_instructions = irgen.code;
     
-    let functions_to_compile: Vec<String> = program.statements.iter().filter_map(|stmt| {
+    let functions_to_compile: Vec<(String, bool)> = program.statements.iter().filter_map(|stmt| {
         match stmt {
-            Stmt::Function { name, .. } => Some(name.value.clone()), 
+            Stmt::Function { name, public, .. } => Some((name.value.clone(), *public)), 
             _ => None
         }
     }).collect();
@@ -99,7 +111,7 @@ fn main(): int {
     let mut backend = clback::CraneliftBackend::new();
     backend.scan_externs(&tac_instructions);
 
-    for func_name in functions_to_compile {
+    for (func_name, is_public) in functions_to_compile {
         let func_instructions: Vec<&Instruction> = tac_instructions.iter()
             .skip_while(|inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name))
             .skip(1) 
@@ -110,7 +122,8 @@ fn main(): int {
         let mut func_ctx = FunctionBuilderContext::new();
 
         backend.compile_function(
-            &func_name, 
+            &func_name,
+            is_public,
             &func_instructions, 
             &mut ctx, 
             &mut func_ctx,

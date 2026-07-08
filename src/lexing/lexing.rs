@@ -47,6 +47,7 @@ pub enum TokenType {
     ElseKeyword,
     WhileKeyword,
     FnKeyword,
+    PubKeyword,
     ReturnKeyword,
     ExternKeyword,
     ForKeyword,

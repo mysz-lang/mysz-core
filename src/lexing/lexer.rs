@@ -1,4 +1,3 @@
-use crate::lexing::lexing::TokenType::{GreaterThanEquals, LessThanEquals};
 use crate::lexing::lexing::{Token, TokenType};
 use crate::utils::location::Location;
 
@@ -171,7 +170,7 @@ impl Lexer{
             self.advance(); self.advance();
 
             return Token {
-                ttype: LessThanEquals,
+                ttype: TokenType::LessThanEquals,
                 location: loc,
                 value: format!("{}{}", current, next)
             }
@@ -365,6 +364,11 @@ impl Lexer{
             }},
             "fn" => {return Token {
                 ttype: TokenType::FnKeyword,
+                location: loc,
+                value
+            }},
+            "pub" => {return Token {
+                ttype: TokenType::PubKeyword,
                 location: loc,
                 value
             }},

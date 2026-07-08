@@ -442,7 +442,7 @@ impl Analyser {
 
                 Ok(())
             }
-            Stmt::Function { name, rttype, params, body } => {
+            Stmt::Function { name, public: _, rttype, params, body } => {
                 let return_type = match rttype {
                     Some(rt) => rt.clone(),
                     None => Type::Void,

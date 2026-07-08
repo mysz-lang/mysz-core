@@ -109,7 +109,7 @@ impl CraneliftBackend {
         data_id
     }
 
-    fn get_or_declare_func(&mut self, name: &str, arg_types: &[BackendType], return_type: BackendType) -> FuncId {
+    fn get_or_declare_func(&mut self, name: &str,public: bool, arg_types: &[BackendType], return_type: BackendType) -> FuncId {
         if let Some(&id) = self.declared_funcs.get(name) {
             return id;
         }
@@ -122,6 +122,8 @@ impl CraneliftBackend {
 
         let linkage = if self.extern_names.contains(name) {
             Linkage::Import
+        } else if public {
+            Linkage::Export
         } else {
             Linkage::Local
         };
@@ -134,6 +136,7 @@ impl CraneliftBackend {
     pub fn compile_function(
         &mut self,
         name: &str,
+        public: bool,
         insts: &[&Instruction],
         ctx: &mut cranelift::codegen::Context,
         func_ctx: &mut FunctionBuilderContext,
@@ -167,7 +170,7 @@ impl CraneliftBackend {
             }
         }
 
-        let func_id = self.module.declare_function(name, Linkage::Export, &sig).unwrap();
+        let func_id = self.get_or_declare_func(name, public, &[], BackendType::Int64);
         self.declared_funcs.insert(name.to_string(), func_id);
         ctx.func.signature = sig;
 
@@ -468,7 +471,9 @@ impl CraneliftBackend {
                         .map(BackendType::from_frontend)
                         .unwrap_or(BackendType::Int64);
 
-                    let local_callee = self.get_or_declare_func(name, &call_arg_types, return_type);
+                    let is_extern = self.extern_names.contains(name);
+
+                    let local_callee = self.get_or_declare_func(name, is_extern, &call_arg_types, return_type);
                     let local_clif_ref = self.module.declare_func_in_func(local_callee, &mut builder.func);
 
                     let call_inst = builder.ins().call(local_clif_ref, &call_args);

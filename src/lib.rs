@@ -103,9 +103,9 @@ pub fn compile_source(
 
     let tac_instructions = irgen.code;
     
-    let functions_to_compile: Vec<String> = program.statements.iter().filter_map(|stmt| {
+    let functions_to_compile: Vec<(String, bool)> = program.statements.iter().filter_map(|stmt| {
         match stmt {
-            Stmt::Function { name, .. } => Some(name.value.clone()), 
+            Stmt::Function { name, public, .. } => Some((name.value.clone(), *public)), 
             _ => None
         }
     }).collect();
@@ -115,7 +115,7 @@ pub fn compile_source(
     
     backend.scan_externs(&tac_instructions);
 
-    for func_name in functions_to_compile {
+    for (func_name, is_public) in functions_to_compile {
         let func_instructions: Vec<&Instruction> = tac_instructions.iter()
             .skip_while(|inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name))
             .skip(1) 
@@ -127,6 +127,7 @@ pub fn compile_source(
         
         backend.compile_function(
             &func_name, 
+            is_public,
             &func_instructions, 
             &mut ctx, 
             &mut func_ctx,

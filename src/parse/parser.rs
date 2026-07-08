@@ -379,6 +379,12 @@ impl Parser {
     fn parse_function(&mut self) -> Option<Stmt> {
         self.advance();
 
+        let public = match self.get_token()?.ttype {
+            TokenType::PubKeyword => {self.advance(); true},
+            _ => false,
+        };
+        
+
         let ident = self.expect(TokenType::Identifier)?;
 
         self.expect(TokenType::LParen)?;
@@ -393,7 +399,7 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
-        Some(Stmt::Function { name: Identifier { value: ident.value, location: ident.location }, rttype: rttype, params, body })
+        Some(Stmt::Function { name: Identifier { value: ident.value, location: ident.location }, public, rttype: rttype, params, body })
     }
 
     fn parse_return(&mut self) -> Option<Stmt> {
