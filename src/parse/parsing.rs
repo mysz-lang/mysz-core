@@ -29,6 +29,7 @@ pub enum Type {
         element_type: Box<Type>,
         size: usize,
     },
+    Struct(String),
     Any,
 }
 
@@ -70,6 +71,16 @@ pub enum ExprKind {
     Index {
         base: Box<Expr>,
         index: Box<Expr>,
+    },
+
+    // struct literal
+    Field {
+        base: Box<Expr>,
+        field: String,
+    },
+    StructLiteral {
+        struct_name: String,
+        fields: Vec<(String, Expr)>,
     },
 
     // basic maths
@@ -152,6 +163,10 @@ pub enum Stmt {
     Use {
         path: Vec<String>,
     },
+    Struct {
+        name: Identifier,
+        fields: Vec<Parameter>
+    }
 }
 
 #[derive(Debug)]

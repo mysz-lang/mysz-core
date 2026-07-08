@@ -105,7 +105,7 @@ fn main() {
         })
         .collect();
 
-    let mut backend = clback::CraneliftBackend::new();
+    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs);
     backend.scan_externs(&tac_instructions);
 
     for (func_name, is_public) in functions_to_compile {

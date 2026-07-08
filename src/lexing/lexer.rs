@@ -106,6 +106,9 @@ impl Lexer {
                         let t = self.lex_lt();
                         self.add_token(t);
                     }
+                    '.' => {
+                        self.single_char(TokenType::Period);
+                    }
 
                     '&' => {
                         self.single_char(TokenType::Ampersand);
@@ -482,6 +485,13 @@ impl Lexer {
                     location: loc,
                     value,
                 };
+            },
+            "struct" => {
+                return Token {
+                    ttype: TokenType::StructKeyword,
+                    location: loc,
+                    value
+                }
             }
 
             _ => {}

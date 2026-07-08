@@ -17,3 +17,9 @@ pub struct FunctionSignature {
     pub return_type: Type,
     pub location: Location,
 }
+
+#[derive(Debug, Clone)]
+pub struct StructSignature {
+    pub fields: HashMap<String, Type>,
+    pub location: Location,
+}

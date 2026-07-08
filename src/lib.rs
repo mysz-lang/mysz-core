@@ -127,7 +127,7 @@ pub fn compile_source(
         .collect();
 
     // Codegen
-    let mut backend = clback::CraneliftBackend::new();
+    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs);
 
     backend.scan_externs(&tac_instructions);
 

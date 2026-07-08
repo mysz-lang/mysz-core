@@ -4,6 +4,7 @@ use cranelift::{codegen::ir::StackSlot, prelude::*};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+use crate::ir::ir::StructLayout;
 use crate::ir::tac::{Instruction, IrOp, Value};
 use crate::parse::parsing::Type;
 
@@ -55,10 +56,11 @@ pub struct CraneliftBackend {
     extern_names: std::collections::HashSet<String>,
     declared_funcs: HashMap<String, FuncId>,
     str_count: usize,
+    struct_defs: HashMap<String, StructLayout>,
 }
 
 impl CraneliftBackend {
-    pub fn new() -> Self {
+    pub fn new(struct_defs: HashMap<String, StructLayout>) -> Self {
         let mut flag_builder = settings::builder();
         flag_builder.set("is_pic", "true").unwrap();
 
@@ -71,12 +73,15 @@ impl CraneliftBackend {
             ObjectBuilder::new(isa, "mysz_prog", cranelift_module::default_libcall_names())
                 .unwrap();
 
+        let struct_defs: HashMap<String, StructLayout> = struct_defs;
+
         let module = ObjectModule::new(builder);
         Self {
             module,
             extern_names: std::collections::HashSet::new(),
             declared_funcs: HashMap::new(),
             str_count: 0,
+            struct_defs,
         }
     }
 
@@ -220,6 +225,10 @@ impl CraneliftBackend {
                     } => {
                         let elem_size = BackendType::from_frontend(element_type).byte_size();
                         elem_size * (size as u32)
+                    },
+                    Type::Struct(name) => {
+                        // Look up the exact accumulated layout size you calculated in the analyzer
+                        self.struct_defs.get(&name).map(|l| l.total_size as u32).unwrap_or(8)
                     }
                     other => BackendType::from_frontend(&other).byte_size(),
                 };

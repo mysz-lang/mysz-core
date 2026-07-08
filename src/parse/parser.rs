@@ -187,6 +187,7 @@ impl Parser {
 
         let stmt = match tk.ttype {
             TokenType::VarKeyword => self.parse_assignment(),
+            TokenType::StructKeyword => self.parse_struct(),
             TokenType::IfKeyword => self.parse_if(),
             TokenType::WhileKeyword => self.parse_while(),
             TokenType::FnKeyword => self.parse_function(),
@@ -270,7 +271,7 @@ impl Parser {
 
         self.expect(TokenType::LParen)?;
 
-        let params = self.parse_params();
+        let params = self.parse_params(TokenType::RParen);
 
         let rttype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
             self.advance();
@@ -293,7 +294,8 @@ impl Parser {
             self.advance();
             let value_expr = self.parse_expr()?;
 
-            if matches!(lhs_expr.kind, ExprKind::Index { .. }) {
+            // If we are modifying a field (e.g. p.x = 10) or an index array slot
+            if matches!(lhs_expr.kind, ExprKind::Index { .. } | ExprKind::Field { .. }) {
                 return Some(Stmt::DerefReassignment {
                     target: lhs_expr,
                     expr: value_expr,
@@ -313,22 +315,18 @@ impl Parser {
     }
 
     // ends with ), do not call self.advance(); to skip ). It is already skipped here
-    fn parse_params(&mut self) -> Vec<Parameter> {
+    fn parse_params(&mut self, ending: TokenType) -> Vec<Parameter> {
         let mut params = Vec::new();
 
-        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RParen)) {
+        // Empty parameter list: ()
+        if self.get_token().map(|t| &t.ttype) == Some(&ending) {
             self.advance();
             return params;
         }
 
         loop {
-            let name = match to_ident(self.get_token().cloned()) {
-                Some(ident)
-                    if matches!(
-                        self.get_token().map(|t| &t.ttype),
-                        Some(TokenType::Identifier)
-                    ) =>
-                {
+            let name = match self.get_token().cloned().and_then(|token| to_ident(Some(token))) {
+                Some(ident) => {
                     self.advance();
                     ident
                 }
@@ -341,7 +339,7 @@ impl Parser {
                 }
             };
 
-            let ptype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
+            let ptype = if self.get_token().map(|t| &t.ttype) == Some(&TokenType::Colon) {
                 self.advance();
                 self.parse_type()
             } else {
@@ -354,14 +352,16 @@ impl Parser {
                 Some(TokenType::Comma) => {
                     self.advance();
                 }
-                Some(TokenType::RParen) => {
+
+                Some(ttype) if ttype == &ending => {
                     self.advance();
                     break;
                 }
+
                 other => {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
-                        format!("Expected ',' or ')', found {:?}", other),
+                        format!("Expected ',' or {:?}, found {:?}", ending, other),
                     );
                     break;
                 }
@@ -422,7 +422,7 @@ impl Parser {
         let ident = self.expect(TokenType::Identifier)?;
 
         self.expect(TokenType::LParen)?;
-        let params = self.parse_params();
+        let params = self.parse_params(TokenType::RParen);
 
         let mut rttype = None;
         if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
@@ -519,6 +519,36 @@ impl Parser {
         let body = self.parse_block();
 
         Some(Stmt::While { cond, body })
+    }
+
+    fn parse_struct(&mut self) -> Option<Stmt> {
+        self.advance(); // consume 'struct'
+
+        let ident = self.expect(TokenType::Identifier)?;
+        self.expect(TokenType::LBrace)?;
+
+        let mut fields = Vec::new();
+
+        // Parse fields until reaching the closing right brace
+        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+            let name = to_ident(self.get_token().cloned())?;
+            self.advance();
+
+            self.expect(TokenType::Colon)?;
+            
+            let ptype = self.parse_type();
+
+            self.expect(TokenType::Comma)?;
+
+            fields.push(Parameter { name, ptype });
+        }
+
+        self.expect(TokenType::RBrace)?;
+
+        Some(Stmt::Struct {
+            name: to_ident(Some(ident))?,
+            fields,
+        })
     }
 
     fn parse_if(&mut self) -> Option<Stmt> {
@@ -812,6 +842,18 @@ impl Parser {
                         span: close_tk.location,
                     };
                 }
+                Some(TokenType::Period) => {
+                    self.advance(); // consume '.'
+                    let field_tk = self.expect(TokenType::Identifier)?;
+                    let loc = field_tk.location.clone();
+                    expr = Expr {
+                        kind: ExprKind::Field {
+                            base: Box::new(expr),
+                            field: field_tk.value,
+                        },
+                        span: loc,
+                    };
+                }
                 Some(TokenType::LParen) => {
                     if let ExprKind::Identifier(name) = &expr.kind {
                         let callee_loc = expr.span.clone();
@@ -888,13 +930,53 @@ impl Parser {
             }
 
             TokenType::Identifier => {
+                let id_tk = self.get_token()?.clone();
                 self.advance();
-                Some(Expr {
-                    kind: ExprKind::Identifier(tk.value),
-                    span: tk.location,
-                })
+                
+                // Lookahead to check if this is an instantiation: StructName { ... }
+                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LBrace)) {
+                    self.advance(); // consume '{'
+                    let mut fields = Vec::new();
+                    
+                    if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+                        loop {
+                            let field_name = self.expect(TokenType::Identifier)?.value;
+                            self.expect(TokenType::Colon)?;
+                            let value_expr = self.parse_expr()?;
+                            fields.push((field_name, value_expr));
+                            
+                            match self.get_token().map(|t| &t.ttype) {
+                                Some(TokenType::Comma) => {
+                                    self.advance();
+                                }
+                                Some(TokenType::RBrace) => break,
+                                _ => {
+                                    self.throw(
+                                        ParserErrorType::UnexpectedTokenTypeError,
+                                        "Expected ',' or '}' in struct initializer".to_string(),
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    
+                    let end_tk = self.expect(TokenType::RBrace)?;
+                    Some(Expr {
+                        kind: ExprKind::StructLiteral {
+                            struct_name: id_tk.value,
+                            fields,
+                        },
+                        span: end_tk.location,
+                    })
+                } else {
+                    // Plain variable reference or function name call
+                    Some(Expr {
+                        kind: ExprKind::Identifier(id_tk.value),
+                        span: id_tk.location,
+                    })
+                }
             }
-
             TokenType::LBracket => self.parse_array_literal(),
 
             TokenType::LParen => {

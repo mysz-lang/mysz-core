@@ -51,6 +51,7 @@ pub enum TokenType {
     ExternKeyword,
     ForKeyword,
     UseKeyword,
+    StructKeyword,
 
     // identifier
     Identifier,
