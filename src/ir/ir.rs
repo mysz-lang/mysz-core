@@ -287,7 +287,6 @@ impl IRGen {
             ExprKind::Field { base, field } => {
                 let base_val = self.gen_expr(base, None);
                 
-                // 1. Get the layout data and drop the immutable borrow immediately by cloning what we need
                 let (offset, field_type) = {
                     let base_type = self.expr_type(base).unwrap_or(Type::Int);
                     let struct_name = match base_type {
@@ -301,9 +300,8 @@ impl IRGen {
                         .expect("Internal Compiler Error: Referenced struct field does not exist.");
                     
                     (*offset, field_ty.clone())
-                }; // The immutable borrow of `self` ends right here!
+                };
 
-                // 2. Now we can safely call &mut self methods
                 let struct_name = match self.expr_type(base).unwrap_or(Type::Int) {
                     Type::Struct(name) => name,
                     _ => unreachable!(),
@@ -333,8 +331,7 @@ impl IRGen {
 
                 Value::Temp(result_temp)
             }
-
-            // --- Struct Literal Initialization Expression ---
+            
             ExprKind::StructLiteral { struct_name, fields } => {
                 let base_val = match target_dest {
                     Some(dest) => dest,
@@ -346,13 +343,11 @@ impl IRGen {
                     }
                 };
 
-                // Step 1: Pre-extract layout fields data to dodge aliasing loops
                 let layout_fields = self.struct_defs.get(struct_name)
                     .expect("Internal Compiler Error: Structural initialization on untracked layout.")
                     .field_offsets
-                    .clone(); // Clone the mapping so `self` is completely freed up
+                    .clone();
 
-                // Step 2: Safe evaluation loop
                 for (field_name, field_expr) in fields {
                     let field_val = self.gen_expr(field_expr, None);
                     let (offset, field_type) = layout_fields.get(field_name)
@@ -564,11 +559,10 @@ impl IRGen {
 
                 for field in fields {
                     let field_name = field.name.value.clone();
-                    // Fallback to Int if type is unspecified
                     let field_type = field.ptype.clone().unwrap_or(Type::Int);
                     let field_size = self.type_size(&field_type);
 
-                    // Optional: If you need alignment constraints (e.g., 8-byte boundaries)
+                    // alignment, if I want C struct support, hey I might add extern struct in the future!
                     // current_offset = (current_offset + alignment - 1) & !(alignment - 1);
 
                     field_offsets.insert(field_name, (current_offset, field_type));
@@ -596,7 +590,6 @@ impl IRGen {
 
                 let target_var = Value::Var(ident.value.clone());
                 if is_structural {
-                    // Constructs directly onto the allocation space
                     self.gen_expr(expr, Some(target_var));
                 } else {
                     let value = self.gen_expr(expr, None);
@@ -812,10 +805,8 @@ impl IRGen {
                         source: value_to_store,
                     });
                 } else if let ExprKind::Field { base, field } = &target.kind {
-                                // 1. Evaluate the base location value first
                                 let base_val = self.gen_expr(base, None);
 
-                                // 2. Isolate layout resolution to extract data primitives upfront
                                 let (struct_name, offset, field_type) = {
                                     let base_type = self.expr_type(base).unwrap_or(Type::Int);
                                     let name = match base_type {
@@ -829,9 +820,8 @@ impl IRGen {
                                         .expect("Internal Compiler Error: Referenced struct field does not exist.");
 
                                     (name, *offset, field_ty.clone())
-                                }; // All immutable borrows to `self` are explicitly dropped here!
+                                };
 
-                                // 3. Now it is completely safe to execute mutable &mut self compiler code
                                 let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
                                 self.code.push(Instruction::Unary {
                                     dst: base_addr_temp.clone(),
@@ -846,8 +836,7 @@ impl IRGen {
                                     lhs: Value::Temp(base_addr_temp),
                                     rhs: Value::Const(offset),
                                 });
-
-                                // Write modified data payload straight into frame memory
+                    
                                 self.code.push(Instruction::Store {
                                     ptr: Value::Temp(target_addr_temp),
                                     source: value_to_store,
