@@ -411,7 +411,7 @@ impl Analyser {
                     self.check_stmt(block_stmt)?;
                 }
 
-                self.check_stmt(step.as_ref());
+                self.check_stmt(step.as_ref())?;
 
                 self.leave_scope();
 
