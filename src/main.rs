@@ -23,25 +23,7 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Stmt, Program};
 
 fn main() {
-    let source: String = "
-use stdlib::io;
-use stdlib::string;
-
-fn pub main(): int {
-    var message = \"Hello, world!!!\";
-    var x = String(message);
-
-    var len = String_len(x);
-
-    for (var i = 0; i < len; i = i + 1) {
-        print_char(x[i], false);
-    };
-    
-    print_char('\n', false);
-
-    String_free(x);
-    return 0;
-};".to_string();
+    let source: String = "".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();

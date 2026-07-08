@@ -189,8 +189,11 @@ impl Parser {
         };
 
         if semi_colon {
-        if self.expect(TokenType::SemiColon).is_none() {
-                return None; 
+            if self.expect(TokenType::SemiColon).is_none() {
+                self.throw(
+                    ParserErrorType::MalformedStatementError,
+                    format!("Statement did not finish with semicolon ';'"),
+                );
             }
         }
         stmt
