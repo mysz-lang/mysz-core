@@ -126,6 +126,7 @@ impl Parser {
                         self.expect(TokenType::GreaterThan)?;
                         Some(Type::Ptr(Box::new(inner)))
                     },
+                    "any" => { self.advance(); Some(Type::Any) }
                     "char" => { self.advance(); Some(Type::Char) }
                     other => {
                         self.throw(

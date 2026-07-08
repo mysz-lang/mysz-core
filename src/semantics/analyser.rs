@@ -183,11 +183,41 @@ impl Analyser {
 
                 for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
                     let arg_type = self.check_expr(arg, None)?;
-                    if *expected != Type::Any && arg_type != *expected {
-                        return Err(format!(
-                            "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
-                            arg.span, i + 1, callee.value, expected, arg_type
-                        ));
+                    match (expected, &arg_type) {
+                        (
+                            Type::Array {
+                                element_type: expected_elem,
+                                ..
+                            },
+                            Type::Array {
+                                element_type: actual_elem,
+                                ..
+                            },
+                        ) => {
+                            if **expected_elem != Type::Any && **expected_elem != **actual_elem {
+                                return Err(format!(
+                                    "Type Error [{}]: Argument {} to '{}' expects array of '{:?}', found array of '{:?}'",
+                                    arg.span,
+                                    i + 1,
+                                    callee.value,
+                                    expected_elem,
+                                    actual_elem,
+                                ));
+                            }
+                        }
+
+                        (Type::Array { .. }, _) => {
+                            return Err(format!(
+                                "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
+                                arg.span,
+                                i + 1,
+                                callee.value,
+                                expected,
+                                arg_type,
+                            ));
+                        }
+
+                        _ => {}
                     }
                 }
 
