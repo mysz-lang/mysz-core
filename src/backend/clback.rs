@@ -227,7 +227,6 @@ impl CraneliftBackend {
                         elem_size * (size as u32)
                     },
                     Type::Struct(name) => {
-                        // Look up the exact accumulated layout size you calculated in the analyzer
                         self.struct_defs.get(&name).map(|l| l.total_size as u32).unwrap_or(8)
                     }
                     other => BackendType::from_frontend(&other).byte_size(),
