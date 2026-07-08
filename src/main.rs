@@ -30,6 +30,8 @@ fn main() {
 
     let tokens = lexer.tokens;
 
+    // println!("{:#?}", tokens);
+
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -39,6 +41,8 @@ fn main() {
         }
         return;
     }
+
+    // println!("{:#?}", parser.ast);
 
     let program = parser.ast;
 

@@ -5,10 +5,8 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ir::tac::{Instruction, IrOp, Value};
-// Assuming these are imported from your parsing module
 use crate::parse::parsing::Type;
 
-// Representing your language's types in the backend context
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType {
     Int32,
@@ -19,7 +17,6 @@ pub enum BackendType {
 }
 
 impl BackendType {
-    /// Convert your type enum into a concrete Cranelift primitive Type
     pub fn to_clif_type(&self) -> cranelift::prelude::Type {
         match self {
             BackendType::Char => types::I8,
@@ -30,19 +27,24 @@ impl BackendType {
         }
     }
 
-    /// Return the byte size of this type for proper stack/memory allocations
     pub fn byte_size(&self) -> u32 {
-        self.to_clif_type().bytes()
+        match self {
+            BackendType::Char => 1,
+            BackendType::Bool => 1,
+            BackendType::Int32 => 4,
+            BackendType::Int64 => 8,
+            BackendType::Ptr => 8,
+        }
     }
 
-    /// Map your AST/IR Frontend types to clean Backend configurations
     pub fn from_frontend(ty: &Type) -> Self {
         match ty {
-            Type::Int => BackendType::Int64, // Defaulting to 64-bit integer, easy to split into Int32 later!
+            Type::Int => BackendType::Int64,
             Type::Bool => BackendType::Bool,
+            Type::Char => BackendType::Char,
             Type::Str => BackendType::Ptr,
             Type::Ptr(_) => BackendType::Ptr,
-            Type::Array { .. } => BackendType::Ptr, // Arrays degrade to base frame addresses/pointers
+            Type::Array { .. } => BackendType::Ptr,
             _ => BackendType::Int64,
         }
     }
@@ -107,7 +109,6 @@ impl CraneliftBackend {
         data_id
     }
 
-    /// Look up or declare signatures using dynamic argument definitions instead of raw i64 loops
     fn get_or_declare_func(&mut self, name: &str, arg_types: &[BackendType], return_type: BackendType) -> FuncId {
         if let Some(&id) = self.declared_funcs.get(name) {
             return id;
@@ -136,16 +137,15 @@ impl CraneliftBackend {
         insts: &[&Instruction],
         ctx: &mut cranelift::codegen::Context,
         func_ctx: &mut FunctionBuilderContext,
-        var_types: &HashMap<String, Type> // 🌟 Added type definitions from your IR step
+        var_types: &HashMap<String, Type>
     ) {
-        // Helper to find variable types safely
         let get_val_backend_type = |val: &Value| -> BackendType {
             match val {
                 Value::Var(n) | Value::Temp(n) => {
                     if let Some(t) = var_types.get(n) {
                         BackendType::from_frontend(t)
                     } else {
-                        BackendType::Int64 // Fallback
+                        BackendType::Int64
                     }
                 }
                 Value::Char(_) => BackendType::Char,
@@ -158,7 +158,6 @@ impl CraneliftBackend {
 
         let mut sig = self.module.make_signature();
         
-        // Find function return type or default to I64
         sig.returns.push(AbiParam::new(types::I64)); 
 
         for inst in insts {
@@ -186,11 +185,9 @@ impl CraneliftBackend {
         let mut label_map: HashMap<String, Block> = HashMap::new();
         let mut var_idx = 0;
 
-        // Pre-allocate stack slots dynamically sizing them via frontend type layout
         for inst in insts {
             if let Instruction::Unary { op: IrOp::Ref, value: Value::Var(name) | Value::Temp(name), .. } = inst {
                 let frontend_type = var_types.get(name).cloned().unwrap_or(Type::Int);
-                // Use absolute runtime sizes from frontend definitions
                 let total_size = match frontend_type {
                     Type::Array { ref element_type, size } => {
                         let elem_size = BackendType::from_frontend(element_type).byte_size();
@@ -205,7 +202,6 @@ impl CraneliftBackend {
             }
         }
 
-        // Variable allocation closure is now completely type-aware!
         let get_or_create_var_impl = |b: &mut FunctionBuilder, v_map: &mut HashMap<String, Variable>, v_idx: &mut usize, name: &str, ty: BackendType| -> Variable {
             *v_map.entry(name.to_string()).or_insert_with(|| {
                 let v = Variable::new(*v_idx);
@@ -269,7 +265,7 @@ impl CraneliftBackend {
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
-                            builder.ins().iconst(clif_ty, byte_val as i64) // <-- This must be an iconst!
+                            builder.ins().iconst(clif_ty, byte_val as i64)
                         }
                         Value::Void => builder.ins().iconst(clif_ty, 0),
                     };
@@ -283,7 +279,6 @@ impl CraneliftBackend {
                 }
                 Instruction::Binary { dst, op, lhs, rhs } => {
                     let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
-                    let clif_ty = dst_ty.to_clif_type();
 
                     let l_ty = get_val_backend_type(lhs);
                     let r_ty = get_val_backend_type(rhs);
@@ -320,6 +315,9 @@ impl CraneliftBackend {
                         Value::Char(_) => unreachable!(),
                     };
 
+                    let zero = builder.ins().iconst(dst_ty.to_clif_type(), 0);
+                    let one = builder.ins().iconst(dst_ty.to_clif_type(), 1);
+
                     let res = match op {
                         IrOp::Add => builder.ins().iadd(l, r),
                         IrOp::Sub => builder.ins().isub(l, r),
@@ -327,13 +325,12 @@ impl CraneliftBackend {
                         IrOp::Div => builder.ins().sdiv(l, r),
                         IrOp::Mod => builder.ins().srem(l, r),
 
-                        // Comparisons evaluate condition flags and zero/sign extend cleanly based on structural type sizes
-                        IrOp::Eq  => { let c = builder.ins().icmp(IntCC::Equal, l, r); builder.ins().uextend(clif_ty, c) },
-                        IrOp::NEq => { let c = builder.ins().icmp(IntCC::NotEqual, l, r); builder.ins().uextend(clif_ty, c) },
-                        IrOp::Lt  => { let c = builder.ins().icmp(IntCC::SignedLessThan, l, r); builder.ins().uextend(clif_ty, c) },
-                        IrOp::LtE => { let c = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r); builder.ins().uextend(clif_ty, c) },
-                        IrOp::Gt  => { let c = builder.ins().icmp(IntCC::SignedGreaterThan, l, r); builder.ins().uextend(clif_ty, c) },
-                        IrOp::GtE => { let c = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::Eq  => { let c = builder.ins().icmp(IntCC::Equal, l, r); builder.ins().select(c, one, zero) },
+                        IrOp::NEq => { let c = builder.ins().icmp(IntCC::NotEqual, l, r); builder.ins().select(c, one, zero) },
+                        IrOp::Lt  => { let c = builder.ins().icmp(IntCC::SignedLessThan, l, r); builder.ins().select(c, one, zero) },
+                        IrOp::LtE => { let c = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r); builder.ins().select(c, one, zero) },
+                        IrOp::Gt  => { let c = builder.ins().icmp(IntCC::SignedGreaterThan, l, r); builder.ins().select(c, one, zero) },
+                        IrOp::GtE => { let c = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r); builder.ins().select(c, one, zero) },
                         _ => panic!("Expected binary operator, found unary: {:?}", op),
                     };
 
@@ -431,7 +428,7 @@ impl CraneliftBackend {
                 }
                 Instruction::Arg { value } => {
                     let arg_ty = get_val_backend_type(value);
-                    let val = match value {
+                    let mut val = match value {
                         Value::Const(n) => builder.ins().iconst(arg_ty.to_clif_type(), *n),
                         Value::Bool(b) => builder.ins().iconst(arg_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
@@ -451,11 +448,19 @@ impl CraneliftBackend {
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
-                            builder.ins().iconst(arg_ty.to_clif_type(), byte_val as i64) // <-- This must be an iconst!
+                            builder.ins().iconst(arg_ty.to_clif_type(), byte_val as i64)
                         }
                     };
+
+                    let final_ty = if arg_ty.to_clif_type() == types::I8 {
+                        val = builder.ins().uextend(types::I64, val);
+                        BackendType::Int64
+                    } else {
+                        arg_ty
+                    };
+
                     call_args.push(val);
-                    call_arg_types.push(arg_ty);
+                    call_arg_types.push(final_ty);
                 }
                 Instruction::Call { dest, name, argc: _ } => {
                     let return_type = dest.as_ref()
@@ -502,7 +507,7 @@ impl CraneliftBackend {
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
-                            builder.ins().iconst(ret_ty.to_clif_type(), byte_val as i64) // <-- This must be an iconst!
+                            builder.ins().iconst(ret_ty.to_clif_type(), byte_val as i64)
                         }
                     };
                     builder.ins().return_(&[ret_val]);
@@ -531,7 +536,7 @@ impl CraneliftBackend {
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
-                            builder.ins().iconst(src_ty.to_clif_type(), byte_val as i64)
+                            builder.ins().iconst(ptr_ty.to_clif_type(), byte_val as i64)
                         }
                     };
 

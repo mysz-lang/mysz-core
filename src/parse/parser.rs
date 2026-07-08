@@ -394,7 +394,7 @@ impl Parser {
     }
 
     fn parse_for(&mut self) -> Option<Stmt> {
-        self.advance(); // for
+        self.advance();
 
         self.expect(TokenType::LParen)?;
         let init = self.parse_statement(false)?;

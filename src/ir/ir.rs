@@ -44,20 +44,63 @@ impl IRGen {
         }
     }
 
-    /// Helper to get the byte-width of a given data type
+    /// Registers a unique temporary variable and tracks its Type signature
+    fn next_temp_with_type(&mut self, ty: Type) -> String {
+        let temp = self.temps.next();
+        self.var_types.insert(temp.clone(), ty);
+        temp
+    }
+
+    /// Resolves the data type of an operational Value block
+    fn get_value_type(&self, value: &Value) -> Type {
+        match value {
+            Value::Temp(name) | Value::Var(name) => self.var_types.get(name).cloned().unwrap_or(Type::Int),
+            Value::Const(_) => Type::Int,
+            Value::Bool(_) => Type::Bool,
+            Value::Char(_) => Type::Char,
+            Value::Str(_) => Type::Str,
+            Value::Void => Type::Void,
+        }
+    }
+
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int => 8,       // Or 4 if you downsize Int to 32-bit later
+            Type::Int => 8,
             Type::Bool => 1,
-            Type::Str => 8,        // String pointer
-            Type::Ptr(_) => 8,     // 64-bit pointer
-            Type::Array { element_type, size } => self.type_size(element_type) * (*size as i64),
+            Type::Str => 8,
+            Type::Ptr(_) => 8,
+            Type::Array { element_type, size } => self.element_size(element_type) * (*size as i64),
+            Type::Char => 1,  // Adjusted to 8 bytes for standalone parameters / evaluation stacks
             _ => 8,
         }
     }
 
+    /// Extracted tightly packed layout sizes inside Array maps
+    fn element_size(&self, ty: &Type) -> i64 {
+        match ty {
+            Type::Bool => 1,
+            Type::Char => 1,
+            _ => self.type_size(ty),
+        }
+    }
+
     fn emit_binary(&mut self, op: IrOp, lhs: Value, rhs: Value) -> Value {
-        let temp = self.temps.next();
+        let lhs_ty = self.get_value_type(&lhs);
+        let rhs_ty = self.get_value_type(&rhs);
+
+        let result_ty = match op {
+            IrOp::Add | IrOp::Sub | IrOp::Mul | IrOp::Div | IrOp::Mod => {
+                if lhs_ty == Type::Str || rhs_ty == Type::Str {
+                    Type::Str
+                } else {
+                    Type::Int
+                }
+            }
+            IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE => Type::Bool,
+            _ => Type::Int,
+        };
+
+        let temp = self.next_temp_with_type(result_ty);
         self.code.push(Instruction::Binary {
             dst: temp.clone(),
             op,
@@ -68,7 +111,15 @@ impl IRGen {
     }
 
     fn emit_unary(&mut self, op: IrOp, value: Value) -> Value {
-        let temp = self.temps.next();
+        let inner_ty = self.get_value_type(&value);
+
+        let result_ty = match op {
+            IrOp::Pos | IrOp::Neg => inner_ty,
+            IrOp::Ref => Type::Ptr(Box::new(inner_ty)),
+            _ => Type::Int,
+        };
+
+        let temp = self.next_temp_with_type(result_ty);
         self.code.push(Instruction::Unary {
             dst: temp.clone(),
             op,
@@ -86,8 +137,14 @@ impl IRGen {
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
+            ExprKind::Literal(Literal::Char(_)) => Some(Type::Char),
             ExprKind::Identifier(name) => self.var_types.get(name).cloned(),
-            ExprKind::Binary { left, .. } => self.expr_type(left), 
+            ExprKind::Binary { left, op, .. } => {
+                match op {
+                    BinaryOp::Eq | BinaryOp::NEq | BinaryOp::Gt | BinaryOp::GtE | BinaryOp::Lt | BinaryOp::LtE => Some(Type::Bool),
+                    _ => self.expr_type(left)
+                }
+            }
             ExprKind::Call { .. } => None, 
             
             ExprKind::Index { base, .. } => {
@@ -127,7 +184,8 @@ impl IRGen {
                     let base_val = match target_dest {
                         Some(dest) => dest,
                         None => {
-                            let anon_name = format!("_anon_{}", self.temps.next());
+                            let raw_temp = self.temps.next();
+                            let anon_name = format!("_anon_{}", raw_temp);
                             Value::Var(anon_name)
                         }
                     };
@@ -137,27 +195,27 @@ impl IRGen {
                     } else {
                         Type::Int
                     };
-                    let stride = self.type_size(&element_type);
+                    let stride = self.element_size(&element_type);
 
                     for (index, element_expr) in elements.iter().enumerate() {
                         let element_val = self.gen_expr(element_expr, None);
                         
-                        let offset_temp = self.temps.next();
+                        let offset_temp = self.next_temp_with_type(Type::Int);
                         self.code.push(Instruction::Binary {
                             dst: offset_temp.clone(),
                             op: IrOp::Mul,
                             lhs: Value::Const(index as i64),
-                            rhs: Value::Const(stride), // 🌟 Dynamic step width
+                            rhs: Value::Const(stride),
                         });
                         
-                        let base_addr_temp = self.temps.next();
+                        let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                         self.code.push(Instruction::Unary {
                             dst: base_addr_temp.clone(),
                             op: IrOp::Ref,
                             value: base_val.clone(),
                         });
                         
-                        let slot_addr_temp = self.temps.next();
+                        let slot_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                         self.code.push(Instruction::Binary {
                             dst: slot_addr_temp.clone(),
                             op: IrOp::Add,
@@ -189,16 +247,16 @@ impl IRGen {
                     _ => Type::Int,
                 };
 
-                let stride = self.type_size(&element_type);
-                let offset_temp = self.temps.next();
+                let stride = self.element_size(&element_type);
+                let offset_temp = self.next_temp_with_type(Type::Int);
                 self.code.push(Instruction::Binary {
                     dst: offset_temp.clone(),
                     op: IrOp::Mul,
                     lhs: index_val,
-                    rhs: Value::Const(stride), // 🌟 Dynamic step width
+                    rhs: Value::Const(stride),
                 });
                 
-                let target_addr_temp = self.temps.next();
+                let target_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                 let is_base_variable_a_pointer = match &base_val {
                     Value::Var(name) => matches!(self.var_types.get(name), Some(Type::Ptr(_))),
                     _ => false,
@@ -214,7 +272,7 @@ impl IRGen {
                 } else {
                     match base_val {
                         Value::Var(_) => {
-                            let base_addr_temp = self.temps.next();
+                            let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                             self.code.push(Instruction::Unary {
                                 dst: base_addr_temp.clone(),
                                 op: IrOp::Ref,
@@ -238,7 +296,7 @@ impl IRGen {
                     }
                 }
 
-                let result_temp = self.temps.next();
+                let result_temp = self.next_temp_with_type(element_type.clone());
                 self.code.push(Instruction::Load {
                     dst: result_temp.clone(),
                     ptr: Value::Temp(target_addr_temp),
@@ -257,14 +315,12 @@ impl IRGen {
                     UnaryOp::Positive => self.emit_unary(IrOp::Pos, value),
                     UnaryOp::Negative => self.emit_unary(IrOp::Neg, value),
                     UnaryOp::Deref => {
-                        // 🌟 FIXED: Previously just passed through the pointer address value.
-                        // Now it loads the item pointing to that address value based on type metadata.
                         let inner_type = self.expr_type(expr).unwrap_or(Type::Int);
                         let value_type = match inner_type {
                             Type::Ptr(inner) => *inner,
                             _ => Type::Int,
                         };
-                        let result_temp = self.temps.next();
+                        let result_temp = self.next_temp_with_type(value_type.clone());
                         self.code.push(Instruction::Load {
                             dst: result_temp.clone(),
                             ptr: value,
@@ -273,7 +329,8 @@ impl IRGen {
                         Value::Temp(result_temp)
                     }
                     UnaryOp::AddressOf => {
-                        let temp = self.temps.next();
+                        let inner_type = self.get_value_type(&value);
+                        let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
                         self.code.push(Instruction::Unary {
                             dst: temp.clone(),
                             op: IrOp::Ref,
@@ -294,7 +351,7 @@ impl IRGen {
                 {
                     self.code.push(Instruction::Arg { value: lhs });
                     self.code.push(Instruction::Arg { value: rhs });
-                    let dst = self.temps.next();
+                    let dst = self.next_temp_with_type(Type::Str);
                     self.code.push(Instruction::Call {
                         dest: Some(dst.clone()),
                         name: "str_concat".to_string(),
@@ -329,7 +386,8 @@ impl IRGen {
                     self.code.push(Instruction::Arg { value: val.clone() });
                 }
 
-                let dst = self.temps.next();
+                // If function type context mapping tracking isn't linked, default cleanly to Int.
+                let dst = self.next_temp_with_type(Type::Int);
                 self.code.push(Instruction::Call {
                     dest: Some(dst.clone()),
                     name: callee.value.clone(),
@@ -344,7 +402,12 @@ impl IRGen {
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Assignment { ident, vtype, expr } => {
-                let is_array = match vtype {
+                if let Some(explicit_ty) = vtype {
+                    self.var_types.insert(ident.value.clone(), explicit_ty.clone());
+                }
+
+                let current_ty = vtype.clone().or_else(|| self.var_types.get(&ident.value).cloned());
+                let is_array = match current_ty {
                     Some(Type::Array { .. }) => true,
                     _ => false,
                 };
@@ -354,6 +417,10 @@ impl IRGen {
                     self.gen_expr(expr, Some(target_var));
                 } else {
                     let value = self.gen_expr(expr, None);
+                    if vtype.is_none() {
+                        let computed_ty = self.get_value_type(&value);
+                        self.var_types.insert(ident.value.clone(), computed_ty);
+                    }
                     self.code.push(Instruction::Assign {
                         dst: ident.value.clone(),
                         src: value,
@@ -446,6 +513,9 @@ impl IRGen {
                 self.code.push(Instruction::FunctionLabel(start));
 
                 for param in params {
+                    if let Some(param_ty) = &param.ptype {
+                        self.var_types.insert(param.name.value.clone(), param_ty.clone());
+                    }
                     self.gen_param(param);
                 }
 
@@ -485,19 +555,19 @@ impl IRGen {
                         _ => Type::Int,
                     };
 
-                    let stride = self.type_size(&element_type);
-                    let offset_temp = self.temps.next();
+                    let stride = self.element_size(&element_type);
+                    let offset_temp = self.next_temp_with_type(Type::Int);
                     self.code.push(Instruction::Binary {
                         dst: offset_temp.clone(),
                         op: IrOp::Mul,
                         lhs: index_val,
-                        rhs: Value::Const(stride), // 🌟 Dynamic step width
+                        rhs: Value::Const(stride),
                     });
                     
-                    let target_addr_temp = self.temps.next();
+                    let target_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                     match base_type {
                         Some(Type::Array { .. }) => {
-                            let base_addr_temp = self.temps.next();
+                            let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                             self.code.push(Instruction::Unary {
                                 dst: base_addr_temp.clone(),
                                 op: IrOp::Ref,
@@ -553,7 +623,6 @@ impl IRGen {
     }
 
     pub fn dump(&self) {
-        // Keeps your exact original dump diagnostics...
         for inst in &self.code {
             match inst {
                 Instruction::Assign { dst, src } => println!("{dst} = {:?}", src),

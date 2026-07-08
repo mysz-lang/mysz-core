@@ -109,18 +109,15 @@ impl Analyser {
                 Literal::Char(_) => Ok(Type::Char),
                 Literal::Arr { elements } => {
                     let element_type = if elements.is_empty() {
-                        // 🌟 Look at the expected context type to infer the empty array type
                         if let Some(Type::Array { element_type, .. }) = expected_type {
                             *element_type.clone()
                         } else {
                             return Err("Type Error: Cannot infer type of an empty array literal without explicit type context.".to_string());
                         }
                     } else {
-                        // If it's not empty, infer from the first element as usual
                         self.check_expr(&elements[0], None)?
                     };
 
-                    // Validate all elements match the inferred type
                     for el in elements {
                         let el_type = self.check_expr(el, Some(&element_type))?;
                         if el_type != element_type {
