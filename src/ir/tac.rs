@@ -28,6 +28,7 @@ pub enum Value {
     Void,
 
     Str(String),
+    Char(char),
     Bool(bool),
 }
 

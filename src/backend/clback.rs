@@ -5,6 +5,48 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ir::tac::{Instruction, IrOp, Value};
+// Assuming these are imported from your parsing module
+use crate::parse::parsing::Type;
+
+// Representing your language's types in the backend context
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendType {
+    Int32,
+    Int64,
+    Char, 
+    Bool,
+    Ptr,  
+}
+
+impl BackendType {
+    /// Convert your type enum into a concrete Cranelift primitive Type
+    pub fn to_clif_type(&self) -> cranelift::prelude::Type {
+        match self {
+            BackendType::Char => types::I8,
+            BackendType::Bool => types::I8, 
+            BackendType::Int32 => types::I32,
+            BackendType::Int64 => types::I64,
+            BackendType::Ptr => types::I64, 
+        }
+    }
+
+    /// Return the byte size of this type for proper stack/memory allocations
+    pub fn byte_size(&self) -> u32 {
+        self.to_clif_type().bytes()
+    }
+
+    /// Map your AST/IR Frontend types to clean Backend configurations
+    pub fn from_frontend(ty: &Type) -> Self {
+        match ty {
+            Type::Int => BackendType::Int64, // Defaulting to 64-bit integer, easy to split into Int32 later!
+            Type::Bool => BackendType::Bool,
+            Type::Str => BackendType::Ptr,
+            Type::Ptr(_) => BackendType::Ptr,
+            Type::Array { .. } => BackendType::Ptr, // Arrays degrade to base frame addresses/pointers
+            _ => BackendType::Int64,
+        }
+    }
+}
 
 pub struct CraneliftBackend {
     module: ObjectModule,
@@ -65,19 +107,16 @@ impl CraneliftBackend {
         data_id
     }
 
-    /// Look up (declaring if needed) the FuncId for a call target, using
-    /// Import linkage for externs and Local linkage for functions defined
-    /// elsewhere in this module. Cached so repeated calls to the same
-    /// function don't re-declare it.
-    fn get_or_declare_func(&mut self, name: &str, argc: usize) -> FuncId {
+    /// Look up or declare signatures using dynamic argument definitions instead of raw i64 loops
+    fn get_or_declare_func(&mut self, name: &str, arg_types: &[BackendType], return_type: BackendType) -> FuncId {
         if let Some(&id) = self.declared_funcs.get(name) {
             return id;
         }
 
         let mut callee_sig = self.module.make_signature();
-        callee_sig.returns.push(AbiParam::new(types::I64));
-        for _ in 0..argc {
-            callee_sig.params.push(AbiParam::new(types::I64));
+        callee_sig.returns.push(AbiParam::new(return_type.to_clif_type()));
+        for ty in arg_types {
+            callee_sig.params.push(AbiParam::new(ty.to_clif_type()));
         }
 
         let linkage = if self.extern_names.contains(name) {
@@ -96,25 +135,44 @@ impl CraneliftBackend {
         name: &str,
         insts: &[&Instruction],
         ctx: &mut cranelift::codegen::Context,
-        func_ctx: &mut FunctionBuilderContext
+        func_ctx: &mut FunctionBuilderContext,
+        var_types: &HashMap<String, Type> // 🌟 Added type definitions from your IR step
     ) {
+        // Helper to find variable types safely
+        let get_val_backend_type = |val: &Value| -> BackendType {
+            match val {
+                Value::Var(n) | Value::Temp(n) => {
+                    if let Some(t) = var_types.get(n) {
+                        BackendType::from_frontend(t)
+                    } else {
+                        BackendType::Int64 // Fallback
+                    }
+                }
+                Value::Char(_) => BackendType::Char,
+                Value::Const(_) => BackendType::Int64,
+                Value::Bool(_) => BackendType::Bool,
+                Value::Str(_) => BackendType::Ptr,
+                Value::Void => BackendType::Int64,
+            }
+        };
+
         let mut sig = self.module.make_signature();
-        sig.returns.push(AbiParam::new(types::I64));
+        
+        // Find function return type or default to I64
+        sig.returns.push(AbiParam::new(types::I64)); 
 
         for inst in insts {
-            if let Instruction::Param { .. } = inst {
-                sig.params.push(AbiParam::new(types::I64));
+            if let Instruction::Param { p } = inst {
+                let ty = var_types.get(p).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                sig.params.push(AbiParam::new(ty.to_clif_type()));
             }
         }
 
-        // This function is defined in this module -- Export makes it visible
-        // to the linker (e.g. so `main` is callable from the C runtime startup).
         let func_id = self.module.declare_function(name, Linkage::Export, &sig).unwrap();
         self.declared_funcs.insert(name.to_string(), func_id);
         ctx.func.signature = sig;
 
         let mut builder = FunctionBuilder::new(&mut ctx.func, func_ctx);
-
         let mut all_blocks: Vec<Block> = Vec::new();
 
         let entry_block = builder.create_block();
@@ -128,28 +186,35 @@ impl CraneliftBackend {
         let mut label_map: HashMap<String, Block> = HashMap::new();
         let mut var_idx = 0;
 
-        // Pre-allocate stack slots for referenced variables/temps safely
+        // Pre-allocate stack slots dynamically sizing them via frontend type layout
         for inst in insts {
-            match inst {
-                Instruction::Unary { op: IrOp::Ref, value: Value::Var(name) | Value::Temp(name), .. } => {
-                    stack_slot_map.entry(name.clone()).or_insert_with(|| {
-                        builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 24))
-                    });
-                }
-                _ => {}
+            if let Instruction::Unary { op: IrOp::Ref, value: Value::Var(name) | Value::Temp(name), .. } = inst {
+                let frontend_type = var_types.get(name).cloned().unwrap_or(Type::Int);
+                // Use absolute runtime sizes from frontend definitions
+                let total_size = match frontend_type {
+                    Type::Array { ref element_type, size } => {
+                        let elem_size = BackendType::from_frontend(element_type).byte_size();
+                        elem_size * (size as u32)
+                    }
+                    other => BackendType::from_frontend(&other).byte_size()
+                };
+
+                stack_slot_map.entry(name.clone()).or_insert_with(|| {
+                    builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, total_size))
+                });
             }
         }
 
-        let get_or_create_var_impl = |b: &mut FunctionBuilder, v_map: &mut HashMap<String, Variable>, v_idx: &mut usize, name: &str| -> Variable {
+        // Variable allocation closure is now completely type-aware!
+        let get_or_create_var_impl = |b: &mut FunctionBuilder, v_map: &mut HashMap<String, Variable>, v_idx: &mut usize, name: &str, ty: BackendType| -> Variable {
             *v_map.entry(name.to_string()).or_insert_with(|| {
                 let v = Variable::new(*v_idx);
                 *v_idx += 1;
-                b.declare_var(v, types::I64);
+                b.declare_var(v, ty.to_clif_type());
                 v
             })
         };
 
-        // Pre-declare your cross-jump labels
         for inst in insts {
             if let Instruction::Label(lbl_name) = inst {
                 let block = builder.create_block();
@@ -159,17 +224,15 @@ impl CraneliftBackend {
         }
 
         let mut call_args: Vec<cranelift::prelude::Value> = Vec::new();
+        let mut call_arg_types: Vec<BackendType> = Vec::new();
         let mut param_counter = 0;
 
         for inst in insts {
             if let Some(current_block) = builder.current_block() {
                 if let Some(last_inst) = builder.func.layout.last_inst(current_block) {
                     let opcode = builder.func.dfg.insts[last_inst].opcode();
-                    if opcode.is_terminator() {
-                        if matches!(inst, Instruction::FunctionLabel(_) | Instruction::Label(_)) {
-                        } else {
-                            continue;
-                        }
+                    if opcode.is_terminator() && !matches!(inst, Instruction::FunctionLabel(_) | Instruction::Label(_)) {
+                        continue;
                     }
                 }
             }
@@ -178,64 +241,83 @@ impl CraneliftBackend {
                 Instruction::Param { p } => {
                     let cranelift_val = builder.block_params(entry_block)[param_counter];
                     param_counter += 1;
-                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, p);
+                    let ty = var_types.get(p).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, p, ty);
                     builder.def_var(v, cranelift_val);
                 }
                 Instruction::Assign { dst, src } => {
+                    let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let clif_ty = dst_ty.to_clif_type();
+
                     let val = match src {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(clif_ty, *n),
+                        Value::Bool(b) => builder.ins().iconst(clif_ty, if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(clif_ty, *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let src_ty = var_types.get(name).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, src_ty);
                                 builder.use_var(v)
                             }
                         },
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(clif_ty, local_ref)
                         }
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
+                            builder.ins().iconst(clif_ty, byte_val as i64) // <-- This must be an iconst!
+                        }
+                        Value::Void => builder.ins().iconst(clif_ty, 0),
                     };
 
                     if let Some(slot) = stack_slot_map.get(dst) {
                         builder.ins().stack_store(val, *slot, 0);
                     } else {
-                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst);
+                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
                         builder.def_var(v, val);
                     }
                 }
                 Instruction::Binary { dst, op, lhs, rhs } => {
+                    let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let clif_ty = dst_ty.to_clif_type();
+
+                    let l_ty = get_val_backend_type(lhs);
+                    let r_ty = get_val_backend_type(rhs);
+
                     let l = match lhs {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(l_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(l_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(l_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, l_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(l_ty.to_clif_type(), 0),
                         Value::Str(_) => unreachable!(),
+                        Value::Char(_) => unreachable!(),
                     };
+
                     let r = match rhs {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(r_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(r_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(r_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, r_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(r_ty.to_clif_type(), 0),
                         Value::Str(_) => unreachable!(),
+                        Value::Char(_) => unreachable!(),
                     };
 
                     let res = match op {
@@ -243,59 +325,60 @@ impl CraneliftBackend {
                         IrOp::Sub => builder.ins().isub(l, r),
                         IrOp::Mul => builder.ins().imul(l, r),
                         IrOp::Div => builder.ins().sdiv(l, r),
-
-                        IrOp::Eq  => { let c = builder.ins().icmp(IntCC::Equal, l, r); builder.ins().uextend(types::I64, c) },
-                        IrOp::NEq => { let c = builder.ins().icmp(IntCC::NotEqual, l, r); builder.ins().uextend(types::I64, c) },
-                        IrOp::Lt  => { let c = builder.ins().icmp(IntCC::SignedLessThan, l, r); builder.ins().uextend(types::I64, c) },
-                        IrOp::LtE => { let c = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r); builder.ins().uextend(types::I64, c) },
-                        IrOp::Gt  => { let c = builder.ins().icmp(IntCC::SignedGreaterThan, l, r); builder.ins().uextend(types::I64, c) },
-                        IrOp::GtE => { let c = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r); builder.ins().uextend(types::I64, c) },
-
                         IrOp::Mod => builder.ins().srem(l, r),
 
+                        // Comparisons evaluate condition flags and zero/sign extend cleanly based on structural type sizes
+                        IrOp::Eq  => { let c = builder.ins().icmp(IntCC::Equal, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::NEq => { let c = builder.ins().icmp(IntCC::NotEqual, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::Lt  => { let c = builder.ins().icmp(IntCC::SignedLessThan, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::LtE => { let c = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::Gt  => { let c = builder.ins().icmp(IntCC::SignedGreaterThan, l, r); builder.ins().uextend(clif_ty, c) },
+                        IrOp::GtE => { let c = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r); builder.ins().uextend(clif_ty, c) },
                         _ => panic!("Expected binary operator, found unary: {:?}", op),
                     };
 
                     if let Some(slot) = stack_slot_map.get(dst) {
                         builder.ins().stack_store(res, *slot, 0);
                     } else {
-                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst);
+                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
                         builder.def_var(v, res);
                     }
                 }
                 Instruction::Unary { dst, op, value } => {
+                    let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let val_ty = get_val_backend_type(value);
+
                     let val = match value {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(val_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(val_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
                                 if matches!(op, IrOp::Ref) {
                                     builder.ins().stack_addr(types::I64, *slot, 0)
                                 } else {
-                                    builder.ins().stack_load(types::I64, *slot, 0)
+                                    builder.ins().stack_load(val_ty.to_clif_type(), *slot, 0)
                                 }
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, val_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(val_ty.to_clif_type(), 0),
                         Value::Str(_) => unreachable!(),
+                        Value::Char(_) => unreachable!(),
                     };
 
                     let res = match op {
                         IrOp::Neg => builder.ins().ineg(val),
-                        IrOp::Pos => val,
-                        IrOp::Ref => val,
+                        IrOp::Pos | IrOp::Ref => val,
                         _ => panic!("Expected unary operator, found binary: {:?}", op),
                     };
 
-                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst);
+                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
                     builder.def_var(v, res);
                 }
                 Instruction::Label(lbl_name) => {
                     let target_block = *label_map.get(lbl_name).unwrap();
-
                     if let Some(current_block) = builder.current_block() {
                         if let Some(last_inst) = builder.func.layout.last_inst(current_block) {
                             let opcode = builder.func.dfg.insts[last_inst].opcode();
@@ -313,22 +396,28 @@ impl CraneliftBackend {
                     builder.ins().jump(target_block, &[]);
                 }
                 Instruction::JumpIfFalse { cond, target } => {
+                    let cond_ty = get_val_backend_type(cond);
                     let c_val = match cond {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(cond_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(cond_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(cond_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, cond_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(cond_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(cond_ty.to_clif_type(), local_ref)
+                        }
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                            builder.ins().iconst(cond_ty.to_clif_type(), byte_val as i64)
                         }
                     };
 
@@ -338,151 +427,189 @@ impl CraneliftBackend {
                     let is_zero = builder.ins().icmp_imm(IntCC::Equal, c_val, 0);
 
                     builder.ins().brif(is_zero, target_block, &[], next_block, &[]);
-
                     builder.switch_to_block(next_block);
                 }
                 Instruction::Arg { value } => {
+                    let arg_ty = get_val_backend_type(value);
                     let val = match value {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(arg_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(arg_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(arg_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, arg_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(arg_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(arg_ty.to_clif_type(), local_ref)
+                        },
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
+                            builder.ins().iconst(arg_ty.to_clif_type(), byte_val as i64) // <-- This must be an iconst!
                         }
                     };
                     call_args.push(val);
+                    call_arg_types.push(arg_ty);
                 }
-                Instruction::Call { dest, name, argc } => {
-                    let local_callee = self.get_or_declare_func(name, *argc);
+                Instruction::Call { dest, name, argc: _ } => {
+                    let return_type = dest.as_ref()
+                        .and_then(|d| var_types.get(d))
+                        .map(BackendType::from_frontend)
+                        .unwrap_or(BackendType::Int64);
+
+                    let local_callee = self.get_or_declare_func(name, &call_arg_types, return_type);
                     let local_clif_ref = self.module.declare_func_in_func(local_callee, &mut builder.func);
 
                     let call_inst = builder.ins().call(local_clif_ref, &call_args);
                     call_args.clear();
+                    call_arg_types.clear();
 
                     if let Some(dst_str) = dest {
                         let res_val = builder.inst_results(call_inst)[0];
                         if let Some(slot) = stack_slot_map.get(dst_str) {
                             builder.ins().stack_store(res_val, *slot, 0);
                         } else {
-                            let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst_str);
+                            let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst_str, return_type);
                             builder.def_var(v, res_val);
                         }
                     }
                 }
                 Instruction::Return { value } => {
+                    let ret_ty = get_val_backend_type(value);
                     let ret_val = match value {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(ret_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(ret_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(ret_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ret_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(ret_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(ret_ty.to_clif_type(), local_ref)
+                        },
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0]; 
+                            builder.ins().iconst(ret_ty.to_clif_type(), byte_val as i64) // <-- This must be an iconst!
                         }
                     };
                     builder.ins().return_(&[ret_val]);
                 }
                 Instruction::Store { ptr, source } => {
+                    let ptr_ty = get_val_backend_type(ptr);
+                    let src_ty = get_val_backend_type(source);
+
                     let addr = match ptr {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(ptr_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(ptr_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(ptr_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ptr_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(ptr_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(ptr_ty.to_clif_type(), local_ref)
+                        },
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                            builder.ins().iconst(src_ty.to_clif_type(), byte_val as i64)
                         }
                     };
+
                     let val = match source {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(src_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(src_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(types::I64, *slot, 0)
+                                builder.ins().stack_load(src_ty.to_clif_type(), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, src_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(src_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(src_ty.to_clif_type(), local_ref)
+                        },
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                            builder.ins().iconst(src_ty.to_clif_type(), byte_val as i64)
                         }
                     };
                     builder.ins().store(MemFlags::new(), val, addr, 0);
                 }
-                Instruction::Load { dst, ptr, .. } => {
+                Instruction::Load { dst, ptr, ty: frontend_load_ty } => {
+                    let ptr_ty = get_val_backend_type(ptr);
+                    let dst_ty = BackendType::from_frontend(frontend_load_ty);
+
                     let addr = match ptr {
-                        Value::Const(n) => builder.ins().iconst(types::I64, *n),
-                        Value::Bool(b) => builder.ins().iconst(types::I64, if *b { 1 } else { 0 }),
+                        Value::Const(n) => builder.ins().iconst(ptr_ty.to_clif_type(), *n),
+                        Value::Bool(b) => builder.ins().iconst(ptr_ty.to_clif_type(), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
                                 builder.ins().stack_addr(types::I64, *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name);
+                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ptr_ty);
                                 builder.use_var(v)
                             }
                         },
-                        Value::Void => builder.ins().iconst(types::I64, 0),
+                        Value::Void => builder.ins().iconst(ptr_ty.to_clif_type(), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
                             let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(types::I64, local_ref)
+                            builder.ins().global_value(ptr_ty.to_clif_type(), local_ref)
+                        },
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                            builder.ins().iconst(ptr_ty.to_clif_type(), byte_val as i64)
                         }
                     };
-                    let loaded_val = builder.ins().load(types::I64, MemFlags::new(), addr, 0);
+                    
+                    let loaded_val = builder.ins().load(dst_ty.to_clif_type(), MemFlags::new(), addr, 0);
 
                     if let Some(slot) = stack_slot_map.get(dst) {
                         builder.ins().stack_store(loaded_val, *slot, 0);
                     } else {
-                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst);
+                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
                         builder.def_var(v, loaded_val);
                     }
                 }
                 _ => {}
             }
         }
-            for &block in &all_blocks {
-            if let Some(_) = builder.func.layout.first_inst(block) {
-                // The block has instructions, so check the last one for a terminator
-                if let Some(last_inst) = builder.func.layout.last_inst(block) {
-                    let opcode = builder.func.dfg.insts[last_inst].opcode();
-                    if !opcode.is_terminator() {
-                        builder.switch_to_block(block);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        builder.ins().return_(&[zero]);
-                    }
+
+        for &block in &all_blocks {
+            if let Some(last_inst) = builder.func.layout.last_inst(block) {
+                let opcode = builder.func.dfg.insts[last_inst].opcode();
+                if !opcode.is_terminator() {
+                    builder.switch_to_block(block);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[zero]);
                 }
             } else {
-                // Fully empty basic block fallback: add a fallback terminator
                 builder.switch_to_block(block);
                 let zero = builder.ins().iconst(types::I64, 0);
                 builder.ins().return_(&[zero]);

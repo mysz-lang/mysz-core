@@ -106,6 +106,7 @@ impl Analyser {
                 Literal::Int(_) => Ok(Type::Int),
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool),
+                Literal::Char(_) => Ok(Type::Char),
                 Literal::Arr { elements } => {
                     let element_type = if elements.is_empty() {
                         // 🌟 Look at the expected context type to infer the empty array type

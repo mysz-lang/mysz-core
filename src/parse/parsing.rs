@@ -6,6 +6,7 @@ use crate::utils::location::Location;
 pub enum Literal {
     Int(i64),
     String(String),
+    Char(char),
     Bool(bool),
     Arr { elements: Vec<Expr> },
 }
@@ -23,10 +24,11 @@ pub enum Type {
     Int,
     Bool,
     Str,
+    Char,
     Void,
     Ptr(Box<Type>),
     Array { element_type: Box<Type>, size: usize },
-    Any
+    Any,
 }
 
 #[derive(Debug, Clone)]

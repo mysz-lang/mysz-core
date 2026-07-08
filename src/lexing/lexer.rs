@@ -79,6 +79,8 @@ impl Lexer{
                     
                     '"' => {let t = self.lex_string(); self.add_token(t);}
 
+                    '\'' => {let t = self.lex_char(); self.add_token(t);}
+
                     '!' => {let t = self.lex_not(); self.add_token(t);}
 
                     '>' => {let t = self.lex_gt(); self.add_token(t);}
@@ -208,6 +210,35 @@ impl Lexer{
             ttype: TokenType::Assign,
             location: loc,
             value: current.to_string(),
+        }
+    }
+
+    fn lex_char(&mut self) -> Token {
+        let loc = self.current_location();
+
+        self.advance(); // consume opening '
+
+        let cha = match self.get_char() {
+            Some(ch) => {
+                self.advance();
+                ch
+            }
+            None => {
+                // Handle unterminated character literal
+                panic!("Unterminated character literal at {:?}", loc);
+            }
+        };
+
+        if self.get_char() != Some('\'') {
+            panic!("Expected closing quote for character literal at {:?}, got {:?}", loc, self.get_char());
+        }
+
+        self.advance(); // consume closing '
+
+        Token {
+            ttype: TokenType::CharLiteral,
+            location: loc,
+            value: cha.to_string(),
         }
     }
 

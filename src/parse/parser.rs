@@ -125,7 +125,8 @@ impl Parser {
                         let inner = self.parse_type()?;
                         self.expect(TokenType::GreaterThan)?;
                         Some(Type::Ptr(Box::new(inner)))
-                    }
+                    },
+                    "char" => { self.advance(); Some(Type::Char) }
                     other => {
                         self.throw(
                             ParserErrorType::UnexpectedTokenTypeError,
@@ -736,6 +737,14 @@ impl Parser {
                 self.advance();
                 Some(Expr {
                     kind: ExprKind::Literal(Literal::String(tk.value)),
+                    span: tk.location,
+                })
+            }
+            TokenType::CharLiteral => {
+                self.advance();
+                let value = tk.value.chars().next().unwrap();
+                Some(Expr {
+                    kind: ExprKind::Literal(Literal::Char(value)),
                     span: tk.location,
                 })
             }

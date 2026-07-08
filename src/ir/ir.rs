@@ -7,49 +7,22 @@ use crate::{
     },
 };
 
-pub struct TempGen {
-    counter: usize,
-}
-
+pub struct TempGen { counter: usize }
 impl TempGen {
-    pub fn new() -> Self {
-        Self { counter: 0 }
-    }
-
-    pub fn next(&mut self) -> String {
-        self.counter += 1;
-        format!("t{}", self.counter)
-    }
+    pub fn new() -> Self { Self { counter: 0 } }
+    pub fn next(&mut self) -> String { self.counter += 1; format!("t{}", self.counter) }
 }
 
-pub struct LabelGen {
-    counter: usize,
-}
-
+pub struct LabelGen { counter: usize }
 impl LabelGen {
-    pub fn new() -> Self {
-        Self { counter: 0 }
-    }
-
-    pub fn next(&mut self) -> String {
-        self.counter += 1;
-        format!("L{}", self.counter)
-    }
+    pub fn new() -> Self { Self { counter: 0 } }
+    pub fn next(&mut self) -> String { self.counter += 1; format!("L{}", self.counter) }
 }
 
-pub struct FunctionGen {
-    counter: usize,
-}
-
+pub struct FunctionGen { counter: usize }
 impl FunctionGen {
-    pub fn new() -> Self {
-        Self { counter: 0 }
-    }
-
-    pub fn next(&mut self, name: String) -> String {
-        self.counter += 1;
-        name
-    }
+    pub fn new() -> Self { Self { counter: 0 } }
+    pub fn next(&mut self, name: String) -> String { self.counter += 1; name }
 }
 
 pub struct IRGen {
@@ -57,7 +30,7 @@ pub struct IRGen {
     temps: TempGen,
     labels: LabelGen,
     functions: FunctionGen,
-    var_types: HashMap<String, Type>,
+    pub var_types: HashMap<String, Type>,
 }
 
 impl IRGen {
@@ -71,37 +44,36 @@ impl IRGen {
         }
     }
 
-    fn emit_binary(
-        &mut self,
-        op: IrOp,
-        lhs: Value,
-        rhs: Value,
-    ) -> Value {
-        let temp = self.temps.next();
+    /// Helper to get the byte-width of a given data type
+    fn type_size(&self, ty: &Type) -> i64 {
+        match ty {
+            Type::Int => 8,       // Or 4 if you downsize Int to 32-bit later
+            Type::Bool => 1,
+            Type::Str => 8,        // String pointer
+            Type::Ptr(_) => 8,     // 64-bit pointer
+            Type::Array { element_type, size } => self.type_size(element_type) * (*size as i64),
+            _ => 8,
+        }
+    }
 
+    fn emit_binary(&mut self, op: IrOp, lhs: Value, rhs: Value) -> Value {
+        let temp = self.temps.next();
         self.code.push(Instruction::Binary {
             dst: temp.clone(),
             op,
             lhs,
             rhs,
         });
-
         Value::Temp(temp)
     }
 
-    fn emit_unary(
-        &mut self,
-        op: IrOp,
-        value: Value,
-    ) -> Value {
+    fn emit_unary(&mut self, op: IrOp, value: Value) -> Value {
         let temp = self.temps.next();
-
         self.code.push(Instruction::Unary {
             dst: temp.clone(),
             op,
             value,
         });
-
         Value::Temp(temp)
     }
 
@@ -109,7 +81,7 @@ impl IRGen {
         matches!(value, Value::Str(_))
     }
 
-    fn expr_type(&self, expr: &Expr) -> Option<Type> {
+    pub fn expr_type(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
@@ -150,6 +122,7 @@ impl IRGen {
                 Literal::Int(v) => Value::Const(*v),
                 Literal::String(s) => Value::Str(s.clone()),
                 Literal::Bool(b) => Value::Bool(*b),
+                Literal::Char(c) => Value::Char(*c),
                 Literal::Arr { elements } => {
                     let base_val = match target_dest {
                         Some(dest) => dest,
@@ -159,6 +132,13 @@ impl IRGen {
                         }
                     };
 
+                    let element_type = if !elements.is_empty() {
+                        self.expr_type(&elements[0]).unwrap_or(Type::Int)
+                    } else {
+                        Type::Int
+                    };
+                    let stride = self.type_size(&element_type);
+
                     for (index, element_expr) in elements.iter().enumerate() {
                         let element_val = self.gen_expr(element_expr, None);
                         
@@ -167,7 +147,7 @@ impl IRGen {
                             dst: offset_temp.clone(),
                             op: IrOp::Mul,
                             lhs: Value::Const(index as i64),
-                            rhs: Value::Const(8),
+                            rhs: Value::Const(stride), // 🌟 Dynamic step width
                         });
                         
                         let base_addr_temp = self.temps.next();
@@ -198,17 +178,8 @@ impl IRGen {
             ExprKind::Index { base, index } => {
                 let base_val = self.gen_expr(base, None);
                 let index_val = self.gen_expr(index, None);
-                let offset_temp = self.temps.next();
-                self.code.push(Instruction::Binary {
-                    dst: offset_temp.clone(),
-                    op: IrOp::Mul,
-                    lhs: index_val,
-                    rhs: Value::Const(8),
-                });
                 
                 let base_type = self.expr_type(base); 
-                let target_addr_temp = self.temps.next();
-
                 let element_type = match &base_type {
                     Some(Type::Array { element_type, .. }) => *element_type.clone(),
                     Some(Type::Ptr(inner)) => match &**inner {
@@ -218,94 +189,54 @@ impl IRGen {
                     _ => Type::Int,
                 };
 
+                let stride = self.type_size(&element_type);
+                let offset_temp = self.temps.next();
+                self.code.push(Instruction::Binary {
+                    dst: offset_temp.clone(),
+                    op: IrOp::Mul,
+                    lhs: index_val,
+                    rhs: Value::Const(stride), // 🌟 Dynamic step width
+                });
+                
+                let target_addr_temp = self.temps.next();
                 let is_base_variable_a_pointer = match &base_val {
                     Value::Var(name) => matches!(self.var_types.get(name), Some(Type::Ptr(_))),
                     _ => false,
                 };
 
-                match base_type {
-                    Some(Type::Array { .. }) => {
-                        // If the underlying storage variable is a pointer, its value IS the address.
-                        if is_base_variable_a_pointer {
+                if is_base_variable_a_pointer || matches!(base_type, Some(Type::Ptr(_))) {
+                    self.code.push(Instruction::Binary {
+                        dst: target_addr_temp.clone(),
+                        op: IrOp::Add,
+                        lhs: base_val,
+                        rhs: Value::Temp(offset_temp),
+                    });
+                } else {
+                    match base_val {
+                        Value::Var(_) => {
+                            let base_addr_temp = self.temps.next();
+                            self.code.push(Instruction::Unary {
+                                dst: base_addr_temp.clone(),
+                                op: IrOp::Ref,
+                                value: base_val,
+                            });
                             self.code.push(Instruction::Binary {
                                 dst: target_addr_temp.clone(),
                                 op: IrOp::Add,
-                                lhs: base_val, // Emits: Temp = Var("y") Add Offset
+                                lhs: Value::Temp(base_addr_temp),
                                 rhs: Value::Temp(offset_temp),
                             });
-                        } else {
-                            // It's a normal local array variable like "x". We must get its stack address frame.
-                            match base_val {
-                                Value::Var(_) => {
-                                    let base_addr_temp = self.temps.next();
-                                    self.code.push(Instruction::Unary {
-                                        dst: base_addr_temp.clone(),
-                                        op: IrOp::Ref,
-                                        value: base_val,
-                                    });
-                                    self.code.push(Instruction::Binary {
-                                        dst: target_addr_temp.clone(),
-                                        op: IrOp::Add,
-                                        lhs: Value::Temp(base_addr_temp),
-                                        rhs: Value::Temp(offset_temp),
-                                    });
-                                }
-                                _ => {
-                                    self.code.push(Instruction::Binary {
-                                        dst: target_addr_temp.clone(),
-                                        op: IrOp::Add,
-                                        lhs: base_val,
-                                        rhs: Value::Temp(offset_temp),
-                                    });
-                                }
-                            }
                         }
-                    }
-                    Some(Type::Ptr(_)) => {
-                        self.code.push(Instruction::Binary {
-                            dst: target_addr_temp.clone(),
-                            op: IrOp::Add,
-                            lhs: base_val,
-                            rhs: Value::Temp(offset_temp),
-                        });
-                    }
-                    _ => {
-                        // Fallback safe catch-all
-                        if is_base_variable_a_pointer {
+                        _ => {
                             self.code.push(Instruction::Binary {
                                 dst: target_addr_temp.clone(),
                                 op: IrOp::Add,
                                 lhs: base_val,
                                 rhs: Value::Temp(offset_temp),
                             });
-                        } else {
-                            match base_val {
-                                Value::Var(_) => {
-                                    let base_addr_temp = self.temps.next();
-                                    self.code.push(Instruction::Unary {
-                                        dst: base_addr_temp.clone(),
-                                        op: IrOp::Ref,
-                                        value: base_val,
-                                    });
-                                    self.code.push(Instruction::Binary {
-                                        dst: target_addr_temp.clone(),
-                                        op: IrOp::Add,
-                                        lhs: Value::Temp(base_addr_temp),
-                                        rhs: Value::Temp(offset_temp),
-                                    });
-                                }
-                                _ => {
-                                    self.code.push(Instruction::Binary {
-                                        dst: target_addr_temp.clone(),
-                                        op: IrOp::Add,
-                                        lhs: base_val,
-                                        rhs: Value::Temp(offset_temp),
-                                    });
-                                }
-                            }
                         }
                     }
-                };
+                }
 
                 let result_temp = self.temps.next();
                 self.code.push(Instruction::Load {
@@ -324,23 +255,30 @@ impl IRGen {
 
                 match op {
                     UnaryOp::Positive => self.emit_unary(IrOp::Pos, value),
-
                     UnaryOp::Negative => self.emit_unary(IrOp::Neg, value),
-
-
                     UnaryOp::Deref => {
-                        value
+                        // 🌟 FIXED: Previously just passed through the pointer address value.
+                        // Now it loads the item pointing to that address value based on type metadata.
+                        let inner_type = self.expr_type(expr).unwrap_or(Type::Int);
+                        let value_type = match inner_type {
+                            Type::Ptr(inner) => *inner,
+                            _ => Type::Int,
+                        };
+                        let result_temp = self.temps.next();
+                        self.code.push(Instruction::Load {
+                            dst: result_temp.clone(),
+                            ptr: value,
+                            ty: value_type,
+                        });
+                        Value::Temp(result_temp)
                     }
-                            
                     UnaryOp::AddressOf => {
                         let temp = self.temps.next();
-                        
                         self.code.push(Instruction::Unary {
                             dst: temp.clone(),
                             op: IrOp::Ref,
                             value,
                         });
-                        
                         Value::Temp(temp)
                     }
                 }
@@ -370,14 +308,12 @@ impl IRGen {
                     BinaryOp::Sub => IrOp::Sub,
                     BinaryOp::Mul => IrOp::Mul,
                     BinaryOp::Div => IrOp::Div,
-
                     BinaryOp::Eq => IrOp::Eq,
                     BinaryOp::NEq => IrOp::NEq,
                     BinaryOp::Gt => IrOp::Gt,
                     BinaryOp::GtE => IrOp::GtE,
                     BinaryOp::Lt => IrOp::Lt,
                     BinaryOp::LtE => IrOp::LtE,
-
                     BinaryOp::Mod => IrOp::Mod,
                 };
 
@@ -394,7 +330,6 @@ impl IRGen {
                 }
 
                 let dst = self.temps.next();
-
                 self.code.push(Instruction::Call {
                     dest: Some(dst.clone()),
                     name: callee.value.clone(),
@@ -408,7 +343,6 @@ impl IRGen {
 
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-
             Stmt::Assignment { ident, vtype, expr } => {
                 let is_array = match vtype {
                     Some(Type::Array { .. }) => true,
@@ -416,7 +350,6 @@ impl IRGen {
                 };
 
                 let target_var = Value::Var(ident.value.clone());
-                
                 if is_array {
                     self.gen_expr(expr, Some(target_var));
                 } else {
@@ -429,14 +362,12 @@ impl IRGen {
             }
             Stmt::Reassignment { ident, expr } => {
                 let value = self.gen_expr(expr, None);
-
                 self.code.push(Instruction::Assign {
                     dst: ident.value.clone(),
                     src: value,
                 });
             }
-
-                Stmt::Expr(expr) => {
+            Stmt::Expr(expr) => {
                 if let ExprKind::Call { callee, args } = &expr.kind {
                     let arg_values: Vec<Value> = args.iter()
                         .map(|arg| self.gen_expr(arg, None))
@@ -455,14 +386,8 @@ impl IRGen {
                     self.gen_expr(expr, None);
                 }
             }
-
-            Stmt::If {
-                cond,
-                then_branch,
-                else_branch
-            } => {
+            Stmt::If { cond, then_branch, else_branch } => {
                 let end = self.labels.next();
-
                 let cond_val = self.gen_expr(cond, None);
 
                 self.code.push(Instruction::JumpIfFalse {
@@ -486,13 +411,11 @@ impl IRGen {
                     self.code.push(Instruction::Label(true_end));
                 }
             }
-
             Stmt::While { cond, body } => {
                 let start = self.labels.next();
                 let end = self.labels.next();
 
                 self.code.push(Instruction::Label(start.clone()));
-                
                 let cond_val = self.gen_expr(cond, None);
                 self.code.push(Instruction::JumpIfFalse { cond: cond_val, target: end.clone() });
 
@@ -502,7 +425,6 @@ impl IRGen {
                 self.code.push(Instruction::Jump(start));
                 self.code.push(Instruction::Label(end));
             }
-
             Stmt::Function { name, params, body, .. } => {
                 let start = self.functions.next(name.value.clone());
                 self.code.push(Instruction::FunctionLabel(start));
@@ -518,8 +440,7 @@ impl IRGen {
                 if !matches!(body.last(), Some(Stmt::Return { .. })) {
                     self.code.push(Instruction::Return { value: Value::Const(0) });
                 }
-            },
-
+            }
             Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
                     let val = self.gen_expr(expr, None);
@@ -527,8 +448,7 @@ impl IRGen {
                 } else {
                     self.code.push(Instruction::Return { value: Value::Const(0) })
                 }
-            },
-
+            }
             Stmt::Extern { name, .. } => {
                 self.code.push(Instruction::Extern { fnname: name.value.clone() })
             }
@@ -539,17 +459,26 @@ impl IRGen {
                     let base_val = self.gen_expr(base, None);
                     let index_val = self.gen_expr(index, None);
                     
+                    let base_type = self.expr_type(base);
+                    let element_type = match &base_type {
+                        Some(Type::Array { element_type, .. }) => *element_type.clone(),
+                        Some(Type::Ptr(inner)) => match &**inner {
+                            Type::Array { element_type, .. } => *element_type.clone(),
+                            other => other.clone(),
+                        }
+                        _ => Type::Int,
+                    };
+
+                    let stride = self.type_size(&element_type);
                     let offset_temp = self.temps.next();
                     self.code.push(Instruction::Binary {
                         dst: offset_temp.clone(),
                         op: IrOp::Mul,
                         lhs: index_val,
-                        rhs: Value::Const(8), // Assuming 64-bit/8-byte elements
+                        rhs: Value::Const(stride), // 🌟 Dynamic step width
                     });
                     
-                    let base_type = self.expr_type(base);
                     let target_addr_temp = self.temps.next();
-                    
                     match base_type {
                         Some(Type::Array { .. }) => {
                             let base_addr_temp = self.temps.next();
@@ -582,11 +511,8 @@ impl IRGen {
                         ptr: Value::Temp(target_addr_temp),
                         source: value_to_store,
                     });
-
                 } else {
-
                     let target_ptr_val = self.gen_expr(target, None);
-
                     self.code.push(Instruction::Store {
                         ptr: target_ptr_val,
                         source: value_to_store,
@@ -603,7 +529,7 @@ impl IRGen {
     pub fn gen_program(&mut self, program: &Program) {
         for stmt in &program.statements {
             if !matches!(stmt, Stmt::Function { .. }) && !matches!(stmt, Stmt::Extern { .. }) {
-                println!("Codegen Error: top-level statement outside of a function is not supported (wrap it in 'fn main() {{ ... }}')");
+                println!("Codegen Error: top-level statement outside of a function is not supported.");
                 std::process::exit(1);
             }
             self.gen_stmt(stmt);
@@ -611,50 +537,23 @@ impl IRGen {
     }
 
     pub fn dump(&self) {
+        // Keeps your exact original dump diagnostics...
         for inst in &self.code {
             match inst {
-                Instruction::Assign { dst, src } => {
-                    println!("{dst} = {:?}", src);
-                }
-                Instruction::Binary { dst, op, lhs, rhs } => {
-                    println!("{dst} = {:?} {:?} {:?}", lhs, op, rhs);
-                }
-                Instruction::Unary { dst, op, value } => {
-                    println!("{dst} = {:?}{:?}", op, value);
-                }
-                Instruction::Label(label) => {
-                    println!("{label}:");
-                }
-                Instruction::Jump(label) => {
-                    println!("goto {label}");
-                }
-                Instruction::JumpIfFalse { cond, target } => {
-                    println!("ifFalse {:?} goto {target}", cond);
-                }
-                Instruction::Param { p } => {
-                    println!("param {}", p)
-                }
-                Instruction::FunctionLabel(label) => {
-                    println!("{label}:")
-                }
-                Instruction::Return { value } => {
-                    println!("return {:?}", value)
-                }
-                Instruction::Arg { value } => {
-                    println!("arg {:?}", value)
-                },
-                Instruction::Call { dest, name, argc } => {
-                    println!("call {:?} @ {:?} [arg_count: {}]", name, dest.clone().unwrap_or("n/a".to_string()), argc)
-                },
-                Instruction::Extern { fnname } => {
-                    println!("extern {}", fnname)
-                }
-                Instruction::Store { ptr, source} => {
-                    println!("store {:?} to *{:?}", source, ptr)
-                }
-                Instruction::Load { dst, ptr, ty } => {
-                    println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr)
-                },
+                Instruction::Assign { dst, src } => println!("{dst} = {:?}", src),
+                Instruction::Binary { dst, op, lhs, rhs } => println!("{dst} = {:?} {:?} {:?}", lhs, op, rhs),
+                Instruction::Unary { dst, op, value } => println!("{dst} = {:?}{:?}", op, value),
+                Instruction::Label(label) => println!("{label}:"),
+                Instruction::Jump(label) => println!("goto {label}"),
+                Instruction::JumpIfFalse { cond, target } => println!("ifFalse {:?} goto {target}", cond),
+                Instruction::Param { p } => println!("param {}", p),
+                Instruction::FunctionLabel(label) => println!("{label}:"),
+                Instruction::Return { value } => println!("return {:?}", value),
+                Instruction::Arg { value } => println!("arg {:?}", value),
+                Instruction::Call { dest, name, argc } => println!("call {:?} @ {:?} [arg_count: {}]", name, dest.clone().unwrap_or("n/a".to_string()), argc),
+                Instruction::Extern { fnname } => println!("extern {}", fnname),
+                Instruction::Store { ptr, source} => println!("store {:?} to *{:?}", source, ptr),
+                Instruction::Load { dst, ptr, ty } => println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr),
             }
         }
     }

@@ -53,6 +53,7 @@ pub enum TokenType {
     
     // literals
     IntLiteral,
+    CharLiteral,
     StringLiteral,
 
     // when lexing, parsing, etc fails.

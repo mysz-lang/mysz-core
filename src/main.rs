@@ -5,10 +5,9 @@ pub mod lexing;
 pub mod parse;
 pub mod semantics;
 pub mod ir;
-
 pub mod backend;
+pub mod main_helper;
 
-pub mod tmp;
 use std::fs::File;
 use std::io::Write;
 
@@ -24,7 +23,18 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::Stmt;
 
 fn main() {
-    let source: String = "".to_string();
+    let source: String = "
+extern fn print_char(a: char);
+
+fn main(): int {
+    var x: [char; 12] = ['H', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!']; 
+    var i: int = 0;
+    while (i < 12) {
+        print_char(x[i]);
+        i = i+1;
+    };
+    return 0;
+};".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();
@@ -49,8 +59,6 @@ fn main() {
         println!("{}", e);
         return;
     }
-
-    // println!("{:#?}", program);
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
@@ -84,7 +92,8 @@ fn main() {
             &func_name, 
             &func_instructions, 
             &mut ctx, 
-            &mut func_ctx
+            &mut func_ctx,
+            &irgen.var_types
         );
     }
     
@@ -93,5 +102,4 @@ fn main() {
 
     let mut file = File::create("output.o").expect("Failed to create output file");
     file.write_all(&emit_result).expect("Failed to write binary payload to disk");
-
 }

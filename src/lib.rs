@@ -20,15 +20,12 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::Stmt;
 
 pub fn compile_source(source: &str, output_filename: &str) -> Result<(), String> {
-
-    // lexing
-
+    // Lexing
     let mut lexer = Lexer::new(source.to_string());
     lexer.lex();
     let tokens = lexer.tokens;
 
-    // parsing
-
+    // Parsing
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -38,15 +35,13 @@ pub fn compile_source(source: &str, output_filename: &str) -> Result<(), String>
     }
     let program = parser.ast;
 
-    // semantics
-
+    // Semantics
     let mut analyser = Analyser::new();
     if let Err(e) = analyser.analyse(&program) {
         return Err(e.to_string());
     }
 
     // IR generation
-
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
 
@@ -59,8 +54,7 @@ pub fn compile_source(source: &str, output_filename: &str) -> Result<(), String>
         }
     }).collect();
 
-    // codegen
-
+    // Codegen
     let mut backend = clback::CraneliftBackend::new();
     
     backend.scan_externs(&tac_instructions);
@@ -74,12 +68,13 @@ pub fn compile_source(source: &str, output_filename: &str) -> Result<(), String>
 
         let mut ctx = Context::new();
         let mut func_ctx = FunctionBuilderContext::new();
-
+        
         backend.compile_function(
             &func_name, 
             &func_instructions, 
             &mut ctx, 
-            &mut func_ctx
+            &mut func_ctx,
+            &irgen.var_types
         );
     }
     
