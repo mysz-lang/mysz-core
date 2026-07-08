@@ -604,11 +604,20 @@ impl IRGen {
                         source: value_to_store,
                     });
                 } else {
-                    let target_ptr_val = self.gen_expr(target, None);
-                    self.code.push(Instruction::Store {
-                        ptr: target_ptr_val,
-                        source: value_to_store,
-                    });
+                    if let ExprKind::Unary { op: crate::parse::parsing::UnaryOp::Deref, expr: inner_expr } = &target.kind {
+                        let target_ptr_val = self.gen_expr(inner_expr, None);
+                        
+                        self.code.push(Instruction::Store {
+                            ptr: target_ptr_val,
+                            source: value_to_store,
+                        });
+                    } else {
+                        let target_ptr_val = self.gen_expr(target, None);
+                        self.code.push(Instruction::Store {
+                            ptr: target_ptr_val,
+                            source: value_to_store,
+                        });
+                    }
                 }
             }
         }

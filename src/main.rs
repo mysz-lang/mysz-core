@@ -23,7 +23,20 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Stmt, Program};
 
 fn main() {
-    let source: String = "".to_string();
+    let source: String = "
+extern fn mysz_alloc(size: int): ptr<char>;
+extern fn mysz_calloc(count: int, size: int): ptr<char>;
+extern fn mysz_realloc(p: ptr<char>, size: int): ptr<char>;
+extern fn mysz_free(p: ptr<char>);
+
+extern fn mysz_panic(message: str);
+
+fn pub main(): int {
+    var buf: ptr<char> = mysz_alloc(64);
+    ^buf = 'H';
+    mysz_free(buf);
+    return 0;
+};".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();
@@ -37,6 +50,8 @@ fn main() {
         for perror in parser.parser_errs { println!("{}", perror); }
         return;
     }
+
+    // println!("{:#?}", parser.ast);
 
     let initial_program = parser.ast;
     
@@ -77,9 +92,11 @@ fn main() {
         return;
     }
 
+    // println!("analyser types:\n{:#?}", analyser.types);
+
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
-    irgen.dump();
+    // irgen.dump();
 
     let tac_instructions = irgen.code;
     
