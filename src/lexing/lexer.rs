@@ -332,6 +332,11 @@ impl Lexer{
                 location: loc,
                 value
             }},
+            "for" => {return Token {
+                ttype: TokenType::ForKeyword,
+                location: loc,
+                value
+            }},
             "return" => {return Token {
                 ttype: TokenType::ReturnKeyword,
                 location: loc,

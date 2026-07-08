@@ -393,6 +393,31 @@ impl Analyser {
                 Ok(())
             }
 
+            Stmt::For { init, cond, step, body } => {
+                self.enter_scope();
+
+                self.check_stmt(init.as_ref())?;
+
+                let cond_type = self.check_expr(cond, None)?;
+                if !self.check_truthiness(&cond_type) {
+                    self.leave_scope();
+                    return Err(format!(
+                        "Type Error [{}]: 'for' condition is not truthy, found '{:?}'",
+                        cond.span, cond_type
+                    ));
+                }
+
+                for block_stmt in body {
+                    self.check_stmt(block_stmt)?;
+                }
+
+                self.check_stmt(step.as_ref());
+
+                self.leave_scope();
+
+                Ok(())
+            }
+
             Stmt::If { cond, then_branch, else_branch } => {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {

@@ -127,6 +127,12 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>
     },
+    For{
+        init: Box<Stmt>,
+        cond: Expr,
+        step: Box<Stmt>,
+        body: Vec<Stmt>
+    },
     Function{
         name: Identifier,
         rttype: Option<Type>,

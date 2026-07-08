@@ -47,7 +47,8 @@ pub enum TokenType {
     FnKeyword,
     ReturnKeyword,
     ExternKeyword,
-
+    ForKeyword,
+    
     // identifier
     Identifier,
     

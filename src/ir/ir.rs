@@ -425,6 +425,22 @@ impl IRGen {
                 self.code.push(Instruction::Jump(start));
                 self.code.push(Instruction::Label(end));
             }
+            Stmt::For { init, cond, step, body } => {
+                let start = self.labels.next();
+                let end = self.labels.next();
+
+                self.gen_stmt(init);
+                self.code.push(Instruction::Label(start.clone()));
+                let cond_val = self.gen_expr(cond, None);
+                self.code.push(Instruction::JumpIfFalse { cond: cond_val, target: end.clone() });
+
+                for stmt in body {
+                    self.gen_stmt(stmt);
+                }
+                self.gen_stmt(step);
+                self.code.push(Instruction::Jump(start));
+                self.code.push(Instruction::Label(end));
+            }
             Stmt::Function { name, params, body, .. } => {
                 let start = self.functions.next(name.value.clone());
                 self.code.push(Instruction::FunctionLabel(start));

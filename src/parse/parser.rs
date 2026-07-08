@@ -81,7 +81,7 @@ impl Parser {
         let mut statements = Vec::new();
 
         while !self.eof() {
-            if let Some(stmt) = self.parse_statement() {
+            if let Some(stmt) = self.parse_statement(true) {
                 statements.push(stmt);
             } else {
                 self.advance();
@@ -153,7 +153,7 @@ impl Parser {
         while !self.eof()
             && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
         {
-            if let Some(stmt) = self.parse_statement() {
+            if let Some(stmt) = self.parse_statement(true) {
                 statements.push(stmt);
             } else {
                 self.advance();
@@ -165,7 +165,7 @@ impl Parser {
         statements
     }
 
-    fn parse_statement(&mut self) -> Option<Stmt> {
+    fn parse_statement(&mut self, semi_colon: bool) -> Option<Stmt> {
         let tk = self.get_token()?.clone();
 
         let stmt = match tk.ttype {
@@ -173,6 +173,7 @@ impl Parser {
             TokenType::IfKeyword => self.parse_if(),
             TokenType::WhileKeyword => self.parse_while(),
             TokenType::FnKeyword => self.parse_function(),
+            TokenType::ForKeyword => self.parse_for(),
             TokenType::ReturnKeyword => self.parse_return(),
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
@@ -190,7 +191,9 @@ impl Parser {
             _ => self.parse_expr().map(Stmt::Expr),
         };
 
-        self.consume_semicolon();
+        if semi_colon {
+            self.consume_semicolon();
+        }
         stmt
     }
 
@@ -388,6 +391,23 @@ impl Parser {
             vtype: vtype,
             expr,
         })
+    }
+
+    fn parse_for(&mut self) -> Option<Stmt> {
+        self.advance(); // for
+
+        self.expect(TokenType::LParen)?;
+        let init = self.parse_statement(false)?;
+        self.expect(TokenType::SemiColon)?;
+        let cond = self.parse_expr()?;
+        self.expect(TokenType::SemiColon)?;
+        let step = self.parse_statement(false)?;
+        self.expect(TokenType::RParen)?;
+
+        self.expect(TokenType::LBrace)?;
+        let body = self.parse_block();
+
+        Some(Stmt::For { init: Box::new(init), cond, step: Box::new(step), body })
     }
 
     fn parse_while(&mut self) -> Option<Stmt> {
