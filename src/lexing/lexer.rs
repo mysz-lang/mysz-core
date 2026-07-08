@@ -218,27 +218,38 @@ impl Lexer{
 
         self.advance(); // consume opening '
 
-        let cha = match self.get_char() {
-            Some(ch) => {
+        let next_char = self.get_char();
+        self.advance();
+
+        let final_char = match next_char {
+            Some('\\') => {
+                let escape_type = self.get_char();
                 self.advance();
-                ch
+                
+                match escape_type {
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('r') => '\r',
+                    Some('\\') => '\\',
+                    Some('\'') => '\'',
+                    Some('0') => '\0',
+                    Some(other) => panic!("Unknown escape sequence: \\{}", other),
+                    None => panic!("Unexpected EOF inside escape sequence"),
+                }
             }
-            None => {
-                // Handle unterminated character literal
-                panic!("Unterminated character literal at {:?}", loc);
-            }
+            Some(ch) => ch,
+            None => panic!("Unexpected EOF inside character literal"),
         };
 
         if self.get_char() != Some('\'') {
-            panic!("Expected closing quote for character literal at {:?}, got {:?}", loc, self.get_char());
+            panic!("Expected closing quote for character literal");
         }
-
-        self.advance(); // consume closing '
+        self.advance();
 
         Token {
             ttype: TokenType::CharLiteral,
             location: loc,
-            value: cha.to_string(),
+            value: final_char.to_string(),
         }
     }
 
