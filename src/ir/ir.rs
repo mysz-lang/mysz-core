@@ -401,6 +401,8 @@ impl IRGen {
 
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
+
             Stmt::Assignment { ident, vtype, expr } => {
                 if let Some(explicit_ty) = vtype {
                     self.var_types.insert(ident.value.clone(), explicit_ty.clone());

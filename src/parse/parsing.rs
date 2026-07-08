@@ -147,6 +147,9 @@ pub enum Stmt {
         name: Identifier,
         rttype: Option<Type>,
         params: Vec<Parameter>,
+    },
+    Use{
+        path: Vec<String>,
     }
 }
 

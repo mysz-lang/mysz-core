@@ -73,10 +73,6 @@ impl Parser {
         }
     }
 
-    fn consume_semicolon(&mut self) {
-        self.expect(TokenType::SemiColon);
-    }
-
     pub fn parse(&mut self) {
         let mut statements = Vec::new();
 
@@ -175,6 +171,7 @@ impl Parser {
             TokenType::FnKeyword => self.parse_function(),
             TokenType::ForKeyword => self.parse_for(),
             TokenType::ReturnKeyword => self.parse_return(),
+            TokenType::UseKeyword => self.parse_import(),
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
             TokenType::Star => {
@@ -192,9 +189,53 @@ impl Parser {
         };
 
         if semi_colon {
-            self.consume_semicolon();
+        if self.expect(TokenType::SemiColon).is_none() {
+                return None; 
+            }
         }
         stmt
+    }
+
+    fn parse_import(&mut self) -> Option<Stmt> {
+        self.advance();
+
+        let mut path = Vec::new();
+
+        loop {
+            let ident = match self.get_token().map(|t| &t.ttype) {
+                Some(TokenType::Identifier) => {
+                    let token = self.get_token().cloned()?;
+                    self.advance();
+                    token.value
+                }
+                other => {
+                    self.throw(
+                        ParserErrorType::UnexpectedTokenTypeError,
+                        format!("Expected identifier in use path, found {:?}", other),
+                    );
+                    return None;
+                }
+            };
+            path.push(ident);
+
+            match self.get_token().map(|t| &t.ttype) {
+                Some(TokenType::DoubleColon) => {
+                    self.advance();
+                }
+                Some(TokenType::SemiColon) => {
+                    break;
+                }
+                other => {
+                    self.throw(
+                        ParserErrorType::UnexpectedTokenTypeError,
+                        format!("Expected '::' or ';', found {:?}", other),
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(Stmt::Use { path })
     }
 
     fn parse_extern(&mut self) -> Option<Stmt> {

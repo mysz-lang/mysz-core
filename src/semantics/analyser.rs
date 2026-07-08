@@ -290,6 +290,8 @@ impl Analyser {
 
     pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
+            Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
+
             Stmt::Extern { name, rttype, params } => {
                 let return_type = match rttype {
                     Some(rt) => rt.clone(),

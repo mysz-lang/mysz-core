@@ -89,8 +89,8 @@ impl Lexer{
                     '&' => {self.single_char(TokenType::Ampersand);}
                     '^' => {self.single_char(TokenType::Star);}
 
+                    ':' => {let t = self.lex_colon(); self.add_token(t);}
                     ';' => {self.single_char(TokenType::SemiColon);}
-                    ':' => {self.single_char(TokenType::Colon);}
                     '(' => {self.single_char(TokenType::LParen);}
                     ')' => {self.single_char(TokenType::RParen);}
                     '{' => {self.single_char(TokenType::LBrace);}
@@ -111,6 +111,31 @@ impl Lexer{
         }
     }
 
+    fn lex_colon(&mut self) -> Token {
+        let loc = self.current_location();
+        let current = self.get_char().expect("Unexpected EOF at ':'");
+
+        if self.peek(1) == Some(':') {
+            let next = self.peek(1).unwrap();
+
+            self.advance(); self.advance();
+
+            return Token {
+                ttype: TokenType::DoubleColon,
+                location: loc,
+                value: format!("{}{}", current, next)
+            }
+        }
+
+        self.advance();
+
+        return Token {
+            ttype: TokenType::Colon,
+            location: loc,
+            value: current.to_string(),
+        }
+    }
+
     fn lex_gt(&mut self) -> Token {
         let loc = self.current_location();
         let current = self.get_char().expect("Unexpected EOF at '>'");
@@ -121,7 +146,7 @@ impl Lexer{
             self.advance(); self.advance();
 
             return Token {
-                ttype: GreaterThanEquals,
+                ttype: TokenType::GreaterThanEquals,
                 location: loc,
                 value: format!("{}{}", current, next)
             }
@@ -340,6 +365,11 @@ impl Lexer{
             }},
             "fn" => {return Token {
                 ttype: TokenType::FnKeyword,
+                location: loc,
+                value
+            }},
+            "use" => {return Token {
+                ttype: TokenType::UseKeyword,
                 location: loc,
                 value
             }},

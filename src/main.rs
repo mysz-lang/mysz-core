@@ -9,7 +9,7 @@ pub mod backend;
 pub mod main_helper;
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 
 use cranelift::codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
@@ -20,51 +20,64 @@ use ir::ir::IRGen;
 use backend::clback;
 
 use crate::ir::tac::Instruction;
-use crate::parse::parsing::Stmt;
+use crate::parse::parsing::{Stmt, Program};
 
 fn main() {
     let source: String = "
-extern fn print_char(a: char, newline: bool);
-extern fn String(s: str): ptr<char>;
+use std::io;
 
 fn main(): int {
-    var message = \"Hello, world!\";
-    var len = 13;
-
-    var x = String(message);
-
-    for (var i = 0; i < len; i = i + 1) {
-        print_char(x[i], false);
-    };
-    
-    print_char('\n', false);
-
+    print_str(\"Hello, world!\");
     return 0;
-}".to_string();
+};".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();
 
-    let tokens = lexer.tokens;
+    // println!("{:#?}", lexer.tokens);
 
-    // println!("{:#?}", tokens);
-
-    let mut parser = myszparser::new(tokens);
+    let mut parser = myszparser::new(lexer.tokens);
     parser.parse();
 
     if !parser.parser_errs.is_empty() {
-        for perror in parser.parser_errs {
-            println!("{}", perror);
-        }
+        for perror in parser.parser_errs { println!("{}", perror); }
         return;
     }
 
-    // println!("{:#?}", parser.ast);
+    let initial_program = parser.ast;
+    
+    let mut flattened_statements = Vec::new();
 
-    let program = parser.ast;
+    for stmt in initial_program.statements {
+        if let Stmt::Use { path } = stmt {
+            let module_filename = format!("{}.mysz", path.join("/"));
+            
+            let mut mod_file = File::open(&module_filename)
+                .unwrap_or_else(|_| panic!("Failed to open module file: {}", module_filename));
+            let mut mod_source = String::new();
+            mod_file.read_to_string(&mut mod_source).expect("Failed to read module source");
+
+            let mut mod_lexer = Lexer::new(mod_source);
+            mod_lexer.lex();
+            
+            let mut mod_parser = myszparser::new(mod_lexer.tokens);
+            mod_parser.parse();
+            
+            if !mod_parser.parser_errs.is_empty() {
+                println!("Errors parsing standard module {}:", module_filename);
+                for perror in mod_parser.parser_errs { println!("{}", perror); }
+                return;
+            }
+
+            flattened_statements.extend(mod_parser.ast.statements);
+        } else {
+            flattened_statements.push(stmt);
+        }
+    }
+
+    let program = Program { statements: flattened_statements };
 
     let mut analyser = Analyser::new();
-
     if let Err(e) = analyser.analyse(&program) {
         println!("{}", e);
         return;
@@ -72,7 +85,6 @@ fn main(): int {
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
-
     irgen.dump();
 
     let tac_instructions = irgen.code;
@@ -85,7 +97,6 @@ fn main(): int {
     }).collect();
 
     let mut backend = clback::CraneliftBackend::new();
-    
     backend.scan_externs(&tac_instructions);
 
     for func_name in functions_to_compile {

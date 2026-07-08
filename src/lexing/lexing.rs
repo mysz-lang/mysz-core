@@ -18,6 +18,8 @@ pub enum TokenType {
     RBrace,
     SemiColon,
     Colon,
+    DoubleColon,
+    Period,
     Comma,
     LBracket,
     RBracket,
@@ -48,6 +50,7 @@ pub enum TokenType {
     ReturnKeyword,
     ExternKeyword,
     ForKeyword,
+    UseKeyword,
     
     // identifier
     Identifier,
