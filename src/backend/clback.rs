@@ -518,7 +518,7 @@ impl CraneliftBackend {
                     builder.ins().return_(&[ret_val]);
                 }
                 Instruction::Store { ptr, source } => {
-                    let ptr_ty = get_val_backend_type(ptr);
+                    let ptr_ty = BackendType::Ptr;
                     let src_ty = get_val_backend_type(source);
 
                     let addr = match ptr {
@@ -571,7 +571,7 @@ impl CraneliftBackend {
                     builder.ins().store(MemFlags::new(), val, addr, 0);
                 }
                 Instruction::Load { dst, ptr, ty: frontend_load_ty } => {
-                    let ptr_ty = get_val_backend_type(ptr);
+                    let ptr_ty = BackendType::Ptr;
                     let dst_ty = BackendType::from_frontend(frontend_load_ty);
 
                     let addr = match ptr {
