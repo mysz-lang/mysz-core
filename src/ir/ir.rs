@@ -44,14 +44,12 @@ impl IRGen {
         }
     }
 
-    /// Registers a unique temporary variable and tracks its Type signature
     fn next_temp_with_type(&mut self, ty: Type) -> String {
         let temp = self.temps.next();
         self.var_types.insert(temp.clone(), ty);
         temp
     }
 
-    /// Resolves the data type of an operational Value block
     fn get_value_type(&self, value: &Value) -> Type {
         match value {
             Value::Temp(name) | Value::Var(name) => self.var_types.get(name).cloned().unwrap_or(Type::Int),
@@ -70,12 +68,11 @@ impl IRGen {
             Type::Str => 8,
             Type::Ptr(_) => 8,
             Type::Array { element_type, size } => self.element_size(element_type) * (*size as i64),
-            Type::Char => 1,  // Adjusted to 8 bytes for standalone parameters / evaluation stacks
+            Type::Char => 1,
             _ => 8,
         }
     }
 
-    /// Extracted tightly packed layout sizes inside Array maps
     fn element_size(&self, ty: &Type) -> i64 {
         match ty {
             Type::Bool => 1,
@@ -386,8 +383,11 @@ impl IRGen {
                     self.code.push(Instruction::Arg { value: val.clone() });
                 }
 
-                // If function type context mapping tracking isn't linked, default cleanly to Int.
-                let dst = self.next_temp_with_type(Type::Int);
+                let return_ty = self.var_types.get(&callee.value)
+                        .cloned()
+                        .unwrap_or(Type::Int);
+
+                let dst = self.next_temp_with_type(return_ty);
                 self.code.push(Instruction::Call {
                     dest: Some(dst.clone()),
                     name: callee.value.clone(),
@@ -535,8 +535,12 @@ impl IRGen {
                     self.code.push(Instruction::Return { value: Value::Const(0) })
                 }
             }
-            Stmt::Extern { name, .. } => {
-                self.code.push(Instruction::Extern { fnname: name.value.clone() })
+            Stmt::Extern { name, rttype, .. } => {
+                let return_type = rttype.clone().unwrap_or(Type::Void);
+                
+                self.var_types.insert(name.value.clone(), return_type);
+                
+                self.code.push(Instruction::Extern { fnname: name.value.clone() });
             }
             Stmt::DerefReassignment { target, expr } => {
                 let value_to_store = self.gen_expr(expr, None);
