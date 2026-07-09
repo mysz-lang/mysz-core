@@ -148,11 +148,11 @@ impl Parser {
                     Some(Type::Char)
                 }
                 other => {
-                    self.throw(
-                        ParserErrorType::UnexpectedTokenTypeError,
-                        format!("Unknown type identifier: {}", other),
-                    );
-                    None
+                    let struct_name = other.to_string();
+
+                    self.advance();
+
+                    Some(Type::Struct(struct_name))
                 }
             },
             _ => {

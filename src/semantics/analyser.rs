@@ -84,6 +84,27 @@ impl Analyser {
         None
     }
 
+    fn validate_type_exists(&self, ty: &Type, span: &Location) -> Result<(), String> {
+        match ty {
+            Type::Struct(name) => {
+                if !self.structs.contains_key(name) {
+                    return Err(format!(
+                        "Semantic Error [{}]: Type '{}' is used here but never defined.",
+                        span, name
+                    ));
+                }
+            }
+            Type::Ptr(inner) => {
+                self.validate_type_exists(inner, span)?;
+            }
+            Type::Array { element_type, .. } => {
+                self.validate_type_exists(element_type, span)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn declare_struct(
         &mut self,
         name: &str,
@@ -459,12 +480,16 @@ impl Analyser {
                     Some(rt) => rt.clone(),
                     None => Type::Void,
                 };
+
+                self.validate_type_exists(&return_type, &name.location)?;
+
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => pt.clone(),
                         None => Type::Any,
                     };
+                    self.validate_type_exists(&ptype, &param.name.location)?;
                     param_types.push(ptype.clone());
                 }
 
@@ -481,6 +506,8 @@ impl Analyser {
                 let expr_type = self.check_expr(expr, vtype.as_ref())?;
 
                 if let Some(explicit_type) = vtype {
+                    self.validate_type_exists(explicit_type, &ident.location)?;
+
                     if *explicit_type != expr_type {
                         return Err(format!(
                             "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
@@ -642,12 +669,16 @@ impl Analyser {
                     None => Type::Void,
                 };
 
+                self.validate_type_exists(&return_type, &name.location)?;
+
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => pt.clone(),
                         None => Type::Any,
                     };
+
+                    self.validate_type_exists(&ptype, &param.name.location)?;
                     param_types.push(ptype.clone());
                 }
 

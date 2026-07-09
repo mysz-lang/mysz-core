@@ -109,6 +109,31 @@ impl IRGen {
         }
     }
 
+    fn type_alignment(&self, ty: &Type) -> i64 {
+        match ty {
+            Type::Int => 8,
+            Type::Bool => 1,
+            Type::Char => 1,
+            Type::Str => 8,
+            Type::Ptr(_) => 8,
+            Type::Array { element_type, .. } => self.type_alignment(element_type),
+            Type::Struct(name) => {
+                if let Some(layout) = self.struct_defs.get(name) {
+                    // A struct's alignment requirement is the alignment of its largest field
+                    layout
+                        .field_offsets
+                        .values()
+                        .map(|(_, field_ty)| self.type_alignment(field_ty))
+                        .max()
+                        .unwrap_or(8)
+                } else {
+                    8
+                }
+            }
+            _ => 8,
+        }
+    }
+
     fn element_size(&self, ty: &Type) -> i64 {
         match ty {
             Type::Bool => 1,
@@ -574,20 +599,31 @@ impl IRGen {
             Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
 
             Stmt::Struct { name, fields } => {
-                let mut current_offset = 0;
+                let mut current_offset: i64 = 0;
+                let mut max_alignment: i64 = 1;
                 let mut field_offsets = HashMap::new();
 
                 for field in fields {
                     let field_name = field.name.value.clone();
                     let field_type = field.ptype.clone().unwrap_or(Type::Int);
+
                     let field_size = self.type_size(&field_type);
+                    let field_align = self.type_alignment(&field_type);
+
+                    if field_align > max_alignment {
+                        max_alignment = field_align;
+                    }
+
+                    current_offset = (current_offset + field_align - 1) & !(field_align - 1);
 
                     field_offsets.insert(field_name, (current_offset, field_type));
                     current_offset += field_size;
                 }
 
+                let total_size = (current_offset + max_alignment - 1) & !(max_alignment - 1);
+
                 let layout = StructLayout {
-                    total_size: current_offset,
+                    total_size,
                     field_offsets,
                 };
 
