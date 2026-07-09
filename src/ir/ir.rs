@@ -119,7 +119,6 @@ impl IRGen {
             Type::Array { element_type, .. } => self.type_alignment(element_type),
             Type::Struct(name) => {
                 if let Some(layout) = self.struct_defs.get(name) {
-                    // A struct's alignment requirement is the alignment of its largest field
                     layout
                         .field_offsets
                         .values()
