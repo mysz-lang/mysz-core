@@ -241,6 +241,30 @@ impl CraneliftBackend {
                     ))
                 });
             }
+            match inst {
+                Instruction::Assign { dst, .. } | Instruction::Param { p: dst } => {
+                    if let Some(Type::Struct(struct_name)) = var_types.get(dst) {
+                        let total_size = self
+                            .struct_defs
+                            .get(struct_name)
+                            .map(|l| l.total_size as u32)
+                            .unwrap_or_else(|| {
+                                #[cfg(debug_assertions)]
+                                panic!("[COMPILER]: Struct layout for '{}' was never registered in backend", struct_name);
+                            });
+
+                        if total_size > 0 {
+                            stack_slot_map.entry(dst.clone()).or_insert_with(|| {
+                                builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    total_size,
+                                ))
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
 
         let get_or_create_var_impl = |b: &mut FunctionBuilder,
@@ -572,6 +596,47 @@ impl CraneliftBackend {
                     builder.switch_to_block(next_block);
                 }
                 Instruction::Arg { value } => {
+                    match value {
+                        Value::Var(name) | Value::Temp(name) => {
+                            if let Some(Type::Struct(struct_name)) = var_types.get(name) {
+                                let slot = *stack_slot_map.get(name).unwrap();
+                                let total_size = self
+                                    .struct_defs
+                                    .get(struct_name)
+                                    .map(|l| l.total_size)
+                                    .unwrap_or(8);
+
+                                let mut offset = 0;
+                                while offset < total_size {
+                                    let remaining = total_size - offset;
+                                    let chunk_ty = if remaining >= 8 {
+                                        types::I64
+                                    } else if remaining >= 4 {
+                                        types::I32
+                                    } else if remaining >= 2 {
+                                        types::I16
+                                    } else {
+                                        types::I8
+                                    };
+
+                                    let mut chunk_val =
+                                        builder.ins().stack_load(chunk_ty, slot, offset as i32);
+
+                                    if chunk_ty != types::I64 {
+                                        chunk_val = builder.ins().uextend(types::I64, chunk_val);
+                                    }
+
+                                    call_args.push(chunk_val);
+                                    call_arg_types.push(BackendType::Int64);
+
+                                    offset += if remaining >= 8 { 8 } else { remaining };
+                                }
+                                continue;
+                            }
+                        }
+                        _ => {}
+                    }
+
                     let arg_ty = get_val_backend_type(value);
                     let mut val = match value {
                         Value::Const(n) => builder.ins().iconst(arg_ty.to_clif_type(), *n),
