@@ -294,8 +294,10 @@ impl Parser {
             self.advance();
             let value_expr = self.parse_expr()?;
 
-            // If we are modifying a field (e.g. p.x = 10) or an index array slot
-            if matches!(lhs_expr.kind, ExprKind::Index { .. } | ExprKind::Field { .. }) {
+            if matches!(
+                lhs_expr.kind,
+                ExprKind::Index { .. } | ExprKind::Field { .. }
+            ) {
                 return Some(Stmt::DerefReassignment {
                     target: lhs_expr,
                     expr: value_expr,
@@ -325,7 +327,11 @@ impl Parser {
         }
 
         loop {
-            let name = match self.get_token().cloned().and_then(|token| to_ident(Some(token))) {
+            let name = match self
+                .get_token()
+                .cloned()
+                .and_then(|token| to_ident(Some(token)))
+            {
                 Some(ident) => {
                     self.advance();
                     ident
@@ -529,13 +535,13 @@ impl Parser {
 
         let mut fields = Vec::new();
 
-        // Parse fields until reaching the closing right brace
-        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
+        {
             let name = to_ident(self.get_token().cloned())?;
             self.advance();
 
             self.expect(TokenType::Colon)?;
-            
+
             let ptype = self.parse_type();
 
             self.expect(TokenType::Comma)?;
@@ -932,19 +938,18 @@ impl Parser {
             TokenType::Identifier => {
                 let id_tk = self.get_token()?.clone();
                 self.advance();
-                
-                // Lookahead to check if this is an instantiation: StructName { ... }
+
                 if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LBrace)) {
                     self.advance(); // consume '{'
                     let mut fields = Vec::new();
-                    
+
                     if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
                         loop {
                             let field_name = self.expect(TokenType::Identifier)?.value;
                             self.expect(TokenType::Colon)?;
                             let value_expr = self.parse_expr()?;
                             fields.push((field_name, value_expr));
-                            
+
                             match self.get_token().map(|t| &t.ttype) {
                                 Some(TokenType::Comma) => {
                                     self.advance();
@@ -960,7 +965,7 @@ impl Parser {
                             }
                         }
                     }
-                    
+
                     let end_tk = self.expect(TokenType::RBrace)?;
                     Some(Expr {
                         kind: ExprKind::StructLiteral {
@@ -970,7 +975,6 @@ impl Parser {
                         span: end_tk.location,
                     })
                 } else {
-                    // Plain variable reference or function name call
                     Some(Expr {
                         kind: ExprKind::Identifier(id_tk.value),
                         span: id_tk.location,

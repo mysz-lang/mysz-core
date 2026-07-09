@@ -485,13 +485,13 @@ impl Lexer {
                     location: loc,
                     value,
                 };
-            },
+            }
             "struct" => {
                 return Token {
                     ttype: TokenType::StructKeyword,
                     location: loc,
-                    value
-                }
+                    value,
+                };
             }
 
             _ => {}

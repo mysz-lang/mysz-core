@@ -225,10 +225,12 @@ impl CraneliftBackend {
                     } => {
                         let elem_size = BackendType::from_frontend(element_type).byte_size();
                         elem_size * (size as u32)
-                    },
-                    Type::Struct(name) => {
-                        self.struct_defs.get(&name).map(|l| l.total_size as u32).unwrap_or(8)
                     }
+                    Type::Struct(name) => self
+                        .struct_defs
+                        .get(&name)
+                        .map(|l| l.total_size as u32)
+                        .unwrap_or(8),
                     other => BackendType::from_frontend(&other).byte_size(),
                 };
 

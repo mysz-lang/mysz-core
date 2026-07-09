@@ -165,8 +165,8 @@ pub enum Stmt {
     },
     Struct {
         name: Identifier,
-        fields: Vec<Parameter>
-    }
+        fields: Vec<Parameter>,
+    },
 }
 
 #[derive(Debug)]

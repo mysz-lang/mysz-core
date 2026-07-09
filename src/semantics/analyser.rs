@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::parse::parsing::*;
-use crate::semantics::analysis::{FunctionSignature, StructSignature, Scope, Symbol};
+use crate::semantics::analysis::{FunctionSignature, Scope, StructSignature, Symbol};
 use crate::utils::location::Location;
 
 pub struct Analyser {
@@ -97,13 +97,8 @@ impl Analyser {
             ));
         }
 
-        self.structs.insert(
-            name.to_string(),
-            StructSignature {
-                fields,
-                location,
-            },
-        );
+        self.structs
+            .insert(name.to_string(), StructSignature { fields, location });
 
         Ok(())
     }
@@ -181,11 +176,9 @@ impl Analyser {
                     })
                 }
             },
-
-            // --- Field Access: base.field ---
             ExprKind::Field { base, field } => {
                 let base_type = self.check_expr(base, None)?;
-                
+
                 match base_type {
                     Type::Struct(struct_name) => {
                         let signature = self.structs.get(&struct_name).ok_or_else(|| {
@@ -211,8 +204,10 @@ impl Analyser {
                 }
             }
 
-            // --- Struct Initialization Literal: StructName { f1: e1, ... } ---
-            ExprKind::StructLiteral { struct_name, fields } => {
+            ExprKind::StructLiteral {
+                struct_name,
+                fields,
+            } => {
                 let signature = self.structs.get(struct_name).ok_or_else(|| {
                     format!(
                         "Semantic Error [{}]: Attempted to initialize undefined struct '{}'.",
@@ -220,15 +215,16 @@ impl Analyser {
                     )
                 })?;
 
-                // Because declaration requires initialization, we enforce full initialization
                 if fields.len() != signature.fields.len() {
                     return Err(format!(
                         "Type Error [{}]: Struct '{}' expects {} fields initialized, found {}.",
-                        expr.span, struct_name, signature.fields.len(), fields.len()
+                        expr.span,
+                        struct_name,
+                        signature.fields.len(),
+                        fields.len()
                     ));
                 }
 
-                // Verify every expected field exists and has the correct expression type
                 for (field_name, field_expr) in fields {
                     let expected_type = signature.fields.get(field_name).ok_or_else(|| {
                         format!(
@@ -239,7 +235,10 @@ impl Analyser {
 
                     let actual_type = self.check_expr(field_expr, Some(expected_type))?;
 
-                    if actual_type != *expected_type && actual_type != Type::Any && *expected_type != Type::Any {
+                    if actual_type != *expected_type
+                        && actual_type != Type::Any
+                        && *expected_type != Type::Any
+                    {
                         return Err(format!(
                             "Type Error [{}]: Field '{}' of struct '{}' expects type '{:?}', found '{:?}'.",
                             field_expr.span, field_name, struct_name, expected_type, actual_type
@@ -247,7 +246,6 @@ impl Analyser {
                     }
                 }
 
-                // Ensure no duplicate field keys were supplied in the literal initialization expression
                 let mut tracking_set = std::collections::HashSet::new();
                 for (name, _) in fields {
                     if !tracking_set.insert(name) {
@@ -440,23 +438,14 @@ impl Analyser {
                     if struct_fields.contains_key(&field.name.value) {
                         return Err(format!(
                             "Semantic Error [{}]: Struct '{}' contains duplicate field '{}'",
-                            field.name.location,
-                            name.value,
-                            field.name.value
+                            field.name.location, name.value, field.name.value
                         ));
                     }
 
-                    struct_fields.insert(
-                        field.name.value.clone(),
-                        field_type,
-                    );
+                    struct_fields.insert(field.name.value.clone(), field_type);
                 }
 
-                self.declare_struct(
-                    &name.value,
-                    struct_fields,
-                    name.location.clone(),
-                )?;
+                self.declare_struct(&name.value, struct_fields, name.location.clone())?;
 
                 Ok(())
             }
@@ -505,7 +494,10 @@ impl Analyser {
                     )?;
                 } else {
                     if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                        if existing_symbol.data_type != expr_type && existing_symbol.data_type != Type::Any && expr_type != Type::Any {
+                        if existing_symbol.data_type != expr_type
+                            && existing_symbol.data_type != Type::Any
+                            && expr_type != Type::Any
+                        {
                             return Err(format!(
                                 "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
                                 expr.span, expr_type, ident.value, existing_symbol.data_type
@@ -522,7 +514,10 @@ impl Analyser {
                 let target_resolved_type = self.check_expr(target, None)?;
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                if target_resolved_type != expr_type && target_resolved_type != Type::Any && expr_type != Type::Any {
+                if target_resolved_type != expr_type
+                    && target_resolved_type != Type::Any
+                    && expr_type != Type::Any
+                {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to target location of type '{:?}'",
                         expr.span, expr_type, target_resolved_type
@@ -542,7 +537,10 @@ impl Analyser {
                     )
                 })?;
 
-                if symbol.data_type != expr_type && symbol.data_type != Type::Any && expr_type != Type::Any {
+                if symbol.data_type != expr_type
+                    && symbol.data_type != Type::Any
+                    && expr_type != Type::Any
+                {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
                         expr.span, expr_type, ident.value, symbol.data_type

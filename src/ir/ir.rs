@@ -279,26 +279,32 @@ impl IRGen {
                             source: element_val,
                         });
                     }
-                    
+
                     base_val
                 }
             },
 
             ExprKind::Field { base, field } => {
                 let base_val = self.gen_expr(base, None);
-                
+
                 let (offset, field_type) = {
                     let base_type = self.expr_type(base).unwrap_or(Type::Int);
                     let struct_name = match base_type {
                         Type::Struct(name) => name,
-                        _ => panic!("Internal Compiler Error: Attempted field access on a non-struct type."),
+                        _ => panic!(
+                            "Internal Compiler Error: Attempted field access on a non-struct type."
+                        ),
                     };
 
-                    let layout = self.struct_defs.get(&struct_name)
+                    let layout = self
+                        .struct_defs
+                        .get(&struct_name)
                         .expect("Internal Compiler Error: Structural reference layout untracked.");
-                    let (offset, field_ty) = layout.field_offsets.get(field)
+                    let (offset, field_ty) = layout
+                        .field_offsets
+                        .get(field)
                         .expect("Internal Compiler Error: Referenced struct field does not exist.");
-                    
+
                     (*offset, field_ty.clone())
                 };
 
@@ -307,14 +313,16 @@ impl IRGen {
                     _ => unreachable!(),
                 };
 
-                let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
+                let base_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
                 self.code.push(Instruction::Unary {
                     dst: base_addr_temp.clone(),
                     op: IrOp::Ref,
                     value: base_val,
                 });
 
-                let field_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+                let field_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
                 self.code.push(Instruction::Binary {
                     dst: field_addr_temp.clone(),
                     op: IrOp::Add,
@@ -331,36 +339,48 @@ impl IRGen {
 
                 Value::Temp(result_temp)
             }
-            
-            ExprKind::StructLiteral { struct_name, fields } => {
+
+            ExprKind::StructLiteral {
+                struct_name,
+                fields,
+            } => {
                 let base_val = match target_dest {
                     Some(dest) => dest,
                     None => {
                         let raw_temp = self.temps.next();
                         let anon_name = format!("_anon_struct_{}", raw_temp);
-                        self.var_types.insert(anon_name.clone(), Type::Struct(struct_name.clone()));
+                        self.var_types
+                            .insert(anon_name.clone(), Type::Struct(struct_name.clone()));
                         Value::Var(anon_name)
                     }
                 };
 
-                let layout_fields = self.struct_defs.get(struct_name)
-                    .expect("Internal Compiler Error: Structural initialization on untracked layout.")
+                let layout_fields = self
+                    .struct_defs
+                    .get(struct_name)
+                    .expect(
+                        "Internal Compiler Error: Structural initialization on untracked layout.",
+                    )
                     .field_offsets
                     .clone();
 
                 for (field_name, field_expr) in fields {
                     let field_val = self.gen_expr(field_expr, None);
-                    let (offset, field_type) = layout_fields.get(field_name)
+                    let (offset, field_type) = layout_fields
+                        .get(field_name)
                         .expect("Internal Compiler Error: Field initialization lookup failure.");
 
-                    let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name.clone()))));
+                    let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(
+                        Type::Struct(struct_name.clone()),
+                    )));
                     self.code.push(Instruction::Unary {
                         dst: base_addr_temp.clone(),
                         op: IrOp::Ref,
                         value: base_val.clone(),
                     });
 
-                    let slot_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+                    let slot_addr_temp =
+                        self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
                     self.code.push(Instruction::Binary {
                         dst: slot_addr_temp.clone(),
                         op: IrOp::Add,
@@ -562,9 +582,6 @@ impl IRGen {
                     let field_type = field.ptype.clone().unwrap_or(Type::Int);
                     let field_size = self.type_size(&field_type);
 
-                    // alignment, if I want C struct support, hey I might add extern struct in the future!
-                    // current_offset = (current_offset + alignment - 1) & !(alignment - 1);
-
                     field_offsets.insert(field_name, (current_offset, field_type));
                     current_offset += field_size;
                 }
@@ -578,11 +595,14 @@ impl IRGen {
             }
             Stmt::Assignment { ident, vtype, expr } => {
                 if let Some(explicit_ty) = vtype {
-                    self.var_types.insert(ident.value.clone(), explicit_ty.clone());
+                    self.var_types
+                        .insert(ident.value.clone(), explicit_ty.clone());
                 }
 
-                let current_ty = vtype.clone().or_else(|| self.var_types.get(&ident.value).cloned());
-                
+                let current_ty = vtype
+                    .clone()
+                    .or_else(|| self.var_types.get(&ident.value).cloned());
+
                 let is_structural = match current_ty {
                     Some(Type::Array { .. } | Type::Struct(_)) => true,
                     _ => false,
@@ -805,42 +825,48 @@ impl IRGen {
                         source: value_to_store,
                     });
                 } else if let ExprKind::Field { base, field } = &target.kind {
-                                let base_val = self.gen_expr(base, None);
+                    let base_val = self.gen_expr(base, None);
 
-                                let (struct_name, offset, field_type) = {
-                                    let base_type = self.expr_type(base).unwrap_or(Type::Int);
-                                    let name = match base_type {
-                                        Type::Struct(n) => n,
-                                        _ => panic!("Internal Compiler Error: Field writing targeted a non-struct entity."),
-                                    };
+                    let (struct_name, offset, field_type) = {
+                        let base_type = self.expr_type(base).unwrap_or(Type::Int);
+                        let name = match base_type {
+                            Type::Struct(n) => n,
+                            _ => panic!(
+                                "Internal Compiler Error: Field writing targeted a non-struct entity."
+                            ),
+                        };
 
-                                    let layout = self.struct_defs.get(&name)
-                                        .expect("Internal Compiler Error: Structural reference layout untracked.");
-                                    let (offset, field_ty) = layout.field_offsets.get(field)
-                                        .expect("Internal Compiler Error: Referenced struct field does not exist.");
+                        let layout = self.struct_defs.get(&name).expect(
+                            "Internal Compiler Error: Structural reference layout untracked.",
+                        );
+                        let (offset, field_ty) = layout.field_offsets.get(field).expect(
+                            "Internal Compiler Error: Referenced struct field does not exist.",
+                        );
 
-                                    (name, *offset, field_ty.clone())
-                                };
+                        (name, *offset, field_ty.clone())
+                    };
 
-                                let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
-                                self.code.push(Instruction::Unary {
-                                    dst: base_addr_temp.clone(),
-                                    op: IrOp::Ref,
-                                    value: base_val,
-                                });
+                    let base_addr_temp =
+                        self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
+                    self.code.push(Instruction::Unary {
+                        dst: base_addr_temp.clone(),
+                        op: IrOp::Ref,
+                        value: base_val,
+                    });
 
-                                let target_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
-                                self.code.push(Instruction::Binary {
-                                    dst: target_addr_temp.clone(),
-                                    op: IrOp::Add,
-                                    lhs: Value::Temp(base_addr_temp),
-                                    rhs: Value::Const(offset),
-                                });
-                    
-                                self.code.push(Instruction::Store {
-                                    ptr: Value::Temp(target_addr_temp),
-                                    source: value_to_store,
-                                });
+                    let target_addr_temp =
+                        self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+                    self.code.push(Instruction::Binary {
+                        dst: target_addr_temp.clone(),
+                        op: IrOp::Add,
+                        lhs: Value::Temp(base_addr_temp),
+                        rhs: Value::Const(offset),
+                    });
+
+                    self.code.push(Instruction::Store {
+                        ptr: Value::Temp(target_addr_temp),
+                        source: value_to_store,
+                    });
                 } else {
                     if let ExprKind::Unary {
                         op: crate::parse::parsing::UnaryOp::Deref,
@@ -873,7 +899,10 @@ impl IRGen {
 
     pub fn gen_program(&mut self, program: &Program) {
         for stmt in &program.statements {
-            if !matches!(stmt, Stmt::Function { .. }) && !matches!(stmt, Stmt::Extern { .. }) && !matches!(stmt, Stmt::Struct { .. }) {
+            if !matches!(stmt, Stmt::Function { .. })
+                && !matches!(stmt, Stmt::Extern { .. })
+                && !matches!(stmt, Stmt::Struct { .. })
+            {
                 println!(
                     "Codegen Error: top-level statement outside of a function is not supported."
                 );
