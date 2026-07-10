@@ -251,6 +251,7 @@ impl CraneliftBackend {
                             .unwrap_or_else(|| {
                                 #[cfg(debug_assertions)]
                                 panic!("[COMPILER]: Struct layout for '{}' was never registered in backend", struct_name);
+                                0
                             });
 
                         if total_size > 0 {
