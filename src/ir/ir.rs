@@ -104,7 +104,6 @@ impl IRGen {
                     8
                 }
             }
-
             _ => 8,
         }
     }
@@ -368,14 +367,12 @@ impl IRGen {
                 struct_name,
                 fields,
             } => {
-                let base_val = match target_dest {
+                // CHANGE #1: Unified allocation strategy
+                let target_val = match target_dest {
                     Some(dest) => dest,
                     None => {
-                        let raw_temp = self.temps.next();
-                        let anon_name = format!("_anon_struct_{}", raw_temp);
-                        self.var_types
-                            .insert(anon_name.clone(), Type::Struct(struct_name.clone()));
-                        Value::Var(anon_name)
+                        let temp_name = self.next_temp_with_type(Type::Struct(struct_name.clone()));
+                        Value::Temp(temp_name)
                     }
                 };
 
@@ -400,7 +397,7 @@ impl IRGen {
                     self.code.push(Instruction::Unary {
                         dst: base_addr_temp.clone(),
                         op: IrOp::Ref,
-                        value: base_val.clone(),
+                        value: target_val.clone(),
                     });
 
                     let slot_addr_temp =
@@ -418,7 +415,7 @@ impl IRGen {
                     });
                 }
 
-                base_val
+                target_val
             }
 
             ExprKind::Index { base, index } => {
@@ -595,7 +592,7 @@ impl IRGen {
 
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
+            Stmt::Use { .. } => unreachable!(),
 
             Stmt::Struct { name, fields } => {
                 let mut current_offset: i64 = 0;
@@ -638,13 +635,14 @@ impl IRGen {
                     .clone()
                     .or_else(|| self.var_types.get(&ident.value).cloned());
 
-                let is_structural = match current_ty {
-                    Some(Type::Array { .. } | Type::Struct(_)) => true,
+                // CHANGE #2: Arrays are stored inline, but structs are copied seamlessly via standard assigns
+                let is_array = match current_ty {
+                    Some(Type::Array { .. }) => true,
                     _ => false,
                 };
 
                 let target_var = Value::Var(ident.value.clone());
-                if is_structural {
+                if is_array {
                     self.gen_expr(expr, Some(target_var));
                 } else {
                     let value = self.gen_expr(expr, None);

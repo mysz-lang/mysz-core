@@ -91,7 +91,7 @@ fn main() {
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(&program);
-    // irgen.dump();
+    irgen.dump();
 
     let tac_instructions = irgen.code;
 
@@ -106,6 +106,9 @@ fn main() {
 
     let mut backend = clback::CraneliftBackend::new(irgen.struct_defs);
     backend.scan_externs(&tac_instructions);
+
+    let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
+    backend.pre_declare_strings(&instruction_refs);
 
     for (func_name, is_public) in functions_to_compile {
         let func_instructions: Vec<&Instruction> = tac_instructions
