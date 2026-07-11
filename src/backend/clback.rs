@@ -18,10 +18,7 @@ pub enum BackendType {
 }
 
 impl BackendType {
-    pub fn to_clif_type(
-        &self,
-        ptr_type: cranelift::prelude::Type,
-    ) -> cranelift::prelude::Type {
+    pub fn to_clif_type(&self, ptr_type: cranelift::prelude::Type) -> cranelift::prelude::Type {
         match self {
             BackendType::Char => types::I8,
             BackendType::Bool => types::I8,
@@ -81,12 +78,8 @@ impl AbiType {
                 }
             }
 
-            Type::Array {
-                element_type,
-                size,
-            } => {
-                let elem = BackendType::from_frontend(element_type)
-                    .byte_size();
+            Type::Array { element_type, size } => {
+                let elem = BackendType::from_frontend(element_type).byte_size();
                 let total = elem * (*size as u32);
 
                 AbiType::Aggregate {
@@ -95,10 +88,7 @@ impl AbiType {
                 }
             }
 
-            other => AbiType::Primitive(
-                BackendType::from_frontend(other)
-                    .to_clif_type(ptr_type)
-            ),
+            other => AbiType::Primitive(BackendType::from_frontend(other).to_clif_type(ptr_type)),
         }
     }
 
@@ -163,17 +153,24 @@ impl CraneliftBackend {
         }
     }
 
-
     pub fn pre_declare_strings(&mut self, insts: &[&Instruction]) {
         for inst in insts {
             match inst {
-                Instruction::Assign { src: Value::Str(text), .. } => {
+                Instruction::Assign {
+                    src: Value::Str(text),
+                    ..
+                } => {
                     self.declare_string_literal(text);
                 }
-                Instruction::Arg { value: Value::Str(text) } => {
+                Instruction::Arg {
+                    value: Value::Str(text),
+                } => {
                     self.declare_string_literal(text);
                 }
-                Instruction::Load { ptr: Value::Str(text), .. } => {
+                Instruction::Load {
+                    ptr: Value::Str(text),
+                    ..
+                } => {
                     self.declare_string_literal(text);
                 }
                 _ => {}
@@ -199,7 +196,7 @@ impl CraneliftBackend {
             .declare_data(&sym_name, Linkage::Local, false, false)
             .unwrap();
         self.module.define_data(data_id, &data_desc).unwrap();
-        
+
         self.string_literals.insert(text.to_string(), data_id);
         data_id
     }
@@ -222,13 +219,13 @@ impl CraneliftBackend {
             sig.params.push(AbiParam::new(ty.to_clif_type(ptr_type)));
         }
 
-    match frontend_return_type {
-        Some(Type::Void) | None => {}
-        Some(other) => {
-            let abi = AbiType::from_frontend(other, &self.struct_defs, ptr_type);
-            abi.append_to_signature_returns(&mut sig);
+        match frontend_return_type {
+            Some(Type::Void) | None => {}
+            Some(other) => {
+                let abi = AbiType::from_frontend(other, &self.struct_defs, ptr_type);
+                abi.append_to_signature_returns(&mut sig);
+            }
         }
-    }
 
         let linkage = if self.extern_names.contains(name) {
             Linkage::Import
@@ -241,10 +238,7 @@ impl CraneliftBackend {
             Linkage::Local
         };
 
-        let id = self
-            .module
-            .declare_function(name, linkage, &sig)
-            .unwrap();
+        let id = self.module.declare_function(name, linkage, &sig).unwrap();
 
         self.declared_funcs.insert(name.to_string(), id);
 
@@ -335,7 +329,13 @@ impl CraneliftBackend {
                 Instruction::Assign { dst, .. } => check_and_alloc_aggregate(dst),
                 Instruction::Param { p } => check_and_alloc_aggregate(p),
                 Instruction::Load { dst, .. } => check_and_alloc_aggregate(dst),
-                Instruction::Store { ptr: Value::Var(n), .. } | Instruction::Store { ptr: Value::Temp(n), .. } => check_and_alloc_aggregate(n),
+                Instruction::Store {
+                    ptr: Value::Var(n), ..
+                }
+                | Instruction::Store {
+                    ptr: Value::Temp(n),
+                    ..
+                } => check_and_alloc_aggregate(n),
                 Instruction::Unary { dst, value, .. } => {
                     check_and_alloc_aggregate(dst);
                     if let Value::Var(n) | Value::Temp(n) = value {
@@ -344,10 +344,16 @@ impl CraneliftBackend {
                 }
                 Instruction::Binary { dst, lhs, rhs, .. } => {
                     check_and_alloc_aggregate(dst);
-                    if let Value::Var(n) | Value::Temp(n) = lhs { check_and_alloc_aggregate(n); }
-                    if let Value::Var(n) | Value::Temp(n) = rhs { check_and_alloc_aggregate(n); }
+                    if let Value::Var(n) | Value::Temp(n) = lhs {
+                        check_and_alloc_aggregate(n);
+                    }
+                    if let Value::Var(n) | Value::Temp(n) = rhs {
+                        check_and_alloc_aggregate(n);
+                    }
                 }
-                Instruction::Call { dest: Some(dst), .. } => check_and_alloc_aggregate(dst),
+                Instruction::Call {
+                    dest: Some(dst), ..
+                } => check_and_alloc_aggregate(dst),
                 _ => {}
             }
         }
@@ -399,15 +405,29 @@ impl CraneliftBackend {
                     param_counter += 1;
 
                     if let Some(frontend_type) = var_types.get(p) {
-                        let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
+                        let abi =
+                            AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
                         if let AbiType::Aggregate { total_size, .. } = abi {
-                            let slot = *stack_slot_map.get(p).expect("Aggregate parameter missing frame");
+                            let slot = *stack_slot_map
+                                .get(p)
+                                .expect("Aggregate parameter missing frame");
                             let dst_addr = builder.ins().stack_addr(ptr_type, slot, 0);
                             let size_val = builder.ins().iconst(ptr_type, total_size as i64);
-                            builder.call_memcpy(self.module.target_config(), dst_addr, cranelift_val, size_val);
+                            builder.call_memcpy(
+                                self.module.target_config(),
+                                dst_addr,
+                                cranelift_val,
+                                size_val,
+                            );
                         } else {
                             let ty = BackendType::from_frontend(frontend_type);
-                            let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, p, ty);
+                            let v = get_or_create_var_impl(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                p,
+                                ty,
+                            );
                             builder.def_var(v, cranelift_val);
                         }
                     }
@@ -420,15 +440,24 @@ impl CraneliftBackend {
 
                     let abi = AbiType::from_frontend(&dst_frontend_ty, &self.struct_defs, ptr_type);
                     if let AbiType::Aggregate { total_size, .. } = abi {
-                        let dst_slot = *stack_slot_map.get(dst).expect("Target block space unallocated");
+                        let dst_slot = *stack_slot_map
+                            .get(dst)
+                            .expect("Target block space unallocated");
                         let dst_addr = builder.ins().stack_addr(ptr_type, dst_slot, 0);
 
                         match src {
                             Value::Var(name) | Value::Temp(name) => {
-                                let src_slot = *stack_slot_map.get(name).expect("Source block space unallocated");
+                                let src_slot = *stack_slot_map
+                                    .get(name)
+                                    .expect("Source block space unallocated");
                                 let src_addr = builder.ins().stack_addr(ptr_type, src_slot, 0);
                                 let size_val = builder.ins().iconst(ptr_type, total_size as i64);
-                                builder.call_memcpy(self.module.target_config(), dst_addr, src_addr, size_val);
+                                builder.call_memcpy(
+                                    self.module.target_config(),
+                                    dst_addr,
+                                    src_addr,
+                                    size_val,
+                                );
                             }
                             _ => panic!("Primitive-to-structural dynamic mapping violation"),
                         }
@@ -440,14 +469,24 @@ impl CraneliftBackend {
                                 if let Some(slot) = stack_slot_map.get(name) {
                                     builder.ins().stack_load(clif_ty, *slot, 0)
                                 } else {
-                                    let src_ty = var_types.get(name).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
-                                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, src_ty);
+                                    let src_ty = var_types
+                                        .get(name)
+                                        .map(BackendType::from_frontend)
+                                        .unwrap_or(BackendType::Int64);
+                                    let v = get_or_create_var_impl(
+                                        &mut builder,
+                                        &mut var_map,
+                                        &mut var_idx,
+                                        name,
+                                        src_ty,
+                                    );
                                     builder.use_var(v)
                                 }
                             }
                             Value::Str(text) => {
                                 let data_id = self.declare_string_literal(text);
-                                let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
+                                let local_ref =
+                                    self.module.declare_data_in_func(data_id, &mut builder.func);
                                 builder.ins().global_value(clif_ty, local_ref)
                             }
                             Value::Char(ch) => {
@@ -461,32 +500,51 @@ impl CraneliftBackend {
                         if let Some(slot) = stack_slot_map.get(dst) {
                             builder.ins().stack_store(val, *slot, 0);
                         } else {
-                            let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
+                            let v = get_or_create_var_impl(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                dst,
+                                dst_ty,
+                            );
                             builder.def_var(v, val);
                         }
                     }
                 }
 
                 Instruction::Binary { dst, op, lhs, rhs } => {
-                    let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let dst_ty = var_types
+                        .get(dst)
+                        .map(BackendType::from_frontend)
+                        .unwrap_or(BackendType::Int64);
                     let clif_ty = dst_ty.to_clif_type(ptr_type);
 
-                    let mut evaluate_operand = |b: &mut FunctionBuilder, val: &Value, ty: BackendType| {
-                        match val {
+                    let mut evaluate_operand =
+                        |b: &mut FunctionBuilder, val: &Value, ty: BackendType| match val {
                             Value::Const(n) => b.ins().iconst(ty.to_clif_type(ptr_type), *n),
-                            Value::Bool(bl) => b.ins().iconst(ty.to_clif_type(ptr_type), if *bl { 1 } else { 0 }),
+                            Value::Bool(bl) => b
+                                .ins()
+                                .iconst(ty.to_clif_type(ptr_type), if *bl { 1 } else { 0 }),
                             Value::Var(n) | Value::Temp(n) => {
                                 if let Some(slot) = stack_slot_map.get(n) {
                                     b.ins().stack_load(ty.to_clif_type(ptr_type), *slot, 0)
                                 } else {
-                                    let src_ty = var_types.get(n).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
-                                    let v = get_or_create_var_impl(b, &mut var_map, &mut var_idx, n, src_ty);
+                                    let src_ty = var_types
+                                        .get(n)
+                                        .map(BackendType::from_frontend)
+                                        .unwrap_or(BackendType::Int64);
+                                    let v = get_or_create_var_impl(
+                                        b,
+                                        &mut var_map,
+                                        &mut var_idx,
+                                        n,
+                                        src_ty,
+                                    );
                                     b.use_var(v)
                                 }
                             }
                             _ => b.ins().iconst(ty.to_clif_type(ptr_type), 0),
-                        }
-                    };
+                        };
 
                     let lhs_val = evaluate_operand(&mut builder, lhs, dst_ty);
                     let rhs_val = evaluate_operand(&mut builder, rhs, dst_ty);
@@ -497,17 +555,30 @@ impl CraneliftBackend {
                         IrOp::Mul => builder.ins().imul(lhs_val, rhs_val),
                         IrOp::Div => builder.ins().sdiv(lhs_val, rhs_val),
                         IrOp::Mod => builder.ins().srem(lhs_val, rhs_val),
-                        IrOp::Eq  => builder.ins().icmp(IntCC::Equal, lhs_val, rhs_val),
+                        IrOp::Eq => builder.ins().icmp(IntCC::Equal, lhs_val, rhs_val),
                         IrOp::NEq => builder.ins().icmp(IntCC::NotEqual, lhs_val, rhs_val),
-                        IrOp::Gt  => builder.ins().icmp(IntCC::SignedGreaterThan, lhs_val, rhs_val),
-                        IrOp::GtE => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs_val, rhs_val),
-                        IrOp::Lt  => builder.ins().icmp(IntCC::SignedLessThan, lhs_val, rhs_val),
-                        IrOp::LtE => builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs_val, rhs_val),
+                        IrOp::Gt => builder
+                            .ins()
+                            .icmp(IntCC::SignedGreaterThan, lhs_val, rhs_val),
+                        IrOp::GtE => {
+                            builder
+                                .ins()
+                                .icmp(IntCC::SignedGreaterThanOrEqual, lhs_val, rhs_val)
+                        }
+                        IrOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs_val, rhs_val),
+                        IrOp::LtE => {
+                            builder
+                                .ins()
+                                .icmp(IntCC::SignedLessThanOrEqual, lhs_val, rhs_val)
+                        }
 
                         IrOp::Pos | IrOp::Neg | IrOp::Ref => builder.ins().iconst(clif_ty, 0),
                     };
 
-                    let normalized_res = if matches!(op, IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE) {
+                    let normalized_res = if matches!(
+                        op,
+                        IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE
+                    ) {
                         builder.ins().uextend(clif_ty, res)
                     } else {
                         res
@@ -516,24 +587,41 @@ impl CraneliftBackend {
                     if let Some(slot) = stack_slot_map.get(dst) {
                         builder.ins().stack_store(normalized_res, *slot, 0);
                     } else {
-                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
+                        let v = get_or_create_var_impl(
+                            &mut builder,
+                            &mut var_map,
+                            &mut var_idx,
+                            dst,
+                            dst_ty,
+                        );
                         builder.def_var(v, normalized_res);
                     }
                 }
 
                 Instruction::Unary { dst, op, value } => {
-                    let dst_ty = var_types.get(dst).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
+                    let dst_ty = var_types
+                        .get(dst)
+                        .map(BackendType::from_frontend)
+                        .unwrap_or(BackendType::Int64);
                     let clif_ty = dst_ty.to_clif_type(ptr_type);
 
                     if *op == IrOp::Ref {
                         if let Value::Var(name) | Value::Temp(name) = value {
-                            let slot = *stack_slot_map.get(name).expect("Target reference frame missing");
+                            let slot = *stack_slot_map
+                                .get(name)
+                                .expect("Target reference frame missing");
                             let addr_val = builder.ins().stack_addr(ptr_type, slot, 0);
 
                             if let Some(slot) = stack_slot_map.get(dst) {
                                 builder.ins().stack_store(addr_val, *slot, 0);
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    dst,
+                                    dst_ty,
+                                );
                                 builder.def_var(v, addr_val);
                             }
                         }
@@ -544,8 +632,17 @@ impl CraneliftBackend {
                                 if let Some(slot) = stack_slot_map.get(n) {
                                     builder.ins().stack_load(clif_ty, *slot, 0)
                                 } else {
-                                    let src_ty = var_types.get(n).map(BackendType::from_frontend).unwrap_or(BackendType::Int64);
-                                    let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, n, src_ty);
+                                    let src_ty = var_types
+                                        .get(n)
+                                        .map(BackendType::from_frontend)
+                                        .unwrap_or(BackendType::Int64);
+                                    let v = get_or_create_var_impl(
+                                        &mut builder,
+                                        &mut var_map,
+                                        &mut var_idx,
+                                        n,
+                                        src_ty,
+                                    );
                                     builder.use_var(v)
                                 }
                             }
@@ -561,7 +658,13 @@ impl CraneliftBackend {
                         if let Some(slot) = stack_slot_map.get(dst) {
                             builder.ins().stack_store(res, *slot, 0);
                         } else {
-                            let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
+                            let v = get_or_create_var_impl(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                dst,
+                                dst_ty,
+                            );
                             builder.def_var(v, res);
                         }
                     }
@@ -570,7 +673,8 @@ impl CraneliftBackend {
                 Instruction::Arg { value } => {
                     if let Value::Var(name) | Value::Temp(name) = value {
                         if let Some(frontend_type) = var_types.get(name) {
-                            let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
+                            let abi =
+                                AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
                             if let AbiType::Aggregate { .. } = abi {
                                 let slot = *stack_slot_map.get(name).unwrap();
                                 let addr_val = builder.ins().stack_addr(ptr_type, slot, 0);
@@ -584,25 +688,40 @@ impl CraneliftBackend {
                     let arg_ty = get_val_backend_type(value);
                     let mut val = match value {
                         Value::Const(n) => builder.ins().iconst(arg_ty.to_clif_type(ptr_type), *n),
-                        Value::Bool(b) => builder.ins().iconst(arg_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
+                        Value::Bool(b) => builder
+                            .ins()
+                            .iconst(arg_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(arg_ty.to_clif_type(ptr_type), *slot, 0)
+                                builder
+                                    .ins()
+                                    .stack_load(arg_ty.to_clif_type(ptr_type), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, arg_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    arg_ty,
+                                );
                                 builder.use_var(v)
                             }
                         }
                         Value::Void => builder.ins().iconst(arg_ty.to_clif_type(ptr_type), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
-                            let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(arg_ty.to_clif_type(ptr_type), local_ref)
+                            let local_ref =
+                                self.module.declare_data_in_func(data_id, &mut builder.func);
+                            builder
+                                .ins()
+                                .global_value(arg_ty.to_clif_type(ptr_type), local_ref)
                         }
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
-                            builder.ins().iconst(arg_ty.to_clif_type(ptr_type), byte_val as i64)
+                            builder
+                                .ins()
+                                .iconst(arg_ty.to_clif_type(ptr_type), byte_val as i64)
                         }
                     };
 
@@ -611,18 +730,33 @@ impl CraneliftBackend {
                     }
 
                     call_args.push(val);
-                    call_arg_types.push(if arg_ty.to_clif_type(ptr_type) == types::I8 { BackendType::Int64 } else { arg_ty });
+                    call_arg_types.push(if arg_ty.to_clif_type(ptr_type) == types::I8 {
+                        BackendType::Int64
+                    } else {
+                        arg_ty
+                    });
                 }
 
-                Instruction::Call { dest, name, argc: _ } => {
+                Instruction::Call {
+                    dest,
+                    name,
+                    argc: _,
+                } => {
                     let return_frontend_type = dest.as_ref().and_then(|d| var_types.get(d));
                     let return_type = return_frontend_type
                         .map(BackendType::from_frontend)
                         .unwrap_or(BackendType::Int64);
 
                     let is_extern = self.extern_names.contains(name);
-                    let local_callee = self.get_or_declare_func(name, is_extern, &call_arg_types, return_frontend_type);
-                    let local_clif_ref = self.module.declare_func_in_func(local_callee, &mut builder.func);
+                    let local_callee = self.get_or_declare_func(
+                        name,
+                        is_extern,
+                        &call_arg_types,
+                        return_frontend_type,
+                    );
+                    let local_clif_ref = self
+                        .module
+                        .declare_func_in_func(local_callee, &mut builder.func);
 
                     let call_inst = builder.ins().call(local_clif_ref, &call_args);
                     call_args.clear();
@@ -633,23 +767,43 @@ impl CraneliftBackend {
                             let results = builder.inst_results(call_inst).to_vec();
                             if !results.is_empty() {
                                 if let Some(front_ty) = return_frontend_type {
-                                    let abi_type = AbiType::from_frontend(front_ty, &self.struct_defs, ptr_type);
+                                    let abi_type = AbiType::from_frontend(
+                                        front_ty,
+                                        &self.struct_defs,
+                                        ptr_type,
+                                    );
                                     match abi_type {
                                         AbiType::Primitive(_) => {
                                             if let Some(slot) = stack_slot_map.get(dst_str) {
                                                 builder.ins().stack_store(results[0], *slot, 0);
                                             } else {
-                                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst_str, return_type);
+                                                let v = get_or_create_var_impl(
+                                                    &mut builder,
+                                                    &mut var_map,
+                                                    &mut var_idx,
+                                                    dst_str,
+                                                    return_type,
+                                                );
                                                 builder.def_var(v, results[0]);
                                             }
                                         }
                                         AbiType::Aggregate { .. } => {
-                                            let slot = *stack_slot_map.get(dst_str).expect("Destination slot unallocated");
-                                            let base_addr = builder.ins().stack_addr(ptr_type, slot, 0);
-                                            
+                                            let slot = *stack_slot_map
+                                                .get(dst_str)
+                                                .expect("Destination slot unallocated");
+                                            let base_addr =
+                                                builder.ins().stack_addr(ptr_type, slot, 0);
+
                                             for (i, &res_val) in results.iter().enumerate() {
-                                                let offset_addr = builder.ins().iadd_imm(base_addr, (i * 8) as i64);
-                                                builder.ins().store(MemFlags::new(), res_val, offset_addr, 0);
+                                                let offset_addr = builder
+                                                    .ins()
+                                                    .iadd_imm(base_addr, (i * 8) as i64);
+                                                builder.ins().store(
+                                                    MemFlags::new(),
+                                                    res_val,
+                                                    offset_addr,
+                                                    0,
+                                                );
                                             }
                                         }
                                         AbiType::Void => {}
@@ -660,39 +814,65 @@ impl CraneliftBackend {
                     }
                 }
 
-                Instruction::Load { dst, ptr, ty: frontend_load_ty } => {
+                Instruction::Load {
+                    dst,
+                    ptr,
+                    ty: frontend_load_ty,
+                } => {
                     let ptr_ty = BackendType::Ptr;
                     let dst_ty = BackendType::from_frontend(frontend_load_ty);
 
                     let addr = match ptr {
                         Value::Const(n) => builder.ins().iconst(ptr_ty.to_clif_type(ptr_type), *n),
-                        Value::Bool(b) => builder.ins().iconst(ptr_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
+                        Value::Bool(b) => builder
+                            .ins()
+                            .iconst(ptr_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
                                 builder.ins().stack_addr(ptr_type, *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ptr_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    ptr_ty,
+                                );
                                 builder.use_var(v)
                             }
                         }
                         Value::Void => builder.ins().iconst(ptr_ty.to_clif_type(ptr_type), 0),
                         Value::Str(text) => {
                             let data_id = self.declare_string_literal(text);
-                            let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
-                            builder.ins().global_value(ptr_ty.to_clif_type(ptr_type), local_ref)
+                            let local_ref =
+                                self.module.declare_data_in_func(data_id, &mut builder.func);
+                            builder
+                                .ins()
+                                .global_value(ptr_ty.to_clif_type(ptr_type), local_ref)
                         }
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
-                            builder.ins().iconst(ptr_ty.to_clif_type(ptr_type), byte_val as i64)
+                            builder
+                                .ins()
+                                .iconst(ptr_ty.to_clif_type(ptr_type), byte_val as i64)
                         }
                     };
 
-                    let loaded_val = builder.ins().load(dst_ty.to_clif_type(ptr_type), MemFlags::new(), addr, 0);
+                    let loaded_val =
+                        builder
+                            .ins()
+                            .load(dst_ty.to_clif_type(ptr_type), MemFlags::new(), addr, 0);
                     if let Some(slot) = stack_slot_map.get(dst) {
                         builder.ins().stack_store(loaded_val, *slot, 0);
                     } else {
-                        let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, dst, dst_ty);
+                        let v = get_or_create_var_impl(
+                            &mut builder,
+                            &mut var_map,
+                            &mut var_idx,
+                            dst,
+                            dst_ty,
+                        );
                         builder.def_var(v, loaded_val);
                     }
                 }
@@ -706,28 +886,48 @@ impl CraneliftBackend {
                             if let Some(slot) = stack_slot_map.get(name) {
                                 builder.ins().stack_addr(ptr_type, *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ptr_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    ptr_ty,
+                                );
                                 builder.use_var(v)
                             }
                         }
-                        _ => panic!("Direct compilation targeting arbitrary absolute register addresses breaks bounds constraints"),
+                        _ => panic!(
+                            "Direct compilation targeting arbitrary absolute register addresses breaks bounds constraints"
+                        ),
                     };
 
                     let src_val = match source {
                         Value::Const(n) => builder.ins().iconst(src_ty.to_clif_type(ptr_type), *n),
-                        Value::Bool(b) => builder.ins().iconst(src_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
+                        Value::Bool(b) => builder
+                            .ins()
+                            .iconst(src_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(src_ty.to_clif_type(ptr_type), *slot, 0)
+                                builder
+                                    .ins()
+                                    .stack_load(src_ty.to_clif_type(ptr_type), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, src_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    src_ty,
+                                );
                                 builder.use_var(v)
                             }
                         }
                         Value::Char(ch) => {
                             let mut buffer = [0; 4];
                             let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
-                            builder.ins().iconst(src_ty.to_clif_type(ptr_type), byte_val as i64)
+                            builder
+                                .ins()
+                                .iconst(src_ty.to_clif_type(ptr_type), byte_val as i64)
                         }
                         _ => builder.ins().iconst(src_ty.to_clif_type(ptr_type), 0),
                     };
@@ -738,7 +938,14 @@ impl CraneliftBackend {
                 Instruction::Label(lbl_name) => {
                     let block = *label_map.get(lbl_name).unwrap();
                     if let Some(current_block) = builder.current_block() {
-                        if builder.func.layout.last_inst(current_block).map_or(true, |i| !builder.func.dfg.insts[i].opcode().is_terminator()) {
+                        if builder
+                            .func
+                            .layout
+                            .last_inst(current_block)
+                            .map_or(true, |i| {
+                                !builder.func.dfg.insts[i].opcode().is_terminator()
+                            })
+                        {
                             builder.ins().jump(block, &[]);
                         }
                     }
@@ -746,7 +953,9 @@ impl CraneliftBackend {
                 }
 
                 Instruction::Jump(lbl_name) => {
-                    let block = *label_map.get(lbl_name).expect("Target basic block execution path segment missing");
+                    let block = *label_map
+                        .get(lbl_name)
+                        .expect("Target basic block execution path segment missing");
                     builder.ins().jump(block, &[]);
                 }
 
@@ -761,14 +970,22 @@ impl CraneliftBackend {
                             if let Some(slot) = stack_slot_map.get(name) {
                                 builder.ins().stack_load(types::I8, *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, BackendType::Bool);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    BackendType::Bool,
+                                );
                                 builder.use_var(v)
                             }
                         }
                         _ => builder.ins().iconst(types::I8, 0),
                     };
 
-                    builder.ins().brif(cond_val, true_block, &[], false_block, &[]);
+                    builder
+                        .ins()
+                        .brif(cond_val, true_block, &[], false_block, &[]);
                     builder.switch_to_block(true_block);
                 }
 
@@ -777,10 +994,13 @@ impl CraneliftBackend {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         if let AbiType::Aggregate { chunk_count, .. } = abi {
                             if let Value::Var(name) | Value::Temp(name) = value {
-                                let slot = *stack_slot_map.get(name).expect("Return aggregate slot missing");
+                                let slot = *stack_slot_map
+                                    .get(name)
+                                    .expect("Return aggregate slot missing");
                                 let mut ret_vals = Vec::new();
                                 for i in 0..chunk_count {
-                                    let val = builder.ins().stack_load(types::I64, slot, (i * 8) as i32);
+                                    let val =
+                                        builder.ins().stack_load(types::I64, slot, (i * 8) as i32);
                                     ret_vals.push(val);
                                 }
                                 builder.ins().return_(&ret_vals);
@@ -792,12 +1012,22 @@ impl CraneliftBackend {
                     let ret_ty = get_val_backend_type(value);
                     let val = match value {
                         Value::Const(n) => builder.ins().iconst(ret_ty.to_clif_type(ptr_type), *n),
-                        Value::Bool(b) => builder.ins().iconst(ret_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
+                        Value::Bool(b) => builder
+                            .ins()
+                            .iconst(ret_ty.to_clif_type(ptr_type), if *b { 1 } else { 0 }),
                         Value::Var(name) | Value::Temp(name) => {
                             if let Some(slot) = stack_slot_map.get(name) {
-                                builder.ins().stack_load(ret_ty.to_clif_type(ptr_type), *slot, 0)
+                                builder
+                                    .ins()
+                                    .stack_load(ret_ty.to_clif_type(ptr_type), *slot, 0)
                             } else {
-                                let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, ret_ty);
+                                let v = get_or_create_var_impl(
+                                    &mut builder,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    name,
+                                    ret_ty,
+                                );
                                 builder.use_var(v)
                             }
                         }

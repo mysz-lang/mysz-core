@@ -367,7 +367,6 @@ impl IRGen {
                 struct_name,
                 fields,
             } => {
-                // CHANGE #1: Unified allocation strategy
                 let target_val = match target_dest {
                     Some(dest) => dest,
                     None => {
@@ -635,7 +634,6 @@ impl IRGen {
                     .clone()
                     .or_else(|| self.var_types.get(&ident.value).cloned());
 
-                // CHANGE #2: Arrays are stored inline, but structs are copied seamlessly via standard assigns
                 let is_array = match current_ty {
                     Some(Type::Array { .. }) => true,
                     _ => false,

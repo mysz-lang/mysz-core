@@ -42,7 +42,8 @@ fn pub main(): int {
 
     mysz_string_destroy(&string);
     return 0;
-};".to_string();
+};"
+    .to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();
