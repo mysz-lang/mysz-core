@@ -479,8 +479,12 @@ impl Parser {
             vtype = self.parse_type();
         }
 
-        self.expect(TokenType::Assign)?;
-        let expr = self.parse_expr()?;
+        let value = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Assign)) {
+            self.advance(); // consume '='
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
 
         Some(Stmt::Assignment {
             ident: Identifier {
@@ -488,7 +492,7 @@ impl Parser {
                 location: ident_loc,
             },
             vtype: vtype,
-            expr,
+            expr: value,
         })
     }
 

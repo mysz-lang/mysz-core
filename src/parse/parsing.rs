@@ -118,7 +118,7 @@ pub enum Stmt {
     Assignment {
         ident: Identifier,
         vtype: Option<Type>,
-        expr: Expr,
+        expr: Option<Expr>,
     },
     Reassignment {
         ident: Identifier,

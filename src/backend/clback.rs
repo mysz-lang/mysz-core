@@ -74,7 +74,7 @@ impl AbiType {
 
                 AbiType::Aggregate {
                     total_size: size,
-                    chunk_count: (size + 7) / 8, // FIXED: Correctly calculate 64-bit chunks instead of hardcoding 0
+                    chunk_count: (size + 7) / 8,
                 }
             }
 
@@ -84,7 +84,7 @@ impl AbiType {
 
                 AbiType::Aggregate {
                     total_size: total,
-                    chunk_count: (total + 7) / 8, // FIXED: Correctly calculate 64-bit chunks instead of hardcoding 0
+                    chunk_count: (total + 7) / 8,
                 }
             }
 
@@ -311,49 +311,56 @@ impl CraneliftBackend {
         let mut var_idx = 0;
 
         for inst in insts {
-            let mut check_and_alloc_aggregate = |var_name: &String| {
+            let mut alloc_slot = |var_name: &String, force: bool| {
+                if stack_slot_map.contains_key(var_name) {
+                    return;
+                }
                 if let Some(frontend_type) = var_types.get(var_name) {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
+                    let size = match abi {
+                        AbiType::Aggregate { total_size, .. } => Some(total_size),
+                        _ if force => Some(BackendType::from_frontend(frontend_type).byte_size()),
+                        _ => None,
+                    };
+                    if let Some(size) = size {
                         stack_slot_map.entry(var_name.clone()).or_insert_with(|| {
                             builder.create_sized_stack_slot(StackSlotData::new(
                                 StackSlotKind::ExplicitSlot,
-                                total_size,
+                                size,
                             ))
                         });
                     }
                 }
             };
-
             match inst {
-                Instruction::Assign { dst, .. } => check_and_alloc_aggregate(dst),
-                Instruction::Param { p } => check_and_alloc_aggregate(p),
-                Instruction::Load { dst, .. } => check_and_alloc_aggregate(dst),
+                Instruction::Assign { dst, .. } => alloc_slot(dst, false),
+                Instruction::Param { p } => alloc_slot(p, false),
+                Instruction::Load { dst, .. } => alloc_slot(dst, false),
                 Instruction::Store {
                     ptr: Value::Var(n), ..
                 }
                 | Instruction::Store {
                     ptr: Value::Temp(n),
                     ..
-                } => check_and_alloc_aggregate(n),
-                Instruction::Unary { dst, value, .. } => {
-                    check_and_alloc_aggregate(dst);
+                } => alloc_slot(n, false),
+                Instruction::Unary { dst, op, value } => {
+                    alloc_slot(dst, false);
                     if let Value::Var(n) | Value::Temp(n) = value {
-                        check_and_alloc_aggregate(n);
+                        alloc_slot(n, *op == IrOp::Ref);
                     }
                 }
                 Instruction::Binary { dst, lhs, rhs, .. } => {
-                    check_and_alloc_aggregate(dst);
+                    alloc_slot(dst, false);
                     if let Value::Var(n) | Value::Temp(n) = lhs {
-                        check_and_alloc_aggregate(n);
+                        alloc_slot(n, false);
                     }
                     if let Value::Var(n) | Value::Temp(n) = rhs {
-                        check_and_alloc_aggregate(n);
+                        alloc_slot(n, false);
                     }
                 }
                 Instruction::Call {
                     dest: Some(dst), ..
-                } => check_and_alloc_aggregate(dst),
+                } => alloc_slot(dst, false),
                 _ => {}
             }
         }
@@ -459,7 +466,25 @@ impl CraneliftBackend {
                                     size_val,
                                 );
                             }
-                            _ => panic!("Primitive-to-structural dynamic mapping violation"),
+                            _ => {
+                                if matches!(src, Value::Const(0)) {
+                                    let size_val =
+                                        builder.ins().iconst(ptr_type, total_size as i64);
+                                    let zero =
+                                        builder.ins().iconst(cranelift_codegen::ir::types::I8, 0);
+                                    builder.call_memset(
+                                        self.module.target_config(),
+                                        dst_addr,
+                                        zero,
+                                        size_val,
+                                    );
+                                } else {
+                                    panic!(
+                                        "cannot assign scalar {:?} to aggregate destination",
+                                        src
+                                    );
+                                }
+                            }
                         }
                     } else {
                         let val = match src {
@@ -546,8 +571,29 @@ impl CraneliftBackend {
                             _ => b.ins().iconst(ty.to_clif_type(ptr_type), 0),
                         };
 
-                    let lhs_val = evaluate_operand(&mut builder, lhs, dst_ty);
-                    let rhs_val = evaluate_operand(&mut builder, rhs, dst_ty);
+                    let is_cmp = matches!(
+                        op,
+                        IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE
+                    );
+
+                    let operand_ty = if is_cmp {
+                        match (lhs, rhs) {
+                            (Value::Var(n) | Value::Temp(n), _) => var_types
+                                .get(n)
+                                .map(BackendType::from_frontend)
+                                .unwrap_or(BackendType::Int64),
+                            (_, Value::Var(n) | Value::Temp(n)) => var_types
+                                .get(n)
+                                .map(BackendType::from_frontend)
+                                .unwrap_or(BackendType::Int64),
+                            _ => BackendType::Int64,
+                        }
+                    } else {
+                        dst_ty
+                    };
+
+                    let lhs_val = evaluate_operand(&mut builder, lhs, operand_ty);
+                    let rhs_val = evaluate_operand(&mut builder, rhs, operand_ty);
 
                     let res = match op {
                         IrOp::Add => builder.ins().iadd(lhs_val, rhs_val),
@@ -575,10 +621,7 @@ impl CraneliftBackend {
                         IrOp::Pos | IrOp::Neg | IrOp::Ref => builder.ins().iconst(clif_ty, 0),
                     };
 
-                    let normalized_res = if matches!(
-                        op,
-                        IrOp::Eq | IrOp::NEq | IrOp::Gt | IrOp::GtE | IrOp::Lt | IrOp::LtE
-                    ) {
+                    let normalized_res = if is_cmp && clif_ty != types::I8 {
                         builder.ins().uextend(clif_ty, res)
                     } else {
                         res
@@ -962,6 +1005,7 @@ impl CraneliftBackend {
                 Instruction::JumpIfFalse { cond, target } => {
                     let false_block = *label_map.get(target).expect("missing jump target");
                     let true_block = builder.create_block();
+                    all_blocks.push(true_block);
 
                     let cond_val = match cond {
                         Value::Bool(v) => builder.ins().iconst(types::I8, if *v { 1 } else { 0 }),

@@ -253,21 +253,28 @@ impl IRGen {
                 Literal::Bool(b) => Value::Bool(*b),
                 Literal::Char(c) => Value::Char(*c),
                 Literal::Arr { elements } => {
-                    let base_val = match target_dest {
-                        Some(dest) => dest,
-                        None => {
-                            let raw_temp = self.temps.next();
-                            let anon_name = format!("_anon_{}", raw_temp);
-                            Value::Var(anon_name)
-                        }
-                    };
-
                     let element_type = if !elements.is_empty() {
                         self.expr_type(&elements[0]).unwrap_or(Type::Int)
                     } else {
                         Type::Int
                     };
                     let stride = self.element_size(&element_type);
+
+                    let base_val = match target_dest {
+                        Some(dest) => dest,
+                        None => {
+                            let raw_temp = self.temps.next();
+                            let anon_name = format!("_anon_{}", raw_temp);
+                            self.var_types.insert(
+                                anon_name.clone(),
+                                Type::Array {
+                                    element_type: Box::new(element_type.clone()),
+                                    size: elements.len(),
+                                },
+                            );
+                            Value::Var(anon_name)
+                        }
+                    };
 
                     for (index, element_expr) in elements.iter().enumerate() {
                         let element_val = self.gen_expr(element_expr, None);
@@ -640,26 +647,49 @@ impl IRGen {
                 };
 
                 let target_var = Value::Var(ident.value.clone());
+
+                if let Some(expr_node) = expr {
+                    if is_array {
+                        self.gen_expr(expr_node, Some(target_var));
+                    } else {
+                        let value = self.gen_expr(expr_node, None);
+                        if vtype.is_none() {
+                            let computed_ty = self.get_value_type(&value);
+                            self.var_types.insert(ident.value.clone(), computed_ty);
+                        }
+                        self.code.push(Instruction::Assign {
+                            dst: ident.value.clone(),
+                            src: value,
+                        });
+                    }
+                } else {
+                    let default_value = match current_ty {
+                        Some(Type::Int) => Value::Const(0),
+                        Some(Type::Bool) => Value::Bool(false),
+                        Some(Type::Char) => Value::Char('\0'),
+                        Some(Type::Str | Type::Ptr(_)) => Value::Const(0),
+                        _ => Value::Const(0),
+                    };
+
+                    self.code.push(Instruction::Assign {
+                        dst: ident.value.clone(),
+                        src: default_value,
+                    });
+                }
+            }
+            Stmt::Reassignment { ident, expr } => {
+                let is_array = matches!(self.var_types.get(&ident.value), Some(Type::Array { .. }));
+                let target_var = Value::Var(ident.value.clone());
+
                 if is_array {
                     self.gen_expr(expr, Some(target_var));
                 } else {
                     let value = self.gen_expr(expr, None);
-                    if vtype.is_none() {
-                        let computed_ty = self.get_value_type(&value);
-                        self.var_types.insert(ident.value.clone(), computed_ty);
-                    }
                     self.code.push(Instruction::Assign {
                         dst: ident.value.clone(),
                         src: value,
                     });
                 }
-            }
-            Stmt::Reassignment { ident, expr } => {
-                let value = self.gen_expr(expr, None);
-                self.code.push(Instruction::Assign {
-                    dst: ident.value.clone(),
-                    src: value,
-                });
             }
             Stmt::Expr(expr) => {
                 if let ExprKind::Call { callee, args } = &expr.kind {

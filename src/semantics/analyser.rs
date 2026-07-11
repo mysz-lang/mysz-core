@@ -503,37 +503,45 @@ impl Analyser {
             }
 
             Stmt::Assignment { ident, vtype, expr } => {
-                let expr_type = self.check_expr(expr, vtype.as_ref())?;
+                let variable_type = match (vtype, expr) {
+                    (Some(explicit_type), Some(expr_node)) => {
+                        self.validate_type_exists(explicit_type, &ident.location)?;
+                        let expr_type = self.check_expr(expr_node, Some(explicit_type))?;
 
-                if let Some(explicit_type) = vtype {
-                    self.validate_type_exists(explicit_type, &ident.location)?;
-
-                    if *explicit_type != expr_type {
-                        return Err(format!(
-                            "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
-                            expr.span, ident.value, explicit_type, expr_type
-                        ));
-                    }
-                    self.declare_variable(
-                        &ident.value,
-                        explicit_type.clone(),
-                        ident.location.clone(),
-                    )?;
-                } else {
-                    if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                        if existing_symbol.data_type != expr_type
-                            && existing_symbol.data_type != Type::Any
-                            && expr_type != Type::Any
-                        {
+                        if *explicit_type != expr_type {
                             return Err(format!(
-                                "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
-                                expr.span, expr_type, ident.value, existing_symbol.data_type
+                                "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
+                                expr_node.span, ident.value, explicit_type, expr_type
                             ));
                         }
-                    } else {
-                        self.declare_variable(&ident.value, expr_type, ident.location.clone())?;
+                        explicit_type.clone()
                     }
+                    (Some(explicit_type), None) => {
+                        self.validate_type_exists(explicit_type, &ident.location)?;
+                        explicit_type.clone()
+                    }
+                    (None, Some(expr_node)) => self.check_expr(expr_node, None)?,
+                    (None, None) => {
+                        return Err(format!(
+                            "Semantic Error [{}]: Variable '{}' declared without an explicit type or initializer expression.",
+                            ident.location, ident.value
+                        ));
+                    }
+                };
+                if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
+                    if existing_symbol.data_type != variable_type
+                        && existing_symbol.data_type != Type::Any
+                        && variable_type != Type::Any
+                    {
+                        return Err(format!(
+                            "Type Error [{}]: Cannot reassign type '{:?}' to variable '{}' of type '{:?}'",
+                            ident.location, variable_type, ident.value, existing_symbol.data_type
+                        ));
+                    }
+                } else {
+                    self.declare_variable(&ident.value, variable_type, ident.location.clone())?;
                 }
+
                 Ok(())
             }
 
