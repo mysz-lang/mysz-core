@@ -58,6 +58,11 @@ pub struct IRGen {
     pub var_types: HashMap<String, Type>,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
+
+    pub fn_blueprints: HashMap<String, Stmt>,
+    pub instantiated_fns: std::collections::HashSet<String>,
+    pub deferred_instantiations: Vec<(String, Vec<Type>)>,
+    pub current_substitutions: HashMap<String, Type>,
 }
 
 impl IRGen {
@@ -70,6 +75,11 @@ impl IRGen {
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
             var_types: types,
+
+            fn_blueprints: HashMap::new(),
+            instantiated_fns: std::collections::HashSet::new(),
+            deferred_instantiations: Vec::new(),
+            current_substitutions: HashMap::new(),
         }
     }
 
@@ -130,7 +140,13 @@ impl IRGen {
     }
 
     pub fn resolve_type(&mut self, ty: &Type) -> Type {
-        match ty {
+        let substituted = if !self.current_substitutions.is_empty() {
+            self.substitute_type(ty, &self.current_substitutions.clone())
+        } else {
+            ty.clone()
+        };
+
+        match &substituted {
             Type::GenericInstance { name, args } => {
                 let resolved_args: Vec<Type> =
                     args.iter().map(|arg| self.resolve_type(arg)).collect();
@@ -160,7 +176,7 @@ impl IRGen {
                 element_type: Box::new(self.resolve_type(element_type)),
                 size: *size,
             },
-            _ => ty.clone(),
+            _ => substituted,
         }
     }
 
@@ -401,7 +417,8 @@ impl IRGen {
     pub fn gen_expr(&mut self, expr: &Expr, target_dest: Option<Value>) -> Value {
         match &expr.kind {
             ExprKind::Sizeof { ty } => {
-                let size = self.type_size(ty);
+                let resolved_ty = self.resolve_type(ty);
+                let size = self.type_size(&resolved_ty);
                 Value::Const(size)
             }
             ExprKind::Literal(lit) => match lit {
@@ -781,6 +798,37 @@ impl IRGen {
                     }
                 }
 
+                // Add this block to queue instantiation and pre-resolve return types:
+                if !generic_args.is_empty() && !self.instantiated_fns.contains(&resolved_func_name)
+                {
+                    self.instantiated_fns.insert(resolved_func_name.clone());
+                    self.deferred_instantiations
+                        .push((callee.value.clone(), generic_args.clone()));
+
+                    if let Some(Stmt::Function {
+                        generic_params,
+                        rttype,
+                        ..
+                    }) = self.fn_blueprints.get(&callee.value).cloned()
+                    {
+                        let substitutions: HashMap<String, Type> = generic_params
+                            .iter()
+                            .cloned()
+                            .zip(generic_args.iter().cloned())
+                            .collect();
+                        let unres_ty = rttype.unwrap_or(Type::Void);
+                        let sub_ty = self.substitute_type(&unres_ty, &substitutions);
+
+                        let old_subs = self.current_substitutions.clone();
+                        self.current_substitutions = substitutions;
+                        let resolved_rttype = self.resolve_type(&sub_ty);
+                        self.current_substitutions = old_subs;
+
+                        self.var_types
+                            .insert(resolved_func_name.clone(), resolved_rttype);
+                    }
+                }
+
                 let return_ty = self
                     .var_types
                     .get(&resolved_func_name)
@@ -926,6 +974,38 @@ impl IRGen {
                         }
                     }
 
+                    // Add this block to queue instantiation and pre-resolve return types:
+                    if !generic_args.is_empty()
+                        && !self.instantiated_fns.contains(&resolved_func_name)
+                    {
+                        self.instantiated_fns.insert(resolved_func_name.clone());
+                        self.deferred_instantiations
+                            .push((callee.value.clone(), generic_args.clone()));
+
+                        if let Some(Stmt::Function {
+                            generic_params,
+                            rttype,
+                            ..
+                        }) = self.fn_blueprints.get(&callee.value).cloned()
+                        {
+                            let substitutions: HashMap<String, Type> = generic_params
+                                .iter()
+                                .cloned()
+                                .zip(generic_args.iter().cloned())
+                                .collect();
+                            let unres_ty = rttype.unwrap_or(Type::Void);
+                            let sub_ty = self.substitute_type(&unres_ty, &substitutions);
+
+                            let old_subs = self.current_substitutions.clone();
+                            self.current_substitutions = substitutions;
+                            let resolved_rttype = self.resolve_type(&sub_ty);
+                            self.current_substitutions = old_subs;
+
+                            self.var_types
+                                .insert(resolved_func_name.clone(), resolved_rttype);
+                        }
+                    }
+
                     self.code.push(Instruction::Call {
                         dest: None,
                         name: resolved_func_name,
@@ -1010,9 +1090,11 @@ impl IRGen {
                 generic_params,
                 params,
                 body,
+                rttype,
                 ..
             } => {
                 if !generic_params.is_empty() {
+                    self.fn_blueprints.insert(name.value.clone(), stmt.clone());
                     return;
                 }
 
@@ -1032,8 +1114,15 @@ impl IRGen {
                 }
 
                 if !matches!(body.last(), Some(Stmt::Return { .. })) {
+                    let return_ty = rttype.clone().unwrap_or(Type::Void);
+                    let fallback_val = if return_ty == Type::Void {
+                        Value::Void
+                    } else {
+                        Value::Const(0)
+                    };
+
                     self.code.push(Instruction::Return {
-                        value: Value::Const(0),
+                        value: fallback_val,
                     });
                 }
             }
@@ -1042,9 +1131,7 @@ impl IRGen {
                     let val = self.gen_expr(expr, None);
                     self.code.push(Instruction::Return { value: val });
                 } else {
-                    self.code.push(Instruction::Return {
-                        value: Value::Const(0),
-                    })
+                    self.code.push(Instruction::Return { value: Value::Void })
                 }
             }
             Stmt::Extern { name, rttype, .. } => {
@@ -1199,6 +1286,65 @@ impl IRGen {
                 std::process::exit(1);
             }
             self.gen_stmt(stmt);
+        }
+
+        while let Some((callee_name, args)) = self.deferred_instantiations.pop() {
+            if let Some(blueprint) = self.fn_blueprints.get(&callee_name).cloned() {
+                if let Stmt::Function {
+                    name,
+                    generic_params,
+                    params,
+                    body,
+                    rttype,
+                    ..
+                } = blueprint
+                {
+                    let mut resolved_func_name = name.value.clone();
+                    for arg_type in &args {
+                        resolved_func_name.push_str("__");
+                        resolved_func_name.push_str(&self.mangle_type(arg_type));
+                    }
+
+                    let substitutions: HashMap<String, Type> = generic_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned())
+                        .collect();
+
+                    let old_subs = self.current_substitutions.clone();
+                    self.current_substitutions = substitutions;
+
+                    self.code
+                        .push(Instruction::FunctionLabel(resolved_func_name.clone()));
+
+                    for param in params {
+                        if let Some(param_ty) = &param.ptype {
+                            let resolved_param_ty = self.resolve_type(param_ty);
+                            self.var_types
+                                .insert(param.name.value.clone(), resolved_param_ty);
+                        }
+                        self.gen_param(&param);
+                    }
+
+                    for stmt in body {
+                        self.gen_stmt(&stmt);
+                    }
+
+                    let return_ty = rttype.unwrap_or(Type::Void);
+                    if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
+                        let fallback_val = if return_ty == Type::Void {
+                            Value::Void
+                        } else {
+                            Value::Const(0)
+                        };
+                        self.code.push(Instruction::Return {
+                            value: fallback_val,
+                        });
+                    }
+
+                    self.current_substitutions = old_subs;
+                }
+            }
         }
     }
 

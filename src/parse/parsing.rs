@@ -123,7 +123,7 @@ pub struct Parameter {
     pub ptype: Option<Type>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Assignment {
         ident: Identifier,

@@ -1,141 +1,66 @@
-// This is a test file, use library instead of this.
-
 pub mod backend;
+pub mod compiler;
 pub mod ir;
 pub mod lexing;
 pub mod parse;
 pub mod semantics;
 pub mod utils;
 
-use std::fs::File;
-use std::io::{Read, Write};
-
-use backend::clback;
-use cranelift::codegen::Context;
-use cranelift_frontend::FunctionBuilderContext;
-use ir::ir::IRGen;
 use lexing::lexer::Lexer;
 use parse::parser::Parser as myszparser;
-use semantics::analyser::Analyser;
-
-use crate::ir::tac::Instruction;
-use crate::parse::parsing::{Program, Stmt};
 
 fn main() {
-    let source: String = "".to_string();
+    let source: &str = r#"
+struct MyszArray<T> {
+    length: int,
+    capacity: int,
+    elementSize: int,
+    data: ptr<T>,
+};
 
-    let mut lexer = Lexer::new(source);
+extern fn mysz_array_init<T>(arr: ptr<MyszArray<T>>, elementSize: int);
+fn pub MyszArray_init<T>(arr: ptr<MyszArray<T>>) {
+    mysz_array_init::<T>(arr, sizeof(T)); 
+};
+
+extern fn mysz_array_reserve<T>(arr: ptr<MyszArray<T>>, minCapacity: int);
+extern fn mysz_array_push<T>(arr: ptr<MyszArray<T>>, element: ptr<T>);
+extern fn mysz_array_destroy<T>(arr: ptr<MyszArray<T>>);
+
+extern fn print_char(val: char);
+
+fn pub main(): int {
+    var x: MyszArray<char>;
+    MyszArray_init::<char>(&x);
+    
+    mysz_array_push::<char>(&x, &'H');
+    mysz_array_push::<char>(&x, &'e');
+    mysz_array_push::<char>(&x, &'l');
+    mysz_array_push::<char>(&x, &'l');
+    mysz_array_push::<char>(&x, &'o');
+    mysz_array_push::<char>(&x, &'!');
+
+    for (var i = 0; i < x.length; i = i + 1) {
+        print_char(x.data[i]);
+    };
+    
+    return 0;
+};
+    "#;
+
+    let mut lexer = Lexer::new(source.to_string());
     lexer.lex();
-
-    // println!("{:#?}", lexer.tokens);
 
     let mut parser = myszparser::new(lexer.tokens);
     parser.parse();
-
     if !parser.parser_errs.is_empty() {
-        for perror in parser.parser_errs {
-            println!("{}", perror);
-        }
+        eprintln!("Parsing inline source failed.");
         return;
     }
 
-    // println!("{:#?}", parser.ast);
-
-    let initial_program = parser.ast;
-
-    let mut flattened_statements = Vec::new();
-
-    for stmt in initial_program.statements {
-        if let Stmt::Use { path } = stmt {
-            let module_filename = format!("{}.mysz", path.join("/"));
-
-            let mut mod_file = File::open(&module_filename)
-                .unwrap_or_else(|_| panic!("Failed to open module file: {}", module_filename));
-            let mut mod_source = String::new();
-            mod_file
-                .read_to_string(&mut mod_source)
-                .expect("Failed to read module source");
-
-            let mut mod_lexer = Lexer::new(mod_source);
-            mod_lexer.lex();
-
-            let mut mod_parser = myszparser::new(mod_lexer.tokens);
-            mod_parser.parse();
-
-            if !mod_parser.parser_errs.is_empty() {
-                println!("Errors parsing standard module {}:", module_filename);
-                for perror in mod_parser.parser_errs {
-                    println!("{}", perror);
-                }
-                return;
-            }
-
-            flattened_statements.extend(mod_parser.ast.statements);
-        } else {
-            flattened_statements.push(stmt);
-        }
+    println!("Starting compilation of inline string via compiler driver...");
+    match compiler::compile_ast_program(&parser.ast, "output.o") {
+        Ok(_) => println!("Compilation successful! Written to output.o"),
+        Err(e) => eprintln!("Compilation failed: {}", e),
     }
-
-    let program = Program {
-        statements: flattened_statements,
-    };
-
-    let mut analyser = Analyser::new();
-    if let Err(e) = analyser.analyse(&program) {
-        println!("{}", e);
-        return;
-    }
-
-    // println!("analyser types:\n{:#?}", analyser.types);
-
-    let mut irgen = IRGen::new(analyser.types);
-    irgen.gen_program(&program);
-    irgen.dump();
-
-    let tac_instructions = irgen.code;
-
-    let functions_to_compile: Vec<(String, bool)> = program
-        .statements
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Stmt::Function { name, public, .. } => Some((name.value.clone(), *public)),
-            _ => None,
-        })
-        .collect();
-
-    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs);
-    backend.scan_externs(&tac_instructions);
-
-    let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
-    backend.pre_declare_strings(&instruction_refs);
-
-    for (func_name, is_public) in functions_to_compile {
-        let func_instructions: Vec<&Instruction> = tac_instructions
-            .iter()
-            .skip_while(
-                |inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name),
-            )
-            .skip(1)
-            .take_while(|inst| !matches!(inst, Instruction::FunctionLabel(_)))
-            .collect();
-
-        let mut ctx = Context::new();
-        let mut func_ctx = FunctionBuilderContext::new();
-
-        backend.compile_function(
-            &func_name,
-            is_public,
-            &func_instructions,
-            &mut ctx,
-            &mut func_ctx,
-            &irgen.var_types,
-        );
-    }
-
-    let product = backend.finish();
-    let emit_result = product.emit().expect("Failed to emit object code");
-
-    let mut file = File::create("output.o").expect("Failed to create output file");
-    file.write_all(&emit_result)
-        .expect("Failed to write binary payload to disk");
 }

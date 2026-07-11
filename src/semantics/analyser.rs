@@ -93,6 +93,34 @@ impl Analyser {
         name
     }
 
+    fn normalise_type(&self, ty: &Type) -> Type {
+        match ty {
+            Type::GenericInstance { name, args } => {
+                let mut mangled_name = name.clone();
+                for arg in args {
+                    mangled_name.push_str("__");
+                    match arg {
+                        Type::Int => mangled_name.push_str("int"),
+                        Type::Bool => mangled_name.push_str("bool"),
+                        Type::Str => mangled_name.push_str("str"),
+                        Type::Char => mangled_name.push_str("char"),
+                        Type::Void => mangled_name.push_str("void"),
+                        Type::Any => mangled_name.push_str("any"),
+                        Type::Struct(n) => mangled_name.push_str(n),
+                        _ => mangled_name.push_str("type"),
+                    }
+                }
+                Type::Struct(mangled_name)
+            }
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.normalise_type(inner))),
+            Type::Array { element_type, size } => Type::Array {
+                element_type: Box::new(self.normalise_type(element_type)),
+                size: *size,
+            },
+            _ => ty.clone(),
+        }
+    }
+
     fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
         match ty {
             Type::Ptr(inner) => {
@@ -566,7 +594,10 @@ impl Analyser {
                         }
 
                         _ => {
-                            if expected != &arg_type
+                            let norm_expected = self.normalise_type(expected);
+                            let norm_arg = self.normalise_type(&arg_type);
+
+                            if norm_expected != norm_arg
                                 && *expected != Type::Any
                                 && arg_type != Type::Any
                             {

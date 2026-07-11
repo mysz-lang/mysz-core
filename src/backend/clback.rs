@@ -113,6 +113,33 @@ impl AbiType {
                 }
             }
 
+            Type::GenericInstance { name, .. } => {
+                let clean_name = strip_mangling(name);
+                let mut layout = struct_defs
+                    .get(clean_name)
+                    .or_else(|| struct_defs.get(name));
+
+                if layout.is_none() {
+                    if let Some(base_name) = clean_name.split('<').next() {
+                        layout = struct_defs.get(base_name);
+                    }
+                }
+
+                let size = layout
+                    .map(|x| x.total_size as u32)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Backend Error: GenericInstance structure layout for '{}' not found in struct_defs!",
+                            clean_name
+                        );
+                    });
+
+                AbiType::Aggregate {
+                    total_size: size,
+                    chunk_count: (size + 7) / 8,
+                }
+            }
+
             other => AbiType::Primitive(BackendType::from_frontend(other).to_clif_type(ptr_type)),
         }
     }
@@ -233,7 +260,13 @@ impl CraneliftBackend {
         arg_types: &[BackendType],
         frontend_return_type: Option<&Type>,
     ) -> FuncId {
-        let name = strip_mangling(raw_name);
+        // Only strip mangling if the stripped base name is an explicit external function!
+        let stripped_name = strip_mangling(raw_name);
+        let name = if self.extern_names.contains(stripped_name) {
+            stripped_name
+        } else {
+            raw_name // Keep "MyszArray_init__char" intact so it gets its own unique signature!
+        };
 
         if let Some(id) = self.declared_funcs.get(name) {
             return *id;
@@ -254,6 +287,7 @@ impl CraneliftBackend {
             }
         }
 
+        // Use the mapped 'name' variable here too
         let linkage = if self.extern_names.contains(name) {
             Linkage::Import
         } else if public {
@@ -308,6 +342,7 @@ impl CraneliftBackend {
             sig.returns.push(AbiParam::new(types::I64));
         }
 
+        let mut param_backend_types: Vec<BackendType> = Vec::new();
         for inst in insts {
             if let Instruction::Param { p } = inst {
                 let ty = var_types
@@ -315,10 +350,12 @@ impl CraneliftBackend {
                     .map(BackendType::from_frontend)
                     .unwrap_or(BackendType::Int64);
                 sig.params.push(AbiParam::new(ty.to_clif_type(ptr_type)));
+                param_backend_types.push(ty);
             }
         }
 
-        let func_id = self.get_or_declare_func(name, public, &[], current_func_ret_front);
+        let func_id =
+            self.get_or_declare_func(name, public, &param_backend_types, current_func_ret_front);
         self.declared_funcs.insert(name.to_string(), func_id);
         ctx.func.signature = sig;
 
@@ -358,35 +395,69 @@ impl CraneliftBackend {
                     }
                 }
             };
-            match inst {
-                Instruction::Assign { dst, .. } => alloc_slot(dst, false),
-                Instruction::Param { p } => alloc_slot(p, false),
-                Instruction::Load { dst, .. } => alloc_slot(dst, false),
+
+            // Detect if the primary variable in the instruction is structural
+            let inst_var = match inst {
+                Instruction::Assign { dst, .. } => Some(dst),
+                Instruction::Param { p } => Some(p),
+                Instruction::Load { dst, .. } => Some(dst),
                 Instruction::Store {
                     ptr: Value::Var(n), ..
                 }
                 | Instruction::Store {
                     ptr: Value::Temp(n),
                     ..
-                } => alloc_slot(n, false),
+                } => Some(n),
+                Instruction::Unary { dst, .. } => Some(dst),
+                Instruction::Binary { dst, .. } => Some(dst),
+                Instruction::Call {
+                    dest: Some(dst), ..
+                } => Some(dst),
+                _ => None,
+            };
+
+            let is_structural = if let Some(var_name) = inst_var {
+                if let Some(frontend_type) = var_types.get(var_name) {
+                    matches!(
+                        frontend_type,
+                        Type::Struct(_) | Type::GenericInstance { .. }
+                    )
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            match inst {
+                Instruction::Assign { dst, .. } => alloc_slot(dst, is_structural),
+                Instruction::Param { p } => alloc_slot(p, is_structural),
+                Instruction::Load { dst, .. } => alloc_slot(dst, is_structural),
+                Instruction::Store {
+                    ptr: Value::Var(n), ..
+                }
+                | Instruction::Store {
+                    ptr: Value::Temp(n),
+                    ..
+                } => alloc_slot(n, is_structural),
                 Instruction::Unary { dst, op, value } => {
-                    alloc_slot(dst, false);
+                    alloc_slot(dst, is_structural);
                     if let Value::Var(n) | Value::Temp(n) = value {
-                        alloc_slot(n, *op == IrOp::Ref);
+                        alloc_slot(n, *op == IrOp::Ref || is_structural);
                     }
                 }
                 Instruction::Binary { dst, lhs, rhs, .. } => {
-                    alloc_slot(dst, false);
+                    alloc_slot(dst, is_structural);
                     if let Value::Var(n) | Value::Temp(n) = lhs {
-                        alloc_slot(n, false);
+                        alloc_slot(n, is_structural);
                     }
                     if let Value::Var(n) | Value::Temp(n) = rhs {
-                        alloc_slot(n, false);
+                        alloc_slot(n, is_structural);
                     }
                 }
                 Instruction::Call {
                     dest: Some(dst), ..
-                } => alloc_slot(dst, false),
+                } => alloc_slot(dst, is_structural),
                 _ => {}
             }
         }
@@ -842,10 +913,10 @@ impl CraneliftBackend {
 
                 Instruction::Call {
                     dest,
-                    name: raw_name,
+                    name,
                     argc: _,
                 } => {
-                    let name = strip_mangling(raw_name);
+                    // let name = strip_mangling(raw_name);
 
                     let return_frontend_type = dest.as_ref().and_then(|d| var_types.get(d));
                     let return_type = return_frontend_type
@@ -1096,6 +1167,11 @@ impl CraneliftBackend {
                 }
 
                 Instruction::Return { value } => {
+                    if matches!(value, Value::Void) {
+                        builder.ins().return_(&[]);
+                        continue;
+                    }
+
                     if let Some(front_ret) = current_func_ret_front {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         if let AbiType::Aggregate { chunk_count, .. } = abi {
@@ -1144,18 +1220,27 @@ impl CraneliftBackend {
             }
         }
 
+        let default_ret_abi = current_func_ret_front
+            .map(|front_ret| AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type))
+            .unwrap_or(AbiType::Primitive(types::I64));
+
         for &block in &all_blocks {
-            if let Some(last_inst) = builder.func.layout.last_inst(block) {
-                let opcode = builder.func.dfg.insts[last_inst].opcode();
-                if !opcode.is_terminator() {
-                    builder.switch_to_block(block);
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    builder.ins().return_(&[zero]);
-                }
-            } else {
+            let needs_fallback = match builder.func.layout.last_inst(block) {
+                Some(last_inst) => !builder.func.dfg.insts[last_inst].opcode().is_terminator(),
+                None => true,
+            };
+            if needs_fallback {
                 builder.switch_to_block(block);
-                let zero = builder.ins().iconst(types::I64, 0);
-                builder.ins().return_(&[zero]);
+                let ret_vals: Vec<_> = match &default_ret_abi {
+                    AbiType::Void => Vec::new(),
+                    AbiType::Primitive(clif_ty) => {
+                        vec![builder.ins().iconst(*clif_ty, 0)]
+                    }
+                    AbiType::Aggregate { chunk_count, .. } => (0..*chunk_count)
+                        .map(|_| builder.ins().iconst(types::I64, 0))
+                        .collect(),
+                };
+                builder.ins().return_(&ret_vals);
             }
         }
 
