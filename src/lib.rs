@@ -20,6 +20,76 @@ use crate::backend::clback;
 use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Program, Stmt};
 
+use std::collections::HashSet;
+
+fn flatten_program_statements(
+    statements: Vec<Stmt>,
+    search_paths: &[PathBuf],
+    visited: &mut HashSet<PathBuf>,
+) -> Result<Vec<Stmt>, String> {
+    let mut flattened = Vec::new();
+
+    for stmt in statements {
+        if let Stmt::Use { path } = stmt {
+            let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
+                format!(
+                    "Module Error: Could not find module '{}' in search paths or CWD.",
+                    path.join("::")
+                )
+            })?;
+
+            if visited.contains(&resolved_path) {
+                return Err(format!(
+                    "Module Error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself via a loop.",
+                    path.join("::"),
+                    resolved_path
+                ));
+            }
+
+            let mut mod_file = File::open(&resolved_path)
+                .map_err(|e| format!("Failed to open module file {:?}: {}", resolved_path, e))?;
+            let mut mod_source = String::new();
+            mod_file
+                .read_to_string(&mut mod_source)
+                .map_err(|e| format!("Failed to read module file {:?}: {}", resolved_path, e))?;
+
+            let mut mod_lexer = Lexer::new(mod_source);
+            mod_lexer.lex();
+
+            let mut mod_parser = myszparser::new(mod_lexer.tokens);
+            mod_parser.parse();
+
+            if !mod_parser.parser_errs.is_empty() {
+                let errs: Vec<String> = mod_parser
+                    .parser_errs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect();
+                return Err(format!(
+                    "Errors inside parsed module {:?}:\n{}",
+                    resolved_path,
+                    errs.join("\n")
+                ));
+            }
+
+            visited.insert(resolved_path.clone());
+
+            let nested_statements = flatten_program_statements(
+                mod_parser.ast.statements,
+                search_paths,
+                visited
+            )?;
+            flattened.extend(nested_statements);
+
+            visited.remove(&resolved_path);
+        } else {
+            flattened.push(stmt);
+        }
+    }
+
+    Ok(flattened)
+}
+
 fn find_module_file(path: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
     let rel_path_str = format!("{}.mysz", path.join("/"));
     let rel_path = Path::new(&rel_path_str);
@@ -58,48 +128,13 @@ pub fn compile_source(
     }
     let initial_program = parser.ast;
 
-    let mut flattened_statements = Vec::new();
+    let mut visited_modules = HashSet::new();
 
-    for stmt in initial_program.statements {
-        if let Stmt::Use { path } = stmt {
-            let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
-                format!(
-                    "Module Error: Could not find module '{}' in search paths or CWD.",
-                    path.join("::")
-                )
-            })?;
-
-            let mut mod_file = File::open(&resolved_path)
-                .map_err(|e| format!("Failed to open module file {:?}: {}", resolved_path, e))?;
-            let mut mod_source = String::new();
-            mod_file
-                .read_to_string(&mut mod_source)
-                .map_err(|e| format!("Failed to read module file {:?}: {}", resolved_path, e))?;
-
-            let mut mod_lexer = Lexer::new(mod_source);
-            mod_lexer.lex();
-
-            let mut mod_parser = myszparser::new(mod_lexer.tokens);
-            mod_parser.parse();
-
-            if !mod_parser.parser_errs.is_empty() {
-                let errs: Vec<String> = mod_parser
-                    .parser_errs
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect();
-                return Err(format!(
-                    "Errors inside parsed module {:?}:\n{}",
-                    resolved_path,
-                    errs.join("\n")
-                ));
-            }
-
-            flattened_statements.extend(mod_parser.ast.statements);
-        } else {
-            flattened_statements.push(stmt);
-        }
-    }
+    let flattened_statements = flatten_program_statements(
+        initial_program.statements,
+        search_paths,
+        &mut visited_modules,
+    )?;
 
     let program = Program {
         statements: flattened_statements,

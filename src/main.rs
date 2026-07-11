@@ -3,7 +3,6 @@
 pub mod backend;
 pub mod ir;
 pub mod lexing;
-pub mod main_helper;
 pub mod parse;
 pub mod semantics;
 pub mod utils;
