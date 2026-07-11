@@ -155,7 +155,9 @@ impl Lexer {
                         self.single_char(TokenType::Multiply);
                     }
                     '/' => {
-                        self.single_char(TokenType::Divide);
+                        if let Some(t) = self.lex_slash() {
+                            self.add_token(t);
+                        }
                     }
                     '%' => {
                         self.single_char(TokenType::Modulo);
@@ -165,6 +167,55 @@ impl Lexer {
                 }
             }
         }
+    }
+
+    fn lex_slash(&mut self) -> Option<Token> {
+        let loc = self.current_location();
+        let current = self.get_char().expect("Unexpected EOF at '/'");
+
+        if self.peek(1) == Some('/') {
+            if self.peek(2) == Some('\'') {
+                // Multi-line comment: //' ... '//
+                self.advance(); // /
+                self.advance(); // /
+                self.advance(); // '
+
+                loop {
+                    match self.get_char() {
+                        None => {
+                            panic!("Unexpected EOF inside multi-line comment (missing closing '//)")
+                        }
+                        Some('\'') if self.peek(1) == Some('/') && self.peek(2) == Some('/') => {
+                            self.advance(); // '
+                            self.advance(); // /
+                            self.advance(); // /
+                            break;
+                        }
+                        Some(_) => self.advance(),
+                    }
+                }
+            } else {
+                self.advance(); // /
+                self.advance(); // /
+
+                while let Some(ch) = self.get_char() {
+                    if ch == '\n' {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+
+            return None;
+        }
+
+        self.advance();
+
+        Some(Token {
+            ttype: TokenType::Divide,
+            location: loc,
+            value: current.to_string(),
+        })
     }
 
     fn lex_colon(&mut self) -> Token {

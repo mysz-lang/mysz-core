@@ -11,39 +11,20 @@ use parse::parser::Parser as myszparser;
 
 fn main() {
     let source: &str = r#"
-struct MyszArray<T> {
-    length: int,
-    capacity: int,
-    elementSize: int,
-    data: ptr<T>,
-};
+// this is a comment!
 
-extern fn mysz_array_init<T>(arr: ptr<MyszArray<T>>, elementSize: int);
-fn pub MyszArray_init<T>(arr: ptr<MyszArray<T>>) {
-    mysz_array_init::<T>(arr, sizeof(T)); 
-};
+//'
+This is a multi-line
+comment
+'//
 
-extern fn mysz_array_reserve<T>(arr: ptr<MyszArray<T>>, minCapacity: int);
-extern fn mysz_array_push<T>(arr: ptr<MyszArray<T>>, element: ptr<T>);
-extern fn mysz_array_destroy<T>(arr: ptr<MyszArray<T>>);
+//' testing single-line multi-line comment '//
 
-extern fn print_char(val: char);
+extern fn print_str(val: str);
 
 fn pub main(): int {
-    var x: MyszArray<char>;
-    MyszArray_init::<char>(&x);
-    
-    mysz_array_push::<char>(&x, &'H');
-    mysz_array_push::<char>(&x, &'e');
-    mysz_array_push::<char>(&x, &'l');
-    mysz_array_push::<char>(&x, &'l');
-    mysz_array_push::<char>(&x, &'o');
-    mysz_array_push::<char>(&x, &'!');
-
-    for (var i = 0; i < x.length; i = i + 1) {
-        print_char(x.data[i]);
-    };
-    
+    var x: str = "https://github.com";
+    print_str(x);
     return 0;
 };
     "#;
