@@ -23,7 +23,26 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Program, Stmt};
 
 fn main() {
-    let source: String = "".to_string();
+    let source: String = "
+struct MyszString {
+    length: int,
+    data: ptr<char>,
+};
+
+extern fn print_String(val: ptr<MyszString>);
+extern fn mysz_string_new(val: str): MyszString;
+extern fn mysz_string_destroy(val: ptr<MyszString>);
+
+fn pub main(): int {
+    var string: MyszString = mysz_string_new(\"Hello, world!\");
+    print_String(&string);
+    
+    string.data[12] = '?';
+    print_String(&string);
+
+    mysz_string_destroy(&string);
+    return 0;
+};".to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();

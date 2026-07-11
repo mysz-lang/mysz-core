@@ -624,7 +624,6 @@ impl CraneliftBackend {
                     let local_callee = self.get_or_declare_func(name, is_extern, &call_arg_types, return_frontend_type);
                     let local_clif_ref = self.module.declare_func_in_func(local_callee, &mut builder.func);
 
-                    // Execute the call with clean arguments
                     let call_inst = builder.ins().call(local_clif_ref, &call_args);
                     call_args.clear();
                     call_arg_types.clear();
@@ -644,11 +643,13 @@ impl CraneliftBackend {
                                                 builder.def_var(v, results[0]);
                                             }
                                         }
-                                        // Store register chunks (rax, rdx) into the struct stack slot
                                         AbiType::Aggregate { .. } => {
                                             let slot = *stack_slot_map.get(dst_str).expect("Destination slot unallocated");
+                                            let base_addr = builder.ins().stack_addr(ptr_type, slot, 0);
+                                            
                                             for (i, &res_val) in results.iter().enumerate() {
-                                                builder.ins().stack_store(res_val, slot, (i * 8) as i32);
+                                                let offset_addr = builder.ins().iadd_imm(base_addr, (i * 8) as i64);
+                                                builder.ins().store(MemFlags::new(), res_val, offset_addr, 0);
                                             }
                                         }
                                         AbiType::Void => {}
@@ -722,6 +723,11 @@ impl CraneliftBackend {
                                 let v = get_or_create_var_impl(&mut builder, &mut var_map, &mut var_idx, name, src_ty);
                                 builder.use_var(v)
                             }
+                        }
+                        Value::Char(ch) => {
+                            let mut buffer = [0; 4];
+                            let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                            builder.ins().iconst(src_ty.to_clif_type(ptr_type), byte_val as i64)
                         }
                         _ => builder.ins().iconst(src_ty.to_clif_type(ptr_type), 0),
                     };
