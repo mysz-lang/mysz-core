@@ -8,6 +8,16 @@ use crate::ir::ir::StructLayout;
 use crate::ir::tac::{Instruction, IrOp, Value};
 use crate::parse::parsing::Type;
 
+/// Helper function to strip generic and name-mangling suffixes entirely
+fn strip_mangling(name: &str) -> &str {
+    name.split("__")
+        .next()
+        .unwrap_or(name)
+        .split('<')
+        .next()
+        .unwrap_or(name)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType {
     Int32,
@@ -67,10 +77,28 @@ impl AbiType {
             Type::Void => AbiType::Void,
 
             Type::Struct(name) => {
-                let size = struct_defs
-                    .get(name)
+                // Completely strip out structural mangling tags first
+                let clean_name = strip_mangling(name);
+                let mut layout = struct_defs
+                    .get(clean_name)
+                    .or_else(|| struct_defs.get(name));
+
+                // Fallback: If not found, try stripping generic brackets to look up the base struct layout
+                if layout.is_none() {
+                    if let Some(base_name) = clean_name.split('<').next() {
+                        layout = struct_defs.get(base_name);
+                    }
+                }
+
+                let size = layout
                     .map(|x| x.total_size as u32)
-                    .unwrap_or(0);
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Backend Error: Struct definition for '{}' not found in struct_defs! Available structs: {:?}",
+                            clean_name,
+                            struct_defs.keys().collect::<Vec<&String>>()
+                        );
+                    });
 
                 AbiType::Aggregate {
                     total_size: size,
@@ -203,11 +231,14 @@ impl CraneliftBackend {
 
     fn get_or_declare_func(
         &mut self,
-        name: &str,
+        raw_name: &str,
         public: bool,
         arg_types: &[BackendType],
         frontend_return_type: Option<&Type>,
     ) -> FuncId {
+        // Strip out any name mangling or generic details right away
+        let name = strip_mangling(raw_name);
+
         if let Some(id) = self.declared_funcs.get(name) {
             return *id;
         }
@@ -232,7 +263,6 @@ impl CraneliftBackend {
         } else if public {
             Linkage::Export
         } else if name == "str_concat" {
-            // well we already hard code str_concat in IR, no point not hard coding it here
             Linkage::Import
         } else {
             Linkage::Local
@@ -816,9 +846,12 @@ impl CraneliftBackend {
 
                 Instruction::Call {
                     dest,
-                    name,
+                    name: raw_name,
                     argc: _,
                 } => {
+                    // Strip name mangling on the target call identifier completely
+                    let name = strip_mangling(raw_name);
+
                     let return_frontend_type = dest.as_ref().and_then(|d| var_types.get(d));
                     let return_type = return_frontend_type
                         .map(BackendType::from_frontend)

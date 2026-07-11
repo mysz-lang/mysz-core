@@ -93,20 +93,69 @@ impl Parser {
         self.ast = Program { statements };
     }
 
+    // HELPER: Parses explicit generic parameters <T, U, V> for definitions
+    fn parse_generic_params(&mut self) -> Vec<String> {
+        let mut params = Vec::new();
+        if matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::LessThan)
+        ) {
+            self.advance(); // consume '<'
+            loop {
+                if let Some(tk) = self.expect(TokenType::Identifier) {
+                    params.push(tk.value);
+                } else {
+                    break;
+                }
+
+                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenType::GreaterThan);
+        }
+        params
+    }
+
+    // HELPER: Parses type parameters passed to instances <int, char>
+    fn parse_generic_args(&mut self) -> Vec<Type> {
+        let mut args = Vec::new();
+        if matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::LessThan)
+        ) {
+            self.advance(); // consume '<'
+            loop {
+                if let Some(ty) = self.parse_type() {
+                    args.push(ty);
+                } else {
+                    break;
+                }
+
+                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenType::GreaterThan);
+        }
+        args
+    }
+
     fn parse_type(&mut self) -> Option<Type> {
         let tk = self.get_token()?.clone();
 
         match tk.ttype {
             TokenType::LBracket => {
                 self.advance();
-
                 let element_type = self.parse_type()?;
-
                 self.expect(TokenType::SemiColon)?;
 
                 let size_tk = self.expect(TokenType::IntLiteral)?;
                 let size = size_tk.value.parse::<usize>().unwrap();
-
                 self.expect(TokenType::RBracket)?;
 
                 Some(Type::Array {
@@ -149,10 +198,21 @@ impl Parser {
                 }
                 other => {
                     let struct_name = other.to_string();
-
                     self.advance();
 
-                    Some(Type::Struct(struct_name))
+                    // Check if it's an instantiation: e.g., MyszArray<char>
+                    if matches!(
+                        self.get_token().map(|t| &t.ttype),
+                        Some(TokenType::LessThan)
+                    ) {
+                        let args = self.parse_generic_args();
+                        Some(Type::GenericInstance {
+                            name: struct_name,
+                            args,
+                        })
+                    } else {
+                        Some(Type::Struct(struct_name))
+                    }
                 }
             },
             _ => {
@@ -178,7 +238,6 @@ impl Parser {
         }
 
         self.expect(TokenType::RBrace);
-
         statements
     }
 
@@ -223,7 +282,6 @@ impl Parser {
 
     fn parse_import(&mut self) -> Option<Stmt> {
         self.advance();
-
         let mut path = Vec::new();
 
         loop {
@@ -269,8 +327,10 @@ impl Parser {
 
         let ident = self.expect(TokenType::Identifier)?;
 
-        self.expect(TokenType::LParen)?;
+        // Match generic parameters if present: e.g., extern fn push<T>(...)
+        let generic_params = self.parse_generic_params();
 
+        self.expect(TokenType::LParen)?;
         let params = self.parse_params(TokenType::RParen);
 
         let rttype = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
@@ -283,6 +343,7 @@ impl Parser {
         Some(Stmt::Extern {
             name: to_ident(Some(ident))?,
             rttype,
+            generic_params,
             params,
         })
     }
@@ -316,11 +377,9 @@ impl Parser {
         Some(Stmt::Expr(lhs_expr))
     }
 
-    // ends with ), do not call self.advance(); to skip ). It is already skipped here
     fn parse_params(&mut self, ending: TokenType) -> Vec<Parameter> {
         let mut params = Vec::new();
 
-        // Empty parameter list: ()
         if self.get_token().map(|t| &t.ttype) == Some(&ending) {
             self.advance();
             return params;
@@ -358,12 +417,10 @@ impl Parser {
                 Some(TokenType::Comma) => {
                     self.advance();
                 }
-
                 Some(ttype) if ttype == &ending => {
                     self.advance();
                     break;
                 }
-
                 other => {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
@@ -377,11 +434,9 @@ impl Parser {
         params
     }
 
-    // ends with ), do not call self.advance(); to skip ). It is already skipped here
     fn parse_args(&mut self) -> Vec<Expr> {
         let mut args = Vec::new();
 
-        // handle empty lists
         if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RParen)) {
             self.advance();
             return args;
@@ -427,6 +482,9 @@ impl Parser {
 
         let ident = self.expect(TokenType::Identifier)?;
 
+        // Extract generic declarations: e.g., fn push<T>(...)
+        let generic_params = self.parse_generic_params();
+
         self.expect(TokenType::LParen)?;
         let params = self.parse_params(TokenType::RParen);
 
@@ -445,7 +503,8 @@ impl Parser {
                 location: ident.location,
             },
             public,
-            rttype: rttype,
+            rttype,
+            generic_params,
             params,
             body,
         })
@@ -480,7 +539,7 @@ impl Parser {
         }
 
         let value = if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Assign)) {
-            self.advance(); // consume '='
+            self.advance();
             Some(self.parse_expr()?)
         } else {
             None
@@ -491,7 +550,7 @@ impl Parser {
                 value: ident.value,
                 location: ident_loc,
             },
-            vtype: vtype,
+            vtype,
             expr: value,
         })
     }
@@ -532,25 +591,25 @@ impl Parser {
     }
 
     fn parse_struct(&mut self) -> Option<Stmt> {
-        self.advance(); // consume 'struct'
+        self.advance();
 
         let ident = self.expect(TokenType::Identifier)?;
-        self.expect(TokenType::LBrace)?;
 
+        // Extract generic specifications on structural declaration: e.g., struct MyszArray<T>
+        let generic_params = self.parse_generic_params();
+
+        self.expect(TokenType::LBrace)?;
         let mut fields = Vec::new();
 
         while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
         {
             let name = to_ident(self.get_token().cloned())?;
             self.advance();
-
             self.expect(TokenType::Colon)?;
 
             let ptype = self.parse_type();
-
             fields.push(Parameter { name, ptype });
 
-            // Handle the comma conditionally
             if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                 self.advance();
             } else if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
@@ -566,6 +625,7 @@ impl Parser {
 
         Some(Stmt::Struct {
             name: to_ident(Some(ident))?,
+            generic_params,
             fields,
         })
     }
@@ -650,7 +710,6 @@ impl Parser {
             }
             _ => {}
         }
-
         self.parse_equality()
     }
 
@@ -739,9 +798,7 @@ impl Parser {
             };
 
             self.advance();
-
             let right = self.parse_muldiv()?;
-
             let span = left.span.clone();
 
             left = Expr {
@@ -774,9 +831,7 @@ impl Parser {
             };
 
             self.advance();
-
             let right = self.parse_unary()?;
-
             let span = left.span.clone();
 
             left = Expr {
@@ -862,7 +917,7 @@ impl Parser {
                     };
                 }
                 Some(TokenType::Period) => {
-                    self.advance(); // consume '.'
+                    self.advance();
                     let field_tk = self.expect(TokenType::Identifier)?;
                     let loc = field_tk.location.clone();
                     expr = Expr {
@@ -884,6 +939,7 @@ impl Parser {
                                     value: name.clone(),
                                     location: callee_loc.clone(),
                                 },
+                                generic_args: Vec::new(), // No explicit type arguments supplied
                                 args,
                             },
                             span: callee_loc,
@@ -894,6 +950,36 @@ impl Parser {
                             "Expected function name before parenthesis".to_string(),
                         );
                         return None;
+                    }
+                }
+                // Turbofish parsing: explicit type parameters for function calls, e.g., push::<char>(...)
+                Some(TokenType::DoubleColon) => {
+                    let next_tk = self.tokens.get(self.token_idx + 1);
+                    if matches!(next_tk.map(|t| &t.ttype), Some(TokenType::LessThan)) {
+                        self.advance(); // consume '::'
+                        let generic_args = self.parse_generic_args(); // Read the structural explicit type list
+
+                        // Expect call parameters following turbofish
+                        self.expect(TokenType::LParen)?;
+                        if let ExprKind::Identifier(name) = &expr.kind {
+                            let callee_loc = expr.span.clone();
+                            let args = self.parse_args();
+                            expr = Expr {
+                                kind: ExprKind::Call {
+                                    callee: Identifier {
+                                        value: name.clone(),
+                                        location: callee_loc.clone(),
+                                    },
+                                    generic_args,
+                                    args,
+                                },
+                                span: callee_loc,
+                            };
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        break;
                     }
                 }
                 _ => break,

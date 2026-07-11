@@ -47,6 +47,127 @@ impl Analyser {
         self.current_scope = parent;
     }
 
+    // Helper to perform deep structural replacement of type parameters (e.g., T -> int)
+    fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, mapping))),
+            Type::Array { element_type, size } => Type::Array {
+                element_type: Box::new(self.substitute_type(element_type, mapping)),
+                size: *size,
+            },
+            Type::Struct(name) => {
+                if let Some(target_type) = mapping.get(name) {
+                    target_type.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::GenericInstance { name, args } => {
+                let substituted_args = args
+                    .iter()
+                    .map(|arg| self.substitute_type(arg, mapping))
+                    .collect();
+                Type::GenericInstance {
+                    name: name.clone(),
+                    args: substituted_args,
+                }
+            }
+            _ => ty.clone(),
+        }
+    }
+
+    // Encodes signature variants uniquely to decouple types (e.g., MyArray__int)
+    fn mangle_name(&self, base_name: &str, args: &[Type]) -> String {
+        let mut name = base_name.to_string();
+        for arg in args {
+            name.push_str("__");
+            match arg {
+                Type::Int => name.push_str("int"),
+                Type::Bool => name.push_str("bool"),
+                Type::Str => name.push_str("str"),
+                Type::Char => name.push_str("char"),
+                Type::Void => name.push_str("void"),
+                Type::Any => name.push_str("any"),
+                Type::Struct(n) => name.push_str(n),
+                _ => name.push_str("type"),
+            }
+        }
+        name
+    }
+
+    // Resolves GenericInstance variants into standard Types by processing templates
+    fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
+        match ty {
+            Type::Ptr(inner) => {
+                let inst = self.instantiate_generic_types(inner, span)?;
+                Ok(Type::Ptr(Box::new(inst)))
+            }
+            Type::Array { element_type, size } => {
+                let inst = self.instantiate_generic_types(element_type, span)?;
+                Ok(Type::Array {
+                    element_type: Box::new(inst),
+                    size: *size,
+                })
+            }
+            Type::GenericInstance { name, args } => {
+                let mut resolved_args = Vec::new();
+                for arg in args {
+                    resolved_args.push(self.instantiate_generic_types(arg, span)?);
+                }
+
+                let template = self
+                    .structs
+                    .get(name)
+                    .ok_or_else(|| {
+                        format!(
+                            "Semantic Error [{}]: Generic struct '{}' not found.",
+                            span, name
+                        )
+                    })?
+                    .clone();
+
+                if template.generic_params.len() != resolved_args.len() {
+                    return Err(format!(
+                        "Type Error [{}]: Struct '{}' expects {} type parameters, found {}",
+                        span,
+                        name,
+                        template.generic_params.len(),
+                        resolved_args.len()
+                    ));
+                }
+
+                let mangled = self.mangle_name(name, &resolved_args);
+
+                if !self.structs.contains_key(&mangled) {
+                    let mapping: HashMap<String, Type> = template
+                        .generic_params
+                        .iter()
+                        .cloned()
+                        .zip(resolved_args.iter().cloned())
+                        .collect();
+
+                    let mut fresh_fields = HashMap::new();
+                    for (f_name, f_type) in &template.fields {
+                        let substituted = self.substitute_type(f_type, &mapping);
+                        fresh_fields.insert(f_name.clone(), substituted);
+                    }
+
+                    self.structs.insert(
+                        mangled.clone(),
+                        StructSignature {
+                            generic_params: Vec::new(),
+                            fields: fresh_fields,
+                            location: span.clone(),
+                        },
+                    );
+                }
+
+                Ok(Type::Struct(mangled))
+            }
+            _ => Ok(ty.clone()),
+        }
+    }
+
     fn declare_variable(
         &mut self,
         name: &str,
@@ -108,6 +229,7 @@ impl Analyser {
     fn declare_struct(
         &mut self,
         name: &str,
+        generic_params: Vec<String>,
         fields: HashMap<String, Type>,
         location: Location,
     ) -> Result<(), String> {
@@ -118,8 +240,14 @@ impl Analyser {
             ));
         }
 
-        self.structs
-            .insert(name.to_string(), StructSignature { fields, location });
+        self.structs.insert(
+            name.to_string(),
+            StructSignature {
+                generic_params,
+                fields,
+                location,
+            },
+        );
 
         Ok(())
     }
@@ -127,6 +255,7 @@ impl Analyser {
     fn declare_function(
         &mut self,
         name: &str,
+        generic_params: Vec<String>,
         param_types: Vec<Type>,
         return_type: Type,
         location: Location,
@@ -141,6 +270,7 @@ impl Analyser {
         self.functions.insert(
             name.to_string(),
             FunctionSignature {
+                generic_params,
                 param_types,
                 return_type,
                 location,
@@ -163,7 +293,11 @@ impl Analyser {
         }
     }
 
-    pub fn check_expr(&self, expr: &Expr, expected_type: Option<&Type>) -> Result<Type, String> {
+    pub fn check_expr(
+        &mut self,
+        expr: &Expr,
+        expected_type: Option<&Type>,
+    ) -> Result<Type, String> {
         match &expr.kind {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Ok(Type::Int),
@@ -229,12 +363,16 @@ impl Analyser {
                 struct_name,
                 fields,
             } => {
-                let signature = self.structs.get(struct_name).ok_or_else(|| {
-                    format!(
-                        "Semantic Error [{}]: Attempted to initialize undefined struct '{}'.",
-                        expr.span, struct_name
-                    )
-                })?;
+                let signature = self
+                    .structs
+                    .get(struct_name)
+                    .ok_or_else(|| {
+                        format!(
+                            "Semantic Error [{}]: Attempted to initialize undefined struct '{}'.",
+                            expr.span, struct_name
+                        )
+                    })?
+                    .clone();
 
                 if fields.len() != signature.fields.len() {
                     return Err(format!(
@@ -247,18 +385,21 @@ impl Analyser {
                 }
 
                 for (field_name, field_expr) in fields {
-                    let expected_type = signature.fields.get(field_name).ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Field '{}' does not exist in the definition of struct '{}'.",
-                            field_expr.span, field_name, struct_name
-                        )
-                    })?;
+                    let expected_type = {
+                        let ty = signature.fields.get(field_name).ok_or_else(|| {
+                            format!(
+                                "Semantic Error [{}]: Field '{}' does not exist in '{}'.",
+                                field_expr.span, field_name, struct_name,
+                            )
+                        })?;
 
-                    let actual_type = self.check_expr(field_expr, Some(expected_type))?;
+                        ty.clone()
+                    };
 
-                    if actual_type != *expected_type
+                    let actual_type = self.check_expr(field_expr, Some(&expected_type))?;
+                    if actual_type != expected_type
                         && actual_type != Type::Any
-                        && *expected_type != Type::Any
+                        && expected_type != Type::Any
                     {
                         return Err(format!(
                             "Type Error [{}]: Field '{}' of struct '{}' expects type '{:?}', found '{:?}'.",
@@ -307,13 +448,79 @@ impl Analyser {
                     ))
                 }
             }
-            ExprKind::Call { callee, args } => {
-                let sig = self.resolve_function(&callee.value).ok_or_else(|| {
-                    format!(
-                        "Semantic Error [{}]: Call to undefined function '{}'",
-                        callee.location, callee.value
-                    )
-                })?;
+            ExprKind::Call {
+                callee,
+                generic_args,
+                args,
+            } => {
+                let template = self
+                    .resolve_function(&callee.value)
+                    .ok_or_else(|| {
+                        format!(
+                            "Semantic Error [{}]: Call to undefined function '{}'",
+                            callee.location, callee.value
+                        )
+                    })?
+                    .clone();
+
+                let mut resolved_func_name = callee.value.clone();
+
+                if !template.generic_params.is_empty() || !generic_args.is_empty() {
+                    if template.generic_params.len() != generic_args.len() {
+                        return Err(format!(
+                            "Type Error [{}]: Function '{}' expects {} type parameters, found {}",
+                            expr.span,
+                            callee.value,
+                            template.generic_params.len(),
+                            generic_args.len()
+                        ));
+                    }
+
+                    let mut inst_args = Vec::new();
+                    for g_arg in generic_args {
+                        inst_args.push(self.instantiate_generic_types(g_arg, &callee.location)?);
+                    }
+
+                    resolved_func_name = self.mangle_name(&callee.value, &inst_args);
+
+                    if !self.functions.contains_key(&resolved_func_name) {
+                        let mapping: HashMap<String, Type> = template
+                            .generic_params
+                            .iter()
+                            .cloned()
+                            .zip(inst_args.iter().cloned())
+                            .collect();
+
+                        // 1. Substitute the generic parameter markers (e.g., T -> char)
+                        let substituted_return =
+                            self.substitute_type(&template.return_type, &mapping);
+                        // 2. Fully resolve into a concrete Type::Struct mangled variant
+                        let fresh_return =
+                            self.instantiate_generic_types(&substituted_return, &callee.location)?;
+
+                        let mut fresh_params = Vec::new();
+                        for p_ty in &template.param_types {
+                            // Substitute T -> char
+                            let substituted_param = self.substitute_type(p_ty, &mapping);
+                            // Resolve MyszArray<char> -> MyszArray__char
+                            let fully_resolved_param = self
+                                .instantiate_generic_types(&substituted_param, &callee.location)?;
+                            fresh_params.push(fully_resolved_param);
+                        }
+
+                        self.functions.insert(
+                            resolved_func_name.clone(),
+                            FunctionSignature {
+                                generic_params: Vec::new(),
+                                param_types: fresh_params,
+                                return_type: fresh_return,
+                                location: template.location.clone(),
+                            },
+                        );
+                    }
+                }
+
+                let sig = self.functions.get(&resolved_func_name).unwrap();
 
                 if args.len() != sig.param_types.len() {
                     return Err(format!(
@@ -364,7 +571,21 @@ impl Analyser {
                             ));
                         }
 
-                        _ => {}
+                        _ => {
+                            if expected != &arg_type
+                                && *expected != Type::Any
+                                && arg_type != Type::Any
+                            {
+                                return Err(format!(
+                                    "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
+                                    arg.span,
+                                    i + 1,
+                                    callee.value,
+                                    expected,
+                                    arg_type,
+                                ));
+                            }
+                        }
                     }
                 }
 
@@ -445,9 +666,13 @@ impl Analyser {
 
     pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
-            Stmt::Use { .. } => unreachable!(), // Handled by main.rs / lib.rs, you have shit code if this errors.
+            Stmt::Use { .. } => unreachable!(),
 
-            Stmt::Struct { name, fields } => {
+            Stmt::Struct {
+                name,
+                generic_params,
+                fields,
+            } => {
                 let mut struct_fields = HashMap::new();
 
                 for field in fields {
@@ -466,7 +691,12 @@ impl Analyser {
                     struct_fields.insert(field.name.value.clone(), field_type);
                 }
 
-                self.declare_struct(&name.value, struct_fields, name.location.clone())?;
+                self.declare_struct(
+                    &name.value,
+                    generic_params.clone(),
+                    struct_fields,
+                    name.location.clone(),
+                )?;
 
                 Ok(())
             }
@@ -474,6 +704,7 @@ impl Analyser {
             Stmt::Extern {
                 name,
                 rttype,
+                generic_params,
                 params,
             } => {
                 let return_type = match rttype {
@@ -481,20 +712,18 @@ impl Analyser {
                     None => Type::Void,
                 };
 
-                self.validate_type_exists(&return_type, &name.location)?;
-
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => pt.clone(),
                         None => Type::Any,
                     };
-                    self.validate_type_exists(&ptype, &param.name.location)?;
                     param_types.push(ptype.clone());
                 }
 
                 self.declare_function(
                     &name.value,
+                    generic_params.clone(),
                     param_types,
                     return_type,
                     name.location.clone(),
@@ -505,20 +734,24 @@ impl Analyser {
             Stmt::Assignment { ident, vtype, expr } => {
                 let variable_type = match (vtype, expr) {
                     (Some(explicit_type), Some(expr_node)) => {
-                        self.validate_type_exists(explicit_type, &ident.location)?;
-                        let expr_type = self.check_expr(expr_node, Some(explicit_type))?;
+                        let instantiated =
+                            self.instantiate_generic_types(explicit_type, &ident.location)?;
+                        self.validate_type_exists(&instantiated, &ident.location)?;
+                        let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
-                        if *explicit_type != expr_type {
+                        if instantiated != expr_type {
                             return Err(format!(
                                 "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
-                                expr_node.span, ident.value, explicit_type, expr_type
+                                expr_node.span, ident.value, instantiated, expr_type
                             ));
                         }
-                        explicit_type.clone()
+                        instantiated
                     }
                     (Some(explicit_type), None) => {
-                        self.validate_type_exists(explicit_type, &ident.location)?;
-                        explicit_type.clone()
+                        let instantiated =
+                            self.instantiate_generic_types(explicit_type, &ident.location)?;
+                        self.validate_type_exists(&instantiated, &ident.location)?;
+                        instantiated
                     }
                     (None, Some(expr_node)) => self.check_expr(expr_node, None)?,
                     (None, None) => {
@@ -528,6 +761,7 @@ impl Analyser {
                         ));
                     }
                 };
+
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
                     if existing_symbol.data_type != variable_type
                         && existing_symbol.data_type != Type::Any
@@ -669,6 +903,7 @@ impl Analyser {
                 name,
                 public: _,
                 rttype,
+                generic_params,
                 params,
                 body,
             } => {
@@ -692,6 +927,7 @@ impl Analyser {
 
                 self.declare_function(
                     &name.value,
+                    generic_params.clone(),
                     param_types.clone(),
                     return_type.clone(),
                     name.location.clone(),

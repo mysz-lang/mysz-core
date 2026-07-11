@@ -30,6 +30,12 @@ pub enum Type {
         size: usize,
     },
     Struct(String),
+
+    GenericInstance {
+        name: String,
+        args: Vec<Type>,
+    },
+
     Any,
 }
 
@@ -97,6 +103,7 @@ pub enum ExprKind {
 
     Call {
         callee: Identifier,
+        generic_args: Vec<Type>,
         args: Vec<Expr>,
     },
 }
@@ -144,28 +151,31 @@ pub enum Stmt {
         step: Box<Stmt>,
         body: Vec<Stmt>,
     },
-    Function {
-        name: Identifier,
-        public: bool,
-        rttype: Option<Type>,
-        params: Vec<Parameter>,
-        body: Vec<Stmt>,
-    },
     Return {
         value: Option<Expr>,
         span: Location,
-    },
-    Extern {
-        name: Identifier,
-        rttype: Option<Type>,
-        params: Vec<Parameter>,
     },
     Use {
         path: Vec<String>,
     },
     Struct {
         name: Identifier,
+        generic_params: Vec<String>,
         fields: Vec<Parameter>,
+    },
+    Function {
+        name: Identifier,
+        public: bool,
+        rttype: Option<Type>,
+        generic_params: Vec<String>,
+        params: Vec<Parameter>,
+        body: Vec<Stmt>,
+    },
+    Extern {
+        name: Identifier,
+        rttype: Option<Type>,
+        generic_params: Vec<String>,
+        params: Vec<Parameter>,
     },
 }
 
