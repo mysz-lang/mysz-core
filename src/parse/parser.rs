@@ -264,7 +264,7 @@ impl Parser {
     }
 
     fn parse_extern(&mut self) -> Option<Stmt> {
-        self.advance();
+        self.advance(); // consume 'extern'
         self.expect(TokenType::FnKeyword)?;
 
         let ident = self.expect(TokenType::Identifier)?;
@@ -544,9 +544,18 @@ impl Parser {
 
             let ptype = self.parse_type();
 
-            self.expect(TokenType::Comma)?;
-
             fields.push(Parameter { name, ptype });
+
+            // Handle the comma conditionally
+            if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
+                self.advance();
+            } else if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    "Expected ',' or '}' after struct field".to_string(),
+                );
+                return None;
+            }
         }
 
         self.expect(TokenType::RBrace)?;
