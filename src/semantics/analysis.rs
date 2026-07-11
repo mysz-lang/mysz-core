@@ -13,14 +13,14 @@ pub struct Scope {
 
 #[derive(Clone)]
 pub struct StructSignature {
-    pub generic_params: Vec<String>, // Added to keep track of templates
+    pub generic_params: Vec<String>,
     pub fields: HashMap<String, Type>,
     pub location: Location,
 }
 
 #[derive(Clone)]
 pub struct FunctionSignature {
-    pub generic_params: Vec<String>, // Added to keep track of templates
+    pub generic_params: Vec<String>,
     pub param_types: Vec<Type>,
     pub return_type: Type,
     pub location: Location,

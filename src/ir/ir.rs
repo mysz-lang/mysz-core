@@ -57,7 +57,6 @@ pub struct IRGen {
     functions: FunctionGen,
     pub var_types: HashMap<String, Type>,
     pub struct_defs: HashMap<String, StructLayout>,
-    // Tracks uninstantiated generic templates for on-demand layout generation
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
 }
 
@@ -322,6 +321,7 @@ impl IRGen {
 
     pub fn expr_type(&mut self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
+            ExprKind::Sizeof { .. } => Some(Type::Int),
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
@@ -382,7 +382,6 @@ impl IRGen {
             ExprKind::Field { base, field } => {
                 if let Some(base_ty) = self.expr_type(base) {
                     if let Type::Struct(struct_name) = self.resolve_type(&base_ty) {
-                        // Scope the layout lookup or fetch and clone the field_ty immediately
                         let found_field_ty = self
                             .get_struct_layout(&struct_name)
                             .and_then(|layout| layout.field_offsets.get(field))
@@ -401,6 +400,10 @@ impl IRGen {
 
     pub fn gen_expr(&mut self, expr: &Expr, target_dest: Option<Value>) -> Value {
         match &expr.kind {
+            ExprKind::Sizeof { ty } => {
+                let size = self.type_size(ty);
+                Value::Const(size)
+            }
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(v) => Value::Const(*v),
                 Literal::String(s) => Value::Str(s.clone()),
@@ -482,7 +485,6 @@ impl IRGen {
                         ),
                     };
 
-                    // 1. Fetch and clone the data inside a temporary block to drop the 'self' borrow immediately
                     let (offset, unres_field_ty) = self
                         .get_struct_layout(&struct_name)
                         .expect("ICE: Structural reference layout untracked.")
@@ -491,7 +493,6 @@ impl IRGen {
                         .map(|(offset, field_ty)| (*offset, field_ty.clone()))
                         .expect("ICE: Referenced struct field does not exist.");
 
-                    // 2. Safe to call &mut self now that 'layout' is dropped
                     (offset, self.resolve_type(&unres_field_ty))
                 };
 
@@ -657,80 +658,72 @@ impl IRGen {
 
             ExprKind::Identifier(name) => Value::Var(name.clone()),
 
-            ExprKind::Unary { op, expr } => {
-                match op {
-                    UnaryOp::Positive => {
-                        let value = self.gen_expr(expr, None);
-                        self.emit_unary(IrOp::Pos, value)
-                    }
-                    UnaryOp::Negative => {
-                        let value = self.gen_expr(expr, None);
-                        self.emit_unary(IrOp::Neg, value)
-                    }
-                    UnaryOp::Deref => {
-                        let value = self.gen_expr(expr, None);
-                        let inner_type = self.expr_type(expr).unwrap_or(Type::Int);
-                        let value_type = match inner_type {
-                            Type::Ptr(inner) => *inner,
-                            _ => Type::Int,
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::Positive => {
+                    let value = self.gen_expr(expr, None);
+                    self.emit_unary(IrOp::Pos, value)
+                }
+                UnaryOp::Negative => {
+                    let value = self.gen_expr(expr, None);
+                    self.emit_unary(IrOp::Neg, value)
+                }
+                UnaryOp::Deref => {
+                    let value = self.gen_expr(expr, None);
+                    let inner_type = self.expr_type(expr).unwrap_or(Type::Int);
+                    let value_type = match inner_type {
+                        Type::Ptr(inner) => *inner,
+                        _ => Type::Int,
+                    };
+                    let result_temp = self.next_temp_with_type(value_type.clone());
+                    self.code.push(Instruction::Load {
+                        dst: result_temp.clone(),
+                        ptr: value,
+                        ty: value_type,
+                    });
+                    Value::Temp(result_temp)
+                }
+                UnaryOp::AddressOf => {
+                    if let ExprKind::Literal(lit) = &expr.kind {
+                        let lit_val = match lit {
+                            Literal::Int(v) => Value::Const(*v),
+                            Literal::Bool(b) => Value::Bool(*b),
+                            Literal::Char(c) => Value::Char(*c),
+                            Literal::String(s) => Value::Str(s.clone()),
+                            Literal::Arr { .. } => self.gen_expr(expr, None),
                         };
-                        let result_temp = self.next_temp_with_type(value_type.clone());
-                        self.code.push(Instruction::Load {
-                            dst: result_temp.clone(),
-                            ptr: value,
-                            ty: value_type,
+
+                        let lit_ty = self.expr_type(expr).unwrap_or(Type::Int);
+                        let raw_temp = self.temps.next();
+                        let anon_var_name = format!("_anon_lit_{}", raw_temp);
+
+                        self.var_types.insert(anon_var_name.clone(), lit_ty.clone());
+
+                        self.code.push(Instruction::Assign {
+                            dst: anon_var_name.clone(),
+                            src: lit_val,
                         });
-                        Value::Temp(result_temp)
-                    }
-                    UnaryOp::AddressOf => {
-                        // Check if we are taking the address of a raw literal value
-                        if let ExprKind::Literal(lit) = &expr.kind {
-                            let lit_val = match lit {
-                                Literal::Int(v) => Value::Const(*v),
-                                Literal::Bool(b) => Value::Bool(*b),
-                                Literal::Char(c) => Value::Char(*c),
-                                Literal::String(s) => Value::Str(s.clone()),
-                                Literal::Arr { .. } => self.gen_expr(expr, None),
-                            };
 
-                            let lit_ty = self.expr_type(expr).unwrap_or(Type::Int);
-                            let raw_temp = self.temps.next();
-                            let anon_var_name = format!("_anon_lit_{}", raw_temp);
+                        let ref_temp = self.next_temp_with_type(Type::Ptr(Box::new(lit_ty)));
+                        self.code.push(Instruction::Unary {
+                            dst: ref_temp.clone(),
+                            op: IrOp::Ref,
+                            value: Value::Var(anon_var_name),
+                        });
 
-                            // 1. Save type for stack frame allocation tracking
-                            self.var_types.insert(anon_var_name.clone(), lit_ty.clone());
-
-                            // 2. Put literal value into the variable slot
-                            self.code.push(Instruction::Assign {
-                                dst: anon_var_name.clone(),
-                                src: lit_val,
-                            });
-
-                            // 3. Emitting the reference instruction to a new temporary
-                            let ref_temp = self.next_temp_with_type(Type::Ptr(Box::new(lit_ty)));
-                            self.code.push(Instruction::Unary {
-                                dst: ref_temp.clone(),
-                                op: IrOp::Ref,
-                                value: Value::Var(anon_var_name),
-                            });
-
-                            // CRITICAL FIX: Return the Temp holding the pointer address!
-                            Value::Temp(ref_temp)
-                        } else {
-                            // Normal target (variable, index, field, etc.)
-                            let value = self.gen_expr(expr, None);
-                            let inner_type = self.get_value_type(&value);
-                            let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
-                            self.code.push(Instruction::Unary {
-                                dst: temp.clone(),
-                                op: IrOp::Ref,
-                                value,
-                            });
-                            Value::Temp(temp)
-                        }
+                        Value::Temp(ref_temp)
+                    } else {
+                        let value = self.gen_expr(expr, None);
+                        let inner_type = self.get_value_type(&value);
+                        let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
+                        self.code.push(Instruction::Unary {
+                            dst: temp.clone(),
+                            op: IrOp::Ref,
+                            value,
+                        });
+                        Value::Temp(temp)
                     }
                 }
-            }
+            },
 
             ExprKind::Binary { left, op, right } => {
                 let lhs = self.gen_expr(left, None);
@@ -823,7 +816,6 @@ impl IRGen {
                 }
             }
             Stmt::Assignment { ident, vtype, expr } => {
-                // 1. Resolve and store the explicit type if present
                 if let Some(explicit_ty) = vtype {
                     let resolved = self.resolve_type(explicit_ty);
                     self.var_types.insert(ident.value.clone(), resolved);
@@ -858,7 +850,6 @@ impl IRGen {
                         });
                     }
                 } else {
-                    // 2. Handle uninitialized default allocations safely
                     match current_ty {
                         Some(Type::Int) => {
                             self.code.push(Instruction::Assign {
@@ -885,8 +876,6 @@ impl IRGen {
                             });
                         }
                         Some(Type::Struct(_)) | Some(Type::Array { .. }) => {
-                            // Structs/Arrays are fully tracked in self.var_types by now.
-                            // Leave it uninitialized or zero-allocated so your backend handles stack frame adjustments.
                             self.code.push(Instruction::Assign {
                                 dst: ident.value.clone(),
                                 src: Value::Const(0),

@@ -106,6 +106,9 @@ pub enum ExprKind {
         generic_args: Vec<Type>,
         args: Vec<Expr>,
     },
+    Sizeof {
+        ty: Type,
+    },
 }
 
 #[derive(Debug, Clone)]

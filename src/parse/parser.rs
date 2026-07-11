@@ -93,7 +93,6 @@ impl Parser {
         self.ast = Program { statements };
     }
 
-    // HELPER: Parses explicit generic parameters <T, U, V> for definitions
     fn parse_generic_params(&mut self) -> Vec<String> {
         let mut params = Vec::new();
         if matches!(
@@ -119,7 +118,6 @@ impl Parser {
         params
     }
 
-    // HELPER: Parses type parameters passed to instances <int, char>
     fn parse_generic_args(&mut self) -> Vec<Type> {
         let mut args = Vec::new();
         if matches!(
@@ -200,7 +198,6 @@ impl Parser {
                     let struct_name = other.to_string();
                     self.advance();
 
-                    // Check if it's an instantiation: e.g., MyszArray<char>
                     if matches!(
                         self.get_token().map(|t| &t.ttype),
                         Some(TokenType::LessThan)
@@ -327,7 +324,6 @@ impl Parser {
 
         let ident = self.expect(TokenType::Identifier)?;
 
-        // Match generic parameters if present: e.g., extern fn push<T>(...)
         let generic_params = self.parse_generic_params();
 
         self.expect(TokenType::LParen)?;
@@ -482,7 +478,6 @@ impl Parser {
 
         let ident = self.expect(TokenType::Identifier)?;
 
-        // Extract generic declarations: e.g., fn push<T>(...)
         let generic_params = self.parse_generic_params();
 
         self.expect(TokenType::LParen)?;
@@ -595,7 +590,6 @@ impl Parser {
 
         let ident = self.expect(TokenType::Identifier)?;
 
-        // Extract generic specifications on structural declaration: e.g., struct MyszArray<T>
         let generic_params = self.parse_generic_params();
 
         self.expect(TokenType::LBrace)?;
@@ -939,7 +933,7 @@ impl Parser {
                                     value: name.clone(),
                                     location: callee_loc.clone(),
                                 },
-                                generic_args: Vec::new(), // No explicit type arguments supplied
+                                generic_args: Vec::new(),
                                 args,
                             },
                             span: callee_loc,
@@ -952,14 +946,12 @@ impl Parser {
                         return None;
                     }
                 }
-                // Turbofish parsing: explicit type parameters for function calls, e.g., push::<char>(...)
                 Some(TokenType::DoubleColon) => {
                     let next_tk = self.tokens.get(self.token_idx + 1);
                     if matches!(next_tk.map(|t| &t.ttype), Some(TokenType::LessThan)) {
                         self.advance(); // consume '::'
-                        let generic_args = self.parse_generic_args(); // Read the structural explicit type list
+                        let generic_args = self.parse_generic_args();
 
-                        // Expect call parameters following turbofish
                         self.expect(TokenType::LParen)?;
                         if let ExprKind::Identifier(name) = &expr.kind {
                             let callee_loc = expr.span.clone();
@@ -1033,7 +1025,19 @@ impl Parser {
                     span: tk.location,
                 })
             }
+            TokenType::SizeOfKeyword => {
+                let start_tk = self.get_token().cloned()?;
+                self.advance(); // consume 'sizeof'
 
+                self.expect(TokenType::LParen)?;
+                let target_type = self.parse_type()?;
+                self.expect(TokenType::RParen)?;
+
+                Some(Expr {
+                    kind: ExprKind::Sizeof { ty: target_type },
+                    span: start_tk.location,
+                })
+            }
             TokenType::Identifier => {
                 let id_tk = self.get_token()?.clone();
                 self.advance();

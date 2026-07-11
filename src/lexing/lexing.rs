@@ -52,6 +52,7 @@ pub enum TokenType {
     ForKeyword,
     UseKeyword,
     StructKeyword,
+    SizeOfKeyword,
 
     // identifier
     Identifier,

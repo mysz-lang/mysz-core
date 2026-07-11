@@ -8,7 +8,6 @@ use crate::ir::ir::StructLayout;
 use crate::ir::tac::{Instruction, IrOp, Value};
 use crate::parse::parsing::Type;
 
-/// Helper function to strip generic and name-mangling suffixes entirely
 fn strip_mangling(name: &str) -> &str {
     name.split("__")
         .next()
@@ -77,13 +76,11 @@ impl AbiType {
             Type::Void => AbiType::Void,
 
             Type::Struct(name) => {
-                // Completely strip out structural mangling tags first
                 let clean_name = strip_mangling(name);
                 let mut layout = struct_defs
                     .get(clean_name)
                     .or_else(|| struct_defs.get(name));
 
-                // Fallback: If not found, try stripping generic brackets to look up the base struct layout
                 if layout.is_none() {
                     if let Some(base_name) = clean_name.split('<').next() {
                         layout = struct_defs.get(base_name);
@@ -236,7 +233,6 @@ impl CraneliftBackend {
         arg_types: &[BackendType],
         frontend_return_type: Option<&Type>,
     ) -> FuncId {
-        // Strip out any name mangling or generic details right away
         let name = strip_mangling(raw_name);
 
         if let Some(id) = self.declared_funcs.get(name) {
@@ -849,7 +845,6 @@ impl CraneliftBackend {
                     name: raw_name,
                     argc: _,
                 } => {
-                    // Strip name mangling on the target call identifier completely
                     let name = strip_mangling(raw_name);
 
                     let return_frontend_type = dest.as_ref().and_then(|d| var_types.get(d));

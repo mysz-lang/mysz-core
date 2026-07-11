@@ -47,7 +47,6 @@ impl Analyser {
         self.current_scope = parent;
     }
 
-    // Helper to perform deep structural replacement of type parameters (e.g., T -> int)
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match ty {
             Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, mapping))),
@@ -76,7 +75,6 @@ impl Analyser {
         }
     }
 
-    // Encodes signature variants uniquely to decouple types (e.g., MyArray__int)
     fn mangle_name(&self, base_name: &str, args: &[Type]) -> String {
         let mut name = base_name.to_string();
         for arg in args {
@@ -95,7 +93,6 @@ impl Analyser {
         name
     }
 
-    // Resolves GenericInstance variants into standard Types by processing templates
     fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
         match ty {
             Type::Ptr(inner) => {
@@ -299,6 +296,7 @@ impl Analyser {
         expected_type: Option<&Type>,
     ) -> Result<Type, String> {
         match &expr.kind {
+            ExprKind::Sizeof { .. } => Ok(Type::Int),
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Ok(Type::Int),
                 Literal::String(_) => Ok(Type::Str),
@@ -491,18 +489,14 @@ impl Analyser {
                             .zip(inst_args.iter().cloned())
                             .collect();
 
-                        // 1. Substitute the generic parameter markers (e.g., T -> char)
                         let substituted_return =
                             self.substitute_type(&template.return_type, &mapping);
-                        // 2. Fully resolve into a concrete Type::Struct mangled variant
                         let fresh_return =
                             self.instantiate_generic_types(&substituted_return, &callee.location)?;
 
                         let mut fresh_params = Vec::new();
                         for p_ty in &template.param_types {
-                            // Substitute T -> char
                             let substituted_param = self.substitute_type(p_ty, &mapping);
-                            // Resolve MyszArray<char> -> MyszArray__char
                             let fully_resolved_param = self
                                 .instantiate_generic_types(&substituted_param, &callee.location)?;
                             fresh_params.push(fully_resolved_param);

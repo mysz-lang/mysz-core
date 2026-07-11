@@ -493,6 +493,13 @@ impl Lexer {
                     value,
                 };
             }
+            "sizeof" => {
+                return Token {
+                    ttype: TokenType::SizeOfKeyword,
+                    location: loc,
+                    value,
+                };
+            }
 
             _ => {}
         }
