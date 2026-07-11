@@ -22,7 +22,8 @@ use crate::ir::tac::Instruction;
 use crate::parse::parsing::{Program, Stmt};
 
 fn main() {
-    let source: String = "".to_string();
+    let source: String = ""
+    .to_string();
 
     let mut lexer = Lexer::new(source);
     lexer.lex();

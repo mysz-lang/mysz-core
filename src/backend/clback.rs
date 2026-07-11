@@ -621,8 +621,15 @@ impl CraneliftBackend {
                         IrOp::Pos | IrOp::Neg | IrOp::Ref => builder.ins().iconst(clif_ty, 0),
                     };
 
-                    let normalized_res = if is_cmp && clif_ty != types::I8 {
-                        builder.ins().uextend(clif_ty, res)
+                    let res_clk_ty = builder.func.dfg.value_type(res);
+                    let normalized_res = if is_cmp && res_clk_ty != clif_ty {
+                        if res_clk_ty.bits() < clif_ty.bits() {
+                            builder.ins().uextend(clif_ty, res)
+                        } else if res_clk_ty.bits() > clif_ty.bits() {
+                            builder.ins().ireduce(clif_ty, res)
+                        } else {
+                            res
+                        }
                     } else {
                         res
                     };
@@ -649,24 +656,51 @@ impl CraneliftBackend {
                     let clif_ty = dst_ty.to_clif_type(ptr_type);
 
                     if *op == IrOp::Ref {
-                        if let Value::Var(name) | Value::Temp(name) = value {
-                            let slot = *stack_slot_map
-                                .get(name)
-                                .expect("Target reference frame missing");
-                            let addr_val = builder.ins().stack_addr(ptr_type, slot, 0);
-
-                            if let Some(slot) = stack_slot_map.get(dst) {
-                                builder.ins().stack_store(addr_val, *slot, 0);
-                            } else {
-                                let v = get_or_create_var_impl(
-                                    &mut builder,
-                                    &mut var_map,
-                                    &mut var_idx,
-                                    dst,
-                                    dst_ty,
-                                );
-                                builder.def_var(v, addr_val);
+                        let addr_val = match value {
+                            Value::Var(name) | Value::Temp(name) => {
+                                let slot = *stack_slot_map
+                                    .get(name)
+                                    .expect("Target reference frame missing");
+                                builder.ins().stack_addr(ptr_type, slot, 0)
                             }
+                            literal => {
+                                let lit_ty = get_val_backend_type(literal);
+                                let clif_lit_ty = lit_ty.to_clif_type(ptr_type);
+
+                                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    lit_ty.byte_size(),
+                                ));
+
+                                let val = match literal {
+                                    Value::Char(ch) => {
+                                        let mut buffer = [0; 4];
+                                        let byte_val = ch.encode_utf8(&mut buffer).as_bytes()[0];
+                                        builder.ins().iconst(clif_lit_ty, byte_val as i64)
+                                    }
+                                    Value::Const(n) => builder.ins().iconst(clif_lit_ty, *n),
+                                    Value::Bool(b) => {
+                                        builder.ins().iconst(clif_lit_ty, if *b { 1 } else { 0 })
+                                    }
+                                    _ => builder.ins().iconst(clif_lit_ty, 0),
+                                };
+
+                                builder.ins().stack_store(val, slot, 0);
+                                builder.ins().stack_addr(ptr_type, slot, 0)
+                            }
+                        };
+
+                        if let Some(slot) = stack_slot_map.get(dst) {
+                            builder.ins().stack_store(addr_val, *slot, 0);
+                        } else {
+                            let v = get_or_create_var_impl(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                dst,
+                                dst_ty,
+                            );
+                            builder.def_var(v, addr_val);
                         }
                     } else {
                         let inner_val = match value {
