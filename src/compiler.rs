@@ -153,7 +153,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(program);
-    irgen.dump();
+    // irgen.dump();
 
     let tac_instructions = irgen.code;
 
