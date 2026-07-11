@@ -25,7 +25,8 @@ use std::collections::HashSet;
 fn flatten_program_statements(
     statements: Vec<Stmt>,
     search_paths: &[PathBuf],
-    visited: &mut HashSet<PathBuf>,
+    visiting: &mut HashSet<PathBuf>,
+    processed: &mut HashSet<PathBuf>,
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
@@ -38,12 +39,16 @@ fn flatten_program_statements(
                 )
             })?;
 
-            if visited.contains(&resolved_path) {
+            if visiting.contains(&resolved_path) {
                 return Err(format!(
-                    "Module Error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself via a loop.",
+                    "Module Error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself.",
                     path.join("::"),
                     resolved_path
                 ));
+            }
+
+            if processed.contains(&resolved_path) {
+                continue;
             }
 
             let mut mod_file = File::open(&resolved_path)
@@ -72,16 +77,18 @@ fn flatten_program_statements(
                 ));
             }
 
-            visited.insert(resolved_path.clone());
+            visiting.insert(resolved_path.clone());
 
             let nested_statements = flatten_program_statements(
                 mod_parser.ast.statements,
                 search_paths,
-                visited
+                visiting,
+                processed,
             )?;
             flattened.extend(nested_statements);
 
-            visited.remove(&resolved_path);
+            visiting.remove(&resolved_path);
+            processed.insert(resolved_path);
         } else {
             flattened.push(stmt);
         }
@@ -126,14 +133,17 @@ pub fn compile_source(
         let errs: Vec<String> = parser.parser_errs.iter().map(|e| e.to_string()).collect();
         return Err(errs.join("\n"));
     }
+
     let initial_program = parser.ast;
 
-    let mut visited_modules = HashSet::new();
+    let mut visiting = HashSet::new();
+    let mut processed = HashSet::new();
 
     let flattened_statements = flatten_program_statements(
         initial_program.statements,
         search_paths,
-        &mut visited_modules,
+        &mut visiting,
+        &mut processed,
     )?;
 
     let program = Program {
