@@ -121,7 +121,11 @@ pub fn compile_root_file<P: AsRef<Path>>(
         .map_err(|e| e.to_string())?;
 
     let mut lexer = Lexer::new(source);
-    lexer.lex();
+    let res = lexer.lex();
+
+    if res.is_err() {
+        res.err();
+    }
 
     let mut parser = myszparser::new(lexer.tokens);
     parser.parse();

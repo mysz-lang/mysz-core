@@ -1,6 +1,34 @@
 use crate::lexing::lexing::{Token, TokenType};
 use crate::utils::location::Location;
 
+#[derive(Debug, Clone)]
+pub enum LexError {
+    UnexpectedEof { context: &'static str, location: Location },
+    UnknownEscapeSequence { ch: char, location: Location },
+    UnterminatedCharLiteral { location: Location },
+    UnterminatedComment { location: Location },
+}
+
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexError::UnexpectedEof { context, location } => {
+                write!(f, "Unexpected EOF while lexing {} at {:?}", context, location)
+            }
+            LexError::UnknownEscapeSequence { ch, location } => {
+                write!(f, "Unknown escape sequence '\\{}' at {:?}", ch, location)
+            }
+            LexError::UnterminatedCharLiteral { location } => {
+                write!(f, "Unterminated character literal at {:?}", location)
+            }
+            LexError::UnterminatedComment { location } => {
+                write!(f, "Unterminated multi-line comment at {:?}", location)
+            }
+        }
+    }
+}
+impl std::error::Error for LexError {}
+
 pub struct Lexer {
     pub source: String,
     pub token_idx: usize,
@@ -8,14 +36,15 @@ pub struct Lexer {
     pub col: usize,
     pub tokens: Vec<Token>,
 }
+
 impl Lexer {
     pub fn new(source: String) -> Self {
         Self {
             source,
-            token_idx: 0 as usize,
+            token_idx: 0,
             tokens: Vec::new(),
-            line: 0 as usize,
-            col: 0 as usize,
+            line: 0,
+            col: 0,
         }
     }
 
@@ -32,16 +61,12 @@ impl Lexer {
                 self.col += 1;
             }
         }
-
         self.token_idx += 1;
     }
 
     fn peek(&self, offset: i32) -> Option<char> {
         let true_offset = self.token_idx + offset as usize;
-
-        self.source
-            .get(true_offset..)
-            .and_then(|s| s.chars().next())
+        self.source.get(true_offset..).and_then(|s| s.chars().next())
     }
 
     pub fn get_char(&self) -> Option<char> {
@@ -52,11 +77,11 @@ impl Lexer {
         self.tokens.push(token);
     }
 
-    // used for single character tokens, just supply the TokenType and it will be added to tokens (I don't want to write a bunch of token definitions for single character tokens, lazy ahh bum)
-    fn single_char(&mut self, ttype: TokenType) {
-        let ch = self
-            .get_char()
-            .expect("Unexpected EOF while lexing single char token");
+    fn single_char(&mut self, ttype: TokenType) -> Result<(), LexError> {
+        let ch = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "single char token",
+            location: self.current_location(),
+        })?;
 
         let t = Token {
             ttype,
@@ -66,9 +91,10 @@ impl Lexer {
 
         self.add_token(t);
         self.advance();
+        Ok(())
     }
 
-    pub fn lex(&mut self) {
+    pub fn lex(&mut self) -> Result<(), LexError> {
         while let Some(ch) = self.get_char() {
             if char::is_numeric(ch) {
                 let t = self.lex_numeric();
@@ -79,99 +105,66 @@ impl Lexer {
             } else {
                 match ch {
                     '=' => {
-                        let t = self.lex_assign();
+                        let t = self.lex_assign()?;
                         self.add_token(t);
                     }
-
                     '"' => {
                         let t = self.lex_string();
                         self.add_token(t);
                     }
-
                     '\'' => {
-                        let t = self.lex_char();
+                        let t = self.lex_char()?;
                         self.add_token(t);
                     }
-
                     '!' => {
-                        let t = self.lex_not();
+                        let t = self.lex_not()?;
                         self.add_token(t);
                     }
-
                     '>' => {
-                        let t = self.lex_gt();
+                        let t = self.lex_gt()?;
                         self.add_token(t);
                     }
                     '<' => {
-                        let t = self.lex_lt();
+                        let t = self.lex_lt()?;
                         self.add_token(t);
                     }
-                    '.' => {
-                        self.single_char(TokenType::Period);
-                    }
-
-                    '&' => {
-                        self.single_char(TokenType::Ampersand);
-                    }
-                    '^' => {
-                        self.single_char(TokenType::Star);
-                    }
-
+                    '.' => self.single_char(TokenType::Period)?,
+                    '&' => self.single_char(TokenType::Ampersand)?,
+                    '^' => self.single_char(TokenType::Star)?,
                     ':' => {
-                        let t = self.lex_colon();
+                        let t = self.lex_colon()?;
                         self.add_token(t);
                     }
-                    ';' => {
-                        self.single_char(TokenType::SemiColon);
-                    }
-                    '(' => {
-                        self.single_char(TokenType::LParen);
-                    }
-                    ')' => {
-                        self.single_char(TokenType::RParen);
-                    }
-                    '{' => {
-                        self.single_char(TokenType::LBrace);
-                    }
-                    '}' => {
-                        self.single_char(TokenType::RBrace);
-                    }
-                    ',' => {
-                        self.single_char(TokenType::Comma);
-                    }
-                    '[' => {
-                        self.single_char(TokenType::LBracket);
-                    }
-                    ']' => {
-                        self.single_char(TokenType::RBracket);
-                    }
-                    '+' => {
-                        self.single_char(TokenType::Add);
-                    }
-                    '-' => {
-                        self.single_char(TokenType::Minus);
-                    }
-                    '*' => {
-                        self.single_char(TokenType::Multiply);
-                    }
+                    ';' => self.single_char(TokenType::SemiColon)?,
+                    '(' => self.single_char(TokenType::LParen)?,
+                    ')' => self.single_char(TokenType::RParen)?,
+                    '{' => self.single_char(TokenType::LBrace)?,
+                    '}' => self.single_char(TokenType::RBrace)?,
+                    ',' => self.single_char(TokenType::Comma)?,
+                    '[' => self.single_char(TokenType::LBracket)?,
+                    ']' => self.single_char(TokenType::RBracket)?,
+                    '+' => self.single_char(TokenType::Add)?,
+                    '-' => self.single_char(TokenType::Minus)?,
+                    '*' => self.single_char(TokenType::Multiply)?,
                     '/' => {
-                        if let Some(t) = self.lex_slash() {
+                        if let Some(t) = self.lex_slash()? {
                             self.add_token(t);
                         }
                     }
-                    '%' => {
-                        self.single_char(TokenType::Modulo);
-                    }
-
+                    '%' => self.single_char(TokenType::Modulo)?,
                     _ => self.advance(),
                 }
             }
         }
+        Ok(())
     }
 
-    fn lex_slash(&mut self) -> Option<Token> {
+    fn lex_slash(&mut self) -> Result<Option<Token>, LexError> {
         let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at '/'");
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'/'",
+            location: loc.clone(),
+        })?;
 
         if self.peek(1) == Some('/') {
             if self.peek(2) == Some('\'') {
@@ -183,21 +176,22 @@ impl Lexer {
                 loop {
                     match self.get_char() {
                         None => {
-                            panic!("Unexpected EOF inside multi-line comment (missing closing '//)")
+                            return Err(LexError::UnterminatedComment {
+                                location: self.current_location(),
+                            });
                         }
                         Some('\'') if self.peek(1) == Some('/') && self.peek(2) == Some('/') => {
-                            self.advance(); // '
-                            self.advance(); // /
-                            self.advance(); // /
+                            self.advance();
+                            self.advance();
+                            self.advance();
                             break;
                         }
                         Some(_) => self.advance(),
                     }
                 }
             } else {
-                self.advance(); // /
-                self.advance(); // /
-
+                self.advance();
+                self.advance();
                 while let Some(ch) = self.get_char() {
                     if ch == '\n' {
                         break;
@@ -205,150 +199,149 @@ impl Lexer {
                     self.advance();
                 }
             }
-
-            return None;
+            return Ok(None);
         }
 
         self.advance();
 
-        Some(Token {
+        Ok(Some(Token {
             ttype: TokenType::Divide,
+            location: loc,
+            value: current.to_string(),
+        }))
+    }
+
+    fn lex_colon(&mut self) -> Result<Token, LexError> {
+        let loc = self.current_location();
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "':'",
+            location: loc.clone(),
+        })?;
+
+        if self.peek(1) == Some(':') {
+            let next = self.peek(1).unwrap();
+            self.advance();
+            self.advance();
+            return Ok(Token {
+                ttype: TokenType::DoubleColon,
+                location: loc,
+                value: format!("{}{}", current, next),
+            });
+        }
+
+        self.advance();
+        Ok(Token {
+            ttype: TokenType::Colon,
             location: loc,
             value: current.to_string(),
         })
     }
 
-    fn lex_colon(&mut self) -> Token {
+    fn lex_gt(&mut self) -> Result<Token, LexError> {
         let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at ':'");
-
-        if self.peek(1) == Some(':') {
-            let next = self.peek(1).unwrap();
-
-            self.advance();
-            self.advance();
-
-            return Token {
-                ttype: TokenType::DoubleColon,
-                location: loc,
-                value: format!("{}{}", current, next),
-            };
-        }
-
-        self.advance();
-
-        return Token {
-            ttype: TokenType::Colon,
-            location: loc,
-            value: current.to_string(),
-        };
-    }
-
-    fn lex_gt(&mut self) -> Token {
-        let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at '>'");
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'>'",
+            location: loc.clone(),
+        })?;
 
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
-
             self.advance();
             self.advance();
-
-            return Token {
+            return Ok(Token {
                 ttype: TokenType::GreaterThanEquals,
                 location: loc,
                 value: format!("{}{}", current, next),
-            };
+            });
         }
 
         self.advance();
-
-        Token {
+        Ok(Token {
             ttype: TokenType::GreaterThan,
             location: loc,
             value: current.to_string(),
-        }
+        })
     }
 
-    fn lex_lt(&mut self) -> Token {
+    fn lex_lt(&mut self) -> Result<Token, LexError> {
         let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at '<'");
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'<'",
+            location: loc.clone(),
+        })?;
 
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
-
             self.advance();
             self.advance();
-
-            return Token {
+            return Ok(Token {
                 ttype: TokenType::LessThanEquals,
                 location: loc,
                 value: format!("{}{}", current, next),
-            };
+            });
         }
 
         self.advance();
-
-        Token {
+        Ok(Token {
             ttype: TokenType::LessThan,
             location: loc,
             value: current.to_string(),
-        }
+        })
     }
 
-    fn lex_not(&mut self) -> Token {
+    fn lex_not(&mut self) -> Result<Token, LexError> {
         let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at '!'");
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'!'",
+            location: loc.clone(),
+        })?;
 
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
-
-            self.advance(); // !
-            self.advance(); // =
-
-            return Token {
+            self.advance();
+            self.advance();
+            return Ok(Token {
                 ttype: TokenType::NotEquals,
                 location: loc,
                 value: format!("{}{}", current, next),
-            };
+            });
         }
 
         self.advance();
-
-        Token {
+        Ok(Token {
             ttype: TokenType::Not,
             location: loc,
             value: current.to_string(),
-        }
+        })
     }
 
-    fn lex_assign(&mut self) -> Token {
+    fn lex_assign(&mut self) -> Result<Token, LexError> {
         let loc = self.current_location();
-        let current = self.get_char().expect("Unexpected EOF at '='");
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'='",
+            location: loc.clone(),
+        })?;
 
         if self.peek(1) == Some('=') {
             let next = self.peek(1).unwrap();
-
-            self.advance(); // =
-            self.advance(); // =
-
-            return Token {
+            self.advance();
+            self.advance();
+            return Ok(Token {
                 ttype: TokenType::Equals,
                 location: loc,
                 value: format!("{}{}", current, next),
-            };
+            });
         }
 
-        self.advance(); // =
-
-        Token {
+        self.advance();
+        Ok(Token {
             ttype: TokenType::Assign,
             location: loc,
             value: current.to_string(),
-        }
+        })
     }
 
-    fn lex_char(&mut self) -> Token {
+    fn lex_char(&mut self) -> Result<Token, LexError> {
         let loc = self.current_location();
 
         self.advance(); // consume opening '
@@ -368,31 +361,48 @@ impl Lexer {
                     Some('\\') => '\\',
                     Some('\'') => '\'',
                     Some('0') => '\0',
-                    Some(other) => panic!("Unknown escape sequence: \\{}", other),
-                    None => panic!("Unexpected EOF inside escape sequence"),
+                    Some(other) => {
+                        return Err(LexError::UnknownEscapeSequence {
+                            ch: other,
+                            location: loc,
+                        });
+                    }
+                    None => {
+                        return Err(LexError::UnexpectedEof {
+                            context: "escape sequence",
+                            location: loc,
+                        });
+                    }
                 }
             }
             Some(ch) => ch,
-            None => panic!("Unexpected EOF inside character literal"),
+            None => {
+                return Err(LexError::UnexpectedEof {
+                    context: "character literal",
+                    location: loc,
+                });
+            }
         };
 
         if self.get_char() != Some('\'') {
-            panic!("Expected closing quote for character literal");
+            return Err(LexError::UnterminatedCharLiteral { location: loc });
         }
         self.advance();
 
-        Token {
+        Ok(Token {
             ttype: TokenType::CharLiteral,
             location: loc,
             value: final_char.to_string(),
-        }
+        })
     }
 
     fn lex_string(&mut self) -> Token {
+        // Unchanged — no panics here; an unterminated string just
+        // runs to EOF and returns whatever was collected. If you want
+        // that treated as an error too, this needs the same Result
+        // treatment as lex_char.
         let loc = self.current_location();
-
         let mut string: Vec<char> = Vec::new();
-
         self.advance(); // "
 
         while let Some(ch) = self.get_char() {
@@ -400,13 +410,12 @@ impl Lexer {
                 string.push(ch);
                 self.advance();
             } else {
-                self.advance(); // "
+                self.advance();
                 break;
             }
         }
 
         let value: String = string.into_iter().collect();
-
         Token {
             ttype: TokenType::StringLiteral,
             location: loc,
@@ -415,8 +424,8 @@ impl Lexer {
     }
 
     fn lex_numeric(&mut self) -> Token {
+        // unchanged, no panics
         let loc = self.current_location();
-
         let mut numstring: Vec<char> = Vec::new();
 
         while let Some(ch) = self.get_char() {
@@ -428,16 +437,15 @@ impl Lexer {
             }
         }
 
-        let value: String = numstring.into_iter().collect();
-
         Token {
             ttype: TokenType::IntLiteral,
             location: loc,
-            value,
+            value: numstring.into_iter().collect(),
         }
     }
 
     fn lex_identifier_and_keyword(&mut self) -> Token {
+        // unchanged, no panics — keyword matching is exhaustive-safe
         let loc = self.current_location();
         let mut buf: Vec<char> = Vec::new();
 
@@ -451,114 +459,24 @@ impl Lexer {
         }
 
         let value: String = buf.into_iter().collect();
+        let ttype = match value.as_str() {
+            "var" => TokenType::VarKeyword,
+            "if" => TokenType::IfKeyword,
+            "else" => TokenType::ElseKeyword,
+            "while" => TokenType::WhileKeyword,
+            "fn" => TokenType::FnKeyword,
+            "pub" => TokenType::PubKeyword,
+            "use" => TokenType::UseKeyword,
+            "for" => TokenType::ForKeyword,
+            "return" => TokenType::ReturnKeyword,
+            "extern" => TokenType::ExternKeyword,
+            "true" => TokenType::True,
+            "false" => TokenType::False,
+            "struct" => TokenType::StructKeyword,
+            "sizeof" => TokenType::SizeOfKeyword,
+            _ => TokenType::Identifier,
+        };
 
-        match value.as_str() {
-            "var" => {
-                return Token {
-                    ttype: TokenType::VarKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "if" => {
-                return Token {
-                    ttype: TokenType::IfKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "else" => {
-                return Token {
-                    ttype: TokenType::ElseKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "while" => {
-                return Token {
-                    ttype: TokenType::WhileKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "fn" => {
-                return Token {
-                    ttype: TokenType::FnKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "pub" => {
-                return Token {
-                    ttype: TokenType::PubKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "use" => {
-                return Token {
-                    ttype: TokenType::UseKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "for" => {
-                return Token {
-                    ttype: TokenType::ForKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "return" => {
-                return Token {
-                    ttype: TokenType::ReturnKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "extern" => {
-                return Token {
-                    ttype: TokenType::ExternKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "true" => {
-                return Token {
-                    ttype: TokenType::True,
-                    location: loc,
-                    value,
-                };
-            }
-            "false" => {
-                return Token {
-                    ttype: TokenType::False,
-                    location: loc,
-                    value,
-                };
-            }
-            "struct" => {
-                return Token {
-                    ttype: TokenType::StructKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-            "sizeof" => {
-                return Token {
-                    ttype: TokenType::SizeOfKeyword,
-                    location: loc,
-                    value,
-                };
-            }
-
-            _ => {}
-        }
-
-        Token {
-            ttype: TokenType::Identifier,
-            location: loc,
-            value,
-        }
+        Token { ttype, location: loc, value }
     }
 }
