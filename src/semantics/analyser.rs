@@ -10,6 +10,7 @@ pub struct Analyser {
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructSignature>,
     current_return_type: Option<Type>,
+    loop_depth: usize,
     pub current_generic_params: Vec<String>,
 }
 
@@ -24,6 +25,7 @@ impl Analyser {
             functions: HashMap::new(),
             structs: HashMap::new(),
             current_return_type: None,
+            loop_depth: 0,
             current_generic_params: Vec::new(),
         }
     }
@@ -818,6 +820,16 @@ impl Analyser {
                 Ok(())
             }
 
+            Stmt::Break { location } => {
+                if self.loop_depth == 0 {
+                    return Err(format!(
+                        "Semantic Error [{}]: Break statement must be in a while loop statement",
+                        location
+                    ));
+                }
+                Ok(())
+            }
+
             Stmt::Extern {
                 name,
                 rttype,
@@ -950,12 +962,13 @@ impl Analyser {
                         cond.span, cond_type
                     ));
                 }
-
                 self.enter_scope();
+                self.loop_depth += 1;
                 for block_stmt in body {
                     self.check_stmt(block_stmt)?;
                 }
                 self.leave_scope();
+                self.loop_depth -= 1;
                 Ok(())
             }
 

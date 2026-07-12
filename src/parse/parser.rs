@@ -249,6 +249,7 @@ impl Parser {
             TokenType::FnKeyword => self.parse_function(),
             TokenType::ForKeyword => self.parse_for(),
             TokenType::ReturnKeyword => self.parse_return(),
+            TokenType::BreakKeyword => self.parse_break(),
             TokenType::UseKeyword => self.parse_import(),
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier => self.parse_ident(),
@@ -502,6 +503,15 @@ impl Parser {
             generic_params,
             params,
             body,
+        })
+    }
+
+    fn parse_break(&mut self) -> Option<Stmt> {
+        let tk = self.get_token()?.clone();
+        self.advance();
+
+        Some(Stmt::Break {
+            location: tk.location,
         })
     }
 

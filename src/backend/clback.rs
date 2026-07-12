@@ -464,7 +464,6 @@ impl CraneliftBackend {
 
         let mut block_map: HashMap<String, Block> = HashMap::new();
 
-        // --- SECOND ALLOCATION LOOP WITH FULL ROBUST FALLBACKS ---
         for inst in insts {
             if let Instruction::Param { p } = inst {
                 let frontend_type = var_types
@@ -493,8 +492,6 @@ impl CraneliftBackend {
                 }
             }
             if let Instruction::Store { ptr, source } = inst {
-                // Check both ptr and source to see if either are Var or Temp references
-                // that represent aggregate structures needing stack slot space
                 for val in [ptr, source] {
                     if let Value::Var(var_name) | Value::Temp(var_name) = val {
                         let frontend_type = var_types
@@ -589,7 +586,6 @@ impl CraneliftBackend {
                     }
                 }
 
-                // 2. Catch the reference operand!
                 if *op == IrOp::Ref {
                     if let Value::Var(src_name) | Value::Temp(src_name) = src {
                         let src_front_ty = var_types
@@ -622,7 +618,6 @@ impl CraneliftBackend {
                 }
             }
 
-            // Keep your existing standard checks for Binary and Load elements below...
             if let Instruction::Binary { dst: dest_name, .. }
             | Instruction::Load { dst: dest_name, .. } = inst
             {
@@ -807,7 +802,7 @@ impl CraneliftBackend {
                         let frontend_type = var_types
                             .get(var_name)
                             .or_else(|| {
-                                let combined = format!("{}::{}", name, var_name); // uses function name
+                                let combined = format!("{}::{}", name, var_name);
                                 var_types.get(&combined)
                             })
                             .or_else(|| {
@@ -954,7 +949,6 @@ impl CraneliftBackend {
                         chunk_count,
                     } = abi
                     {
-                        // Fix 1: Apply robust fallback to dest_slot lookup so .unwrap() doesn't panic
                         let dest_slot = *stack_slot_map
                             .get(dst_name)
                             .or_else(|| {
@@ -978,16 +972,13 @@ impl CraneliftBackend {
                                 let src_slot = stack_slot_map.get(src_name)
                                     .copied()
                                     .or_else(|| {
-                                        // Fallback 1: Prepend the current function prefix (e.g., "func::t87")
                                         let combined_prefix = format!("{}::{}", name, src_name);
                                         stack_slot_map.get(&combined_prefix).copied()
                                     })
                                     .or_else(|| {
-                                        // Fallback 2: Completely strip any function/namespace pathing and find the pure base name (e.g. "entry")
                                         src_name.split("::").last().and_then(|suffix| stack_slot_map.get(suffix).copied())
                                     })
                                     .unwrap_or_else(|| {
-                                        // Provide a descriptive panic showing exactly what failed to look up
                                         panic!(
                                             "Source block space unallocated. Tried: '{}', '{}::{}', and '{}'", 
                                             src_name, name, src_name, src_name.split("::").last().unwrap_or("")
@@ -1056,7 +1047,6 @@ impl CraneliftBackend {
                         .map(BackendType::from_frontend)
                         .unwrap_or(BackendType::Int64);
 
-                    // --- AGGREGATE DEREFERENCE LOAD CHECK ---
                     let mut handled_as_aggregate = false;
                     let dest_f_ty = var_types.get(dest_name);
 
@@ -1064,12 +1054,10 @@ impl CraneliftBackend {
                         let abi =
                             AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
                         if let AbiType::Aggregate { total_size, .. } = abi {
-                            // Find the stack slot allocated for our target structure variable
                             if let Some(&dest_slot) = stack_slot_map.get(dest_name) {
                                 let dest_addr = builder.ins().stack_addr(ptr_type, dest_slot, 0);
                                 let size_val = builder.ins().iconst(ptr_type, total_size as i64);
 
-                                // Copy the full struct block out of the pointer address into our stack slot
                                 builder.call_memcpy(
                                     self.module.target_config(),
                                     dest_addr,
@@ -1082,7 +1070,6 @@ impl CraneliftBackend {
                     }
 
                     if !handled_as_aggregate {
-                        // Fall back to your original primitive scalar load logic
                         let clif_ty = dest_ty.to_clif_type(ptr_type);
                         let loaded_val = builder.ins().load(clif_ty, MemFlags::new(), ptr_val, 0);
 
@@ -1126,7 +1113,6 @@ impl CraneliftBackend {
                             let abi =
                                 AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
                             if let AbiType::Aggregate { total_size, .. } = abi {
-                                // Use your robust fallback stack-slot lookup engine
                                 let slot = stack_slot_map
                                     .get(src_name)
                                     .copied()
@@ -1144,7 +1130,6 @@ impl CraneliftBackend {
                                 let src_addr = if let Some(s) = slot {
                                     builder.ins().stack_addr(ptr_type, s, 0)
                                 } else {
-                                    // Fallback only if it truly is a pointer already
                                     self.lower_value(
                                         &mut builder,
                                         value,

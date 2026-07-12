@@ -55,6 +55,7 @@ pub struct IRGen {
     temps: TempGen,
     labels: LabelGen,
     functions: FunctionGen,
+    loop_exits: Vec<String>,
     pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
@@ -73,6 +74,7 @@ impl IRGen {
             temps: TempGen::new(),
             labels: LabelGen::new(),
             functions: FunctionGen::new(),
+            loop_exits: Vec::new(),
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
             var_types: ScopedMap::new(HashMap::new()),
@@ -230,8 +232,6 @@ impl IRGen {
         if let Some(layout) = self.struct_defs.get(name) {
             return Some(layout);
         }
-        // Fallback: If a concrete instantiation name isn't found,
-        // find any registered layout sharing the same base structure prefix.
         if let Some(base_name) = name.split("__").next() {
             for (key, layout) in &self.struct_defs {
                 if key == base_name || key.starts_with(&format!("{}__", base_name)) {
@@ -421,7 +421,6 @@ impl IRGen {
             }
             ExprKind::Field { base, field } => {
                 if let Some(base_ty) = self.expr_type(base) {
-                    // Unify both Struct and GenericInstance into a single mangled layout name string
                     let struct_name = match self.resolve_type(&base_ty) {
                         Type::Struct(name) => Some(name),
                         Type::GenericInstance { name, args } => {
@@ -462,16 +461,12 @@ impl IRGen {
     /// `buckets` field).
     fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
         match &expr.kind {
-            // &(^p) is just p itself -- no need to load and re-take the address.
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
             } => self.gen_expr(inner, None),
 
             ExprKind::Field { base, field } => {
-                // Address of the base: if base is itself an lvalue (field/index/deref)
-                // recurse to get its real address; otherwise fall back to evaluating +
-                // referencing it (e.g. base is a plain local variable/temp).
                 let base_addr = if matches!(
                     base.kind,
                     ExprKind::Field { .. }
@@ -564,8 +559,6 @@ impl IRGen {
                     rhs: Value::Const(stride),
                 });
 
-                // Get the *value* of base (e.g. a pointer field's value), unless base
-                // is itself a plain array-typed lvalue, in which case we need its address.
                 let is_ptr_valued = matches!(base_type, Some(Type::Ptr(_)));
                 let base_val =
                     if matches!(base.kind, ExprKind::Field { .. } | ExprKind::Index { .. })
@@ -614,7 +607,6 @@ impl IRGen {
                 Value::Temp(target_addr_temp)
             }
 
-            // Not an lvalue we recognize -- fall back to load-then-ref.
             _ => {
                 let value = self.gen_expr(expr, None);
                 let inner_type = self.get_value_type(&value);
@@ -708,11 +700,9 @@ impl IRGen {
                 let base_type = self.expr_type(base).unwrap_or(Type::Int);
                 let resolved_base = self.resolve_type(&base_type);
 
-                // 1. Cleanly discover the mangled structure name
                 let struct_name = match resolved_base {
                     Type::Struct(name) => name,
                     Type::GenericInstance { name, args } => {
-                        // Safely reuse your existing type-mangling scheme
                         let mut mangled_name = name;
                         for arg in args {
                             mangled_name.push_str("__");
@@ -726,7 +716,6 @@ impl IRGen {
                     ),
                 };
 
-                // 2. Fetch layout properties using the correct layout identifier
                 let (offset, field_type) = {
                     let (offset, unres_field_ty) = self
                         .get_struct_layout(&struct_name)
@@ -749,7 +738,6 @@ impl IRGen {
                     (offset, self.resolve_type(&unres_field_ty))
                 };
 
-                // 3. Emit the address offset instructions
                 let base_addr_temp =
                     self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
                 self.code.push(Instruction::Unary {
@@ -1303,6 +1291,8 @@ impl IRGen {
                 let start = self.labels.next();
                 let end = self.labels.next();
 
+                self.loop_exits.push(end.clone());
+
                 self.code.push(Instruction::Label(start.clone()));
                 let cond_val = self.gen_expr(cond, None);
                 self.code.push(Instruction::JumpIfFalse {
@@ -1313,8 +1303,19 @@ impl IRGen {
                 for stmt in body {
                     self.gen_stmt(stmt);
                 }
+
+                self.loop_exits.pop();
                 self.code.push(Instruction::Jump(start));
                 self.code.push(Instruction::Label(end));
+            }
+            Stmt::Break { .. } => {
+                if let Some(exit_label) = self.loop_exits.last().cloned() {
+                    self.code.push(Instruction::Jump(exit_label));
+                } else {
+                    panic!(
+                        "Internal compiler error: break statement unvalidated by semantic analyzer"
+                    );
+                }
             }
             Stmt::For {
                 init,

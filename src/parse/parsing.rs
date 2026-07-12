@@ -181,6 +181,9 @@ pub enum Stmt {
         generic_params: Vec<String>,
         params: Vec<Parameter>,
     },
+    Break {
+        location: Location,
+    },
 }
 
 #[derive(Debug)]
