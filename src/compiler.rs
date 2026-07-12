@@ -165,9 +165,9 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
 
     let mut irgen = IRGen::new();
     irgen.gen_program(program);
-    irgen.dump();
+    // irgen.dump();
 
-    println!("irgen.var_types: {:#?}", irgen.var_types);
+    // println!("irgen.var_types: {:#?}", irgen.var_types);
 
     let tac_instructions = irgen.code;
 
