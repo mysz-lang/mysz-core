@@ -13,6 +13,7 @@ pub enum IrOp {
     Neg, // unary minus
     Pos, // unary plus
     Ref, // unary &
+    Not, // unary !
 
     Eq,  // ==
     NEq, // !=

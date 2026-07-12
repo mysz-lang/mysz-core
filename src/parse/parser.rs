@@ -889,6 +889,17 @@ impl Parser {
                     span: tk.location,
                 })
             }
+            TokenType::Not => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Some(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        expr: Box::new(expr),
+                    },
+                    span: tk.location,
+                })
+            }
             _ => self.parse_postfix(),
         }
     }

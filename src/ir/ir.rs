@@ -227,7 +227,19 @@ impl IRGen {
     }
 
     fn get_struct_layout(&self, name: &str) -> Option<&StructLayout> {
-        self.struct_defs.get(name)
+        if let Some(layout) = self.struct_defs.get(name) {
+            return Some(layout);
+        }
+        // Fallback: If a concrete instantiation name isn't found,
+        // find any registered layout sharing the same base structure prefix.
+        if let Some(base_name) = name.split("__").next() {
+            for (key, layout) in &self.struct_defs {
+                if key == base_name || key.starts_with(&format!("{}__", base_name)) {
+                    return Some(layout);
+                }
+            }
+        }
+        None
     }
 
     fn get_value_type(&self, value: &Value) -> Type {
@@ -364,7 +376,12 @@ impl IRGen {
                 }
             }
             ExprKind::Identifier(name) => {
-                let base_ty = self.var_types.get(name).cloned()?;
+                let local_mangled = format!("{}::{}", self.current_function, name);
+                let base_ty = if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
+                    ty
+                } else {
+                    self.var_types.get(name).cloned()?
+                };
                 Some(self.resolve_type(&base_ty))
             }
             ExprKind::Binary { left, op, .. } => match op {
@@ -399,14 +416,28 @@ impl IRGen {
                         _ => None,
                     },
                     UnaryOp::Positive | UnaryOp::Negative => Some(Type::Int),
+                    UnaryOp::Not => Some(Type::Bool),
                 }
             }
-
             ExprKind::Field { base, field } => {
                 if let Some(base_ty) = self.expr_type(base) {
-                    if let Type::Struct(struct_name) = self.resolve_type(&base_ty) {
+                    // Unify both Struct and GenericInstance into a single mangled layout name string
+                    let struct_name = match self.resolve_type(&base_ty) {
+                        Type::Struct(name) => Some(name),
+                        Type::GenericInstance { name, args } => {
+                            let mut mangled_name = name;
+                            for arg in args {
+                                mangled_name.push_str("__");
+                                mangled_name.push_str(&self.mangle_type(&arg));
+                            }
+                            Some(mangled_name)
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(name) = struct_name {
                         let found_field_ty = self
-                            .get_struct_layout(&struct_name)
+                            .get_struct_layout(&name)
                             .and_then(|layout| layout.field_offsets.get(field))
                             .map(|(_, field_ty)| field_ty.clone());
 
@@ -418,6 +449,185 @@ impl IRGen {
                 None
             }
             ExprKind::StructLiteral { struct_name, .. } => Some(Type::Struct(struct_name.clone())),
+        }
+    }
+
+    /// Computes the address of an lvalue-producing expression (a struct field
+    /// access, an array/pointer index, or a pointer dereference) *without*
+    /// first loading its value into a fresh temporary. This is what `&expr`
+    /// must use for anything more complex than a bare identifier or literal --
+    /// calling `gen_expr` and then `Ref`-ing the result instead gives you the
+    /// address of a disconnected copy, silently breaking any write-through of
+    /// that pointer (e.g. `&map.buckets` no longer points at `map`'s real
+    /// `buckets` field).
+    fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
+        match &expr.kind {
+            // &(^p) is just p itself -- no need to load and re-take the address.
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                expr: inner,
+            } => self.gen_expr(inner, None),
+
+            ExprKind::Field { base, field } => {
+                // Address of the base: if base is itself an lvalue (field/index/deref)
+                // recurse to get its real address; otherwise fall back to evaluating +
+                // referencing it (e.g. base is a plain local variable/temp).
+                let base_addr = if matches!(
+                    base.kind,
+                    ExprKind::Field { .. }
+                        | ExprKind::Index { .. }
+                        | ExprKind::Unary {
+                            op: UnaryOp::Deref,
+                            ..
+                        }
+                ) {
+                    self.gen_lvalue_addr(base)
+                } else {
+                    let base_val = self.gen_expr(base, None);
+                    let base_ty = self.get_value_type(&base_val);
+                    let addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(base_ty)));
+                    self.code.push(Instruction::Unary {
+                        dst: addr_temp.clone(),
+                        op: IrOp::Ref,
+                        value: base_val,
+                    });
+                    Value::Temp(addr_temp)
+                };
+
+                let base_type = self.expr_type(base).unwrap_or(Type::Int);
+                let resolved_base = self.resolve_type(&base_type);
+                let struct_name = match resolved_base {
+                    Type::Struct(name) => name,
+                    Type::GenericInstance { name, args } => {
+                        let mut mangled_name = name;
+                        for arg in args {
+                            mangled_name.push_str("__");
+                            mangled_name.push_str(&self.mangle_type(&arg));
+                        }
+                        mangled_name
+                    }
+                    _ => panic!(
+                        "ICE: Attempted field address on non-struct type. Found: {:?}",
+                        base_type
+                    ),
+                };
+
+                let (offset, field_type) = self
+                    .get_struct_layout(&struct_name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "ICE: Structural reference layout untracked for '{}'.",
+                            struct_name
+                        )
+                    })
+                    .field_offsets
+                    .get(field)
+                    .map(|(offset, field_ty)| (*offset, field_ty.clone()))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "ICE: Referenced struct field '{}' does not exist in '{}'.",
+                            field, struct_name
+                        )
+                    });
+                let field_type = self.resolve_type(&field_type);
+
+                let field_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(field_type)));
+                self.code.push(Instruction::Binary {
+                    dst: field_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: base_addr,
+                    rhs: Value::Const(offset),
+                });
+
+                Value::Temp(field_addr_temp)
+            }
+
+            ExprKind::Index { base, index } => {
+                let index_val = self.gen_expr(index, None);
+                let base_type = self.expr_type(base);
+
+                let element_type = match &base_type {
+                    Some(Type::Array { element_type, .. }) => *element_type.clone(),
+                    Some(Type::Ptr(inner)) => match &**inner {
+                        Type::Array { element_type, .. } => *element_type.clone(),
+                        other => other.clone(),
+                    },
+                    _ => Type::Int,
+                };
+
+                let stride = self.element_size(&element_type);
+                let offset_temp = self.next_temp_with_type(Type::Int);
+                self.code.push(Instruction::Binary {
+                    dst: offset_temp.clone(),
+                    op: IrOp::Mul,
+                    lhs: index_val,
+                    rhs: Value::Const(stride),
+                });
+
+                // Get the *value* of base (e.g. a pointer field's value), unless base
+                // is itself a plain array-typed lvalue, in which case we need its address.
+                let is_ptr_valued = matches!(base_type, Some(Type::Ptr(_)));
+                let base_val = if matches!(
+                    base.kind,
+                    ExprKind::Field { .. } | ExprKind::Index { .. }
+                ) && is_ptr_valued
+                {
+                    self.gen_expr(base, None)
+                } else if matches!(
+                    base.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        ..
+                    }
+                ) && is_ptr_valued
+                {
+                    self.gen_expr(base, None)
+                } else {
+                    self.gen_expr(base, None)
+                };
+
+                let target_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
+
+                if is_ptr_valued {
+                    self.code.push(Instruction::Binary {
+                        dst: target_addr_temp.clone(),
+                        op: IrOp::Add,
+                        lhs: base_val,
+                        rhs: Value::Temp(offset_temp),
+                    });
+                } else {
+                    let base_addr_temp =
+                        self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
+                    self.code.push(Instruction::Unary {
+                        dst: base_addr_temp.clone(),
+                        op: IrOp::Ref,
+                        value: base_val,
+                    });
+                    self.code.push(Instruction::Binary {
+                        dst: target_addr_temp.clone(),
+                        op: IrOp::Add,
+                        lhs: Value::Temp(base_addr_temp),
+                        rhs: Value::Temp(offset_temp),
+                    });
+                }
+
+                Value::Temp(target_addr_temp)
+            }
+
+            // Not an lvalue we recognize -- fall back to load-then-ref.
+            _ => {
+                let value = self.gen_expr(expr, None);
+                let inner_type = self.get_value_type(&value);
+                let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
+                self.code.push(Instruction::Unary {
+                    dst: temp.clone(),
+                    op: IrOp::Ref,
+                    value,
+                });
+                Value::Temp(temp)
+            }
         }
     }
 
@@ -497,35 +707,51 @@ impl IRGen {
 
             ExprKind::Field { base, field } => {
                 let base_val = self.gen_expr(base, None);
+                let base_type = self.expr_type(base).unwrap_or(Type::Int);
+                let resolved_base = self.resolve_type(&base_type);
 
+                // 1. Cleanly discover the mangled structure name
+                let struct_name = match resolved_base {
+                    Type::Struct(name) => name,
+                    Type::GenericInstance { name, args } => {
+                        // Safely reuse your existing type-mangling scheme
+                        let mut mangled_name = name;
+                        for arg in args {
+                            mangled_name.push_str("__");
+                            mangled_name.push_str(&self.mangle_type(&arg));
+                        }
+                        mangled_name
+                    }
+                    _ => panic!(
+                        "ICE: Attempted field access on non-struct type. Found: {:?}",
+                        base_type
+                    ),
+                };
+
+                // 2. Fetch layout properties using the correct layout identifier
                 let (offset, field_type) = {
-                    let base_type = self.expr_type(base).unwrap_or(Type::Int);
-                    let resolved_base = self.resolve_type(&base_type);
-                    let struct_name = match resolved_base {
-                        Type::Struct(name) => name,
-                        _ => panic!(
-                            "ICE: Attempted field access on non-struct type. Found: {:?}",
-                            base_type
-                        ),
-                    };
-
                     let (offset, unres_field_ty) = self
                         .get_struct_layout(&struct_name)
-                        .expect("ICE: Structural reference layout untracked.")
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "ICE: Structural reference layout untracked for '{}'.",
+                                struct_name
+                            )
+                        })
                         .field_offsets
                         .get(field)
                         .map(|(offset, field_ty)| (*offset, field_ty.clone()))
-                        .expect("ICE: Referenced struct field does not exist.");
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "ICE: Referenced struct field '{}' does not exist in '{}'.",
+                                field, struct_name
+                            )
+                        });
 
                     (offset, self.resolve_type(&unres_field_ty))
                 };
 
-                let base_type = self.expr_type(base).unwrap_or(Type::Int);
-                let struct_name = match self.resolve_type(&base_type) {
-                    Type::Struct(name) => name,
-                    _ => unreachable!(),
-                };
-
+                // 3. Emit the address offset instructions
                 let base_addr_temp =
                     self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
                 self.code.push(Instruction::Unary {
@@ -713,6 +939,10 @@ impl IRGen {
                     });
                     Value::Temp(result_temp)
                 }
+                UnaryOp::Not => {
+                    let value = self.gen_expr(expr, None);
+                    self.emit_unary(IrOp::Not, value)
+                }
                 UnaryOp::AddressOf => {
                     if let ExprKind::Literal(lit) = &expr.kind {
                         let lit_val = match lit {
@@ -742,6 +972,19 @@ impl IRGen {
                         });
 
                         Value::Temp(ref_temp)
+                    } else if matches!(
+                        expr.kind,
+                        ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::Unary {
+                            op: UnaryOp::Deref,
+                            ..
+                        }
+                    ) {
+                        // These are lvalue-producing expressions: taking their address
+                        // must compute a pointer to the *original* storage location
+                        // (a struct field, an array/pointer element, or the pointee of
+                        // a pointer) rather than evaluating the expression (which loads
+                        // a copy of the value) and then taking the address of that copy.
+                        self.gen_lvalue_addr(expr)
                     } else {
                         let value = self.gen_expr(expr, None);
                         let inner_type = self.get_value_type(&value);
@@ -1227,21 +1470,36 @@ impl IRGen {
 
                     let (struct_name, offset, field_type) = {
                         let base_type = self.expr_type(base).unwrap_or(Type::Int);
-                        let name = match base_type {
+                        let resolved_base = self.resolve_type(&base_type);
+
+                        let name = match resolved_base {
                             Type::Struct(n) => n,
-                            _ => panic!("ICE: Field writing targeted a non-struct entity."),
+                            Type::GenericInstance { name, args } => {
+                                let mut mangled_name = name;
+                                for arg in args {
+                                    mangled_name.push_str("__");
+                                    mangled_name.push_str(&self.mangle_type(&arg));
+                                }
+                                mangled_name
+                            }
+                            _ => panic!(
+                                "ICE: Field writing targeted a non-struct entity. Found: {:?}",
+                                base_type
+                            ),
                         };
 
-                        let layout = self
-                            .struct_defs
-                            .get(&name)
-                            .expect("ICE: Structural reference layout untracked.");
-                        let (offset, field_ty) = layout
-                            .field_offsets
-                            .get(field)
-                            .expect("ICE: Referenced struct field does not exist.");
+                        let layout = self.struct_defs.get(&name).unwrap_or_else(|| {
+                            panic!("ICE: Structural reference layout untracked for '{}'.", name)
+                        });
+                        let (offset, field_ty) =
+                            layout.field_offsets.get(field).unwrap_or_else(|| {
+                                panic!(
+                                    "ICE: Referenced struct field '{}' does not exist in '{}'.",
+                                    field, name
+                                )
+                            });
 
-                        (name, *offset, field_ty.clone())
+                        (name, *offset, self.resolve_type(&field_ty.clone()))
                     };
 
                     let base_addr_temp =

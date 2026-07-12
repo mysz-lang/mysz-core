@@ -96,20 +96,34 @@ impl Analyser {
     fn normalise_type(&self, ty: &Type) -> Type {
         match ty {
             Type::GenericInstance { name, args } => {
+                fn flatten_name(t: &Type) -> String {
+                    match t {
+                        Type::Struct(n) => n.clone(),
+                        Type::GenericInstance {
+                            name: inner_name,
+                            args: inner_args,
+                        } => {
+                            let mut mangled = inner_name.clone();
+                            for arg in inner_args {
+                                mangled.push_str("__");
+                                mangled.push_str(&flatten_name(arg));
+                            }
+                            mangled
+                        }
+                        Type::Int => "int".to_string(),
+                        Type::Char => "char".to_string(),
+                        Type::Bool => "bool".to_string(),
+                        Type::Ptr(inner) => format!("ptr__{}", flatten_name(inner)),
+                        _ => format!("{:?}", t),
+                    }
+                }
+
                 let mut mangled_name = name.clone();
                 for arg in args {
                     mangled_name.push_str("__");
-                    match arg {
-                        Type::Int => mangled_name.push_str("int"),
-                        Type::Bool => mangled_name.push_str("bool"),
-                        Type::Str => mangled_name.push_str("str"),
-                        Type::Char => mangled_name.push_str("char"),
-                        Type::Void => mangled_name.push_str("void"),
-                        Type::Any => mangled_name.push_str("any"),
-                        Type::Struct(n) => mangled_name.push_str(n),
-                        _ => mangled_name.push_str("type"),
-                    }
+                    mangled_name.push_str(&flatten_name(arg));
                 }
+
                 Type::Struct(mangled_name)
             }
             Type::Ptr(inner) => Type::Ptr(Box::new(self.normalise_type(inner))),
@@ -392,6 +406,56 @@ impl Analyser {
                         })?;
 
                         Ok(field_type.clone())
+                    }
+                    Type::GenericInstance { name, args } => {
+                        let signature = self.structs.get(&name).ok_or_else(|| {
+                            format!(
+                                "Semantic Error [{}]: Attempted to access field '{}' on undefined struct '{}'.",
+                                expr.span, field, name
+                            )
+                        })?;
+
+                        let raw_field_type = signature.fields.get(field).ok_or_else(|| {
+                            format!(
+                                "Semantic Error [{}]: Struct '{}' has no field named '{}'.",
+                                expr.span, name, field
+                            )
+                        })?;
+
+                        let subst_map: HashMap<&String, &Type> =
+                            signature.generic_params.iter().zip(args.iter()).collect();
+
+                        fn substitute(
+                            ty: &Type,
+                            map: &std::collections::HashMap<&String, &Type>,
+                        ) -> Type {
+                            match ty {
+                                Type::Struct(s_name) => {
+                                    // If this name matches a known placeholder key, swap it!
+                                    if let Some(&actual_ty) = map.get(s_name) {
+                                        actual_ty.clone()
+                                    } else {
+                                        ty.clone()
+                                    }
+                                }
+                                Type::GenericInstance {
+                                    name: g_name,
+                                    args: g_args,
+                                } => {
+                                    // Handle nested mappings like MyszArray<HashEntry<K, V>>
+                                    let new_args =
+                                        g_args.iter().map(|arg| substitute(arg, map)).collect();
+                                    Type::GenericInstance {
+                                        name: g_name.clone(),
+                                        args: new_args,
+                                    }
+                                }
+                                Type::Ptr(inner) => Type::Ptr(Box::new(substitute(inner, map))),
+                                _ => ty.clone(),
+                            }
+                        }
+
+                        Ok(substitute(raw_field_type, &subst_map))
                     }
                     _ => Err(format!(
                         "Type Error [{}]: Cannot access a field on non-struct type '{:?}'.",
@@ -687,6 +751,16 @@ impl Analyser {
                         } else {
                             Err(format!(
                                 "Type Error [{}]: Unary arithmetic operator expects 'int', found '{:?}'",
+                                expr.span, expr_type
+                            ))
+                        }
+                    }
+                    UnaryOp::Not => {
+                        if expr_type == Type::Bool {
+                            Ok(Type::Bool)
+                        } else {
+                            Err(format!(
+                                "Type Error [{}]: Unary boolean operator expects 'bool' found '{:?}'",
                                 expr.span, expr_type
                             ))
                         }

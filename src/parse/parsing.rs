@@ -60,6 +60,7 @@ pub enum UnaryOp {
     Negative,
     AddressOf,
     Deref,
+    Not,
 }
 
 #[derive(Debug, Clone)]

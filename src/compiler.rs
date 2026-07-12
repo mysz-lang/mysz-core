@@ -163,6 +163,8 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     let mut analyser = Analyser::new();
     analyser.analyse(program)?;
 
+    // println!("analysis.structs: {:#?}", analyser.structs);
+
     let mut irgen = IRGen::new();
     irgen.gen_program(program);
     // irgen.dump();
@@ -215,6 +217,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     }
 
     let product = backend.finish();
+
     let emit_result = product.emit().expect("Failed to emit object code");
 
     let mut file = File::create(output_filename).expect("Failed to create output file");
