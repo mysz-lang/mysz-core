@@ -431,7 +431,6 @@ impl Analyser {
                         ) -> Type {
                             match ty {
                                 Type::Struct(s_name) => {
-                                    // If this name matches a known placeholder key, swap it!
                                     if let Some(&actual_ty) = map.get(s_name) {
                                         actual_ty.clone()
                                     } else {
@@ -442,7 +441,6 @@ impl Analyser {
                                     name: g_name,
                                     args: g_args,
                                 } => {
-                                    // Handle nested mappings like MyszArray<HashEntry<K, V>>
                                     let new_args =
                                         g_args.iter().map(|arg| substitute(arg, map)).collect();
                                     Type::GenericInstance {

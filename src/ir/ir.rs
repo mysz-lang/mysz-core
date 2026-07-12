@@ -531,8 +531,7 @@ impl IRGen {
                     });
                 let field_type = self.resolve_type(&field_type);
 
-                let field_addr_temp =
-                    self.next_temp_with_type(Type::Ptr(Box::new(field_type)));
+                let field_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_type)));
                 self.code.push(Instruction::Binary {
                     dst: field_addr_temp.clone(),
                     op: IrOp::Add,
@@ -568,24 +567,23 @@ impl IRGen {
                 // Get the *value* of base (e.g. a pointer field's value), unless base
                 // is itself a plain array-typed lvalue, in which case we need its address.
                 let is_ptr_valued = matches!(base_type, Some(Type::Ptr(_)));
-                let base_val = if matches!(
-                    base.kind,
-                    ExprKind::Field { .. } | ExprKind::Index { .. }
-                ) && is_ptr_valued
-                {
-                    self.gen_expr(base, None)
-                } else if matches!(
-                    base.kind,
-                    ExprKind::Unary {
-                        op: UnaryOp::Deref,
-                        ..
-                    }
-                ) && is_ptr_valued
-                {
-                    self.gen_expr(base, None)
-                } else {
-                    self.gen_expr(base, None)
-                };
+                let base_val =
+                    if matches!(base.kind, ExprKind::Field { .. } | ExprKind::Index { .. })
+                        && is_ptr_valued
+                    {
+                        self.gen_expr(base, None)
+                    } else if matches!(
+                        base.kind,
+                        ExprKind::Unary {
+                            op: UnaryOp::Deref,
+                            ..
+                        }
+                    ) && is_ptr_valued
+                    {
+                        self.gen_expr(base, None)
+                    } else {
+                        self.gen_expr(base, None)
+                    };
 
                 let target_addr_temp =
                     self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
@@ -974,10 +972,12 @@ impl IRGen {
                         Value::Temp(ref_temp)
                     } else if matches!(
                         expr.kind,
-                        ExprKind::Field { .. } | ExprKind::Index { .. } | ExprKind::Unary {
-                            op: UnaryOp::Deref,
-                            ..
-                        }
+                        ExprKind::Field { .. }
+                            | ExprKind::Index { .. }
+                            | ExprKind::Unary {
+                                op: UnaryOp::Deref,
+                                ..
+                            }
                     ) {
                         // These are lvalue-producing expressions: taking their address
                         // must compute a pointer to the *original* storage location
