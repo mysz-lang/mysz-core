@@ -9,8 +9,8 @@ pub struct Analyser {
     pub current_scope: usize,
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructSignature>,
-    pub types: HashMap<String, Type>,
     current_return_type: Option<Type>,
+    pub current_generic_params: Vec<String>,
 }
 
 impl Analyser {
@@ -23,8 +23,8 @@ impl Analyser {
             current_scope: 0,
             functions: HashMap::new(),
             structs: HashMap::new(),
-            types: HashMap::new(),
             current_return_type: None,
+            current_generic_params: Vec::new(),
         }
     }
 
@@ -209,10 +209,10 @@ impl Analyser {
         scope.symbols.insert(
             name.to_string(),
             Symbol {
-                data_type: data_type.clone(),
+                name: name.to_string(),
+                ty: data_type.clone(),
             },
         );
-        self.types.insert(name.to_string(), data_type);
         Ok(())
     }
 
@@ -233,11 +233,26 @@ impl Analyser {
     fn validate_type_exists(&self, ty: &Type, span: &Location) -> Result<(), String> {
         match ty {
             Type::Struct(name) => {
+                if self.current_generic_params.contains(name) {
+                    return Ok(());
+                }
+
                 if !self.structs.contains_key(name) {
                     return Err(format!(
                         "Semantic Error [{}]: Type '{}' is used here but never defined.",
                         span, name
                     ));
+                }
+            }
+            Type::GenericInstance { name, args } => {
+                if !self.structs.contains_key(name) {
+                    return Err(format!(
+                        "Semantic Error [{}]: Generic struct '{}' is used here but never defined.",
+                        span, name
+                    ));
+                }
+                for arg in args {
+                    self.validate_type_exists(arg, span)?;
                 }
             }
             Type::Ptr(inner) => {
@@ -466,7 +481,7 @@ impl Analyser {
             }
             ExprKind::Identifier(name) => {
                 if let Some(symbol) = self.resolve_variable(name) {
-                    Ok(symbol.data_type.clone())
+                    Ok(symbol.ty.clone())
                 } else {
                     Err(format!(
                         "Semantic Error [{}]: Variable '{}' is used before definition.",
@@ -700,6 +715,9 @@ impl Analyser {
             } => {
                 let mut struct_fields = HashMap::new();
 
+                let prev_generic_params =
+                    std::mem::replace(&mut self.current_generic_params, generic_params.clone());
+
                 for field in fields {
                     let field_type = match &field.ptype {
                         Some(t) => t.clone(),
@@ -723,6 +741,8 @@ impl Analyser {
                     name.location.clone(),
                 )?;
 
+                self.current_generic_params = prev_generic_params;
+
                 Ok(())
             }
 
@@ -737,6 +757,9 @@ impl Analyser {
                     None => Type::Void,
                 };
 
+                let prev_generic_params =
+                    std::mem::replace(&mut self.current_generic_params, generic_params.clone());
+
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
@@ -745,6 +768,8 @@ impl Analyser {
                     };
                     param_types.push(ptype.clone());
                 }
+
+                self.current_generic_params = prev_generic_params;
 
                 self.declare_function(
                     &name.value,
@@ -788,13 +813,13 @@ impl Analyser {
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                    if existing_symbol.data_type != variable_type
-                        && existing_symbol.data_type != Type::Any
+                    if existing_symbol.ty != variable_type
+                        && existing_symbol.ty != Type::Any
                         && variable_type != Type::Any
                     {
                         return Err(format!(
                             "Type Error [{}]: Cannot reassign type '{:?}' to variable '{}' of type '{:?}'",
-                            ident.location, variable_type, ident.value, existing_symbol.data_type
+                            ident.location, variable_type, ident.value, existing_symbol.ty
                         ));
                     }
                 } else {
@@ -831,13 +856,10 @@ impl Analyser {
                     )
                 })?;
 
-                if symbol.data_type != expr_type
-                    && symbol.data_type != Type::Any
-                    && expr_type != Type::Any
-                {
+                if symbol.ty != expr_type && symbol.ty != Type::Any && expr_type != Type::Any {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
-                        expr.span, expr_type, ident.value, symbol.data_type
+                        expr.span, expr_type, ident.value, symbol.ty
                     ));
                 }
 
@@ -937,6 +959,9 @@ impl Analyser {
                     None => Type::Void,
                 };
 
+                let prev_generic_params =
+                    std::mem::replace(&mut self.current_generic_params, generic_params.clone());
+
                 self.validate_type_exists(&return_type, &name.location)?;
 
                 let mut param_types = Vec::new();
@@ -979,6 +1004,8 @@ impl Analyser {
                         name.location, name.value, return_type
                     ));
                 }
+
+                self.current_generic_params = prev_generic_params;
 
                 self.leave_scope();
                 Ok(())

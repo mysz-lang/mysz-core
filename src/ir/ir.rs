@@ -58,6 +58,7 @@ pub struct IRGen {
     pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
+    pub current_function: String,
 
     pub fn_blueprints: HashMap<String, Stmt>,
     pub instantiated_fns: std::collections::HashSet<String>,
@@ -66,7 +67,7 @@ pub struct IRGen {
 }
 
 impl IRGen {
-    pub fn new(types: HashMap<String, Type>) -> Self {
+    pub fn new() -> Self {
         Self {
             code: Vec::new(),
             temps: TempGen::new(),
@@ -74,7 +75,8 @@ impl IRGen {
             functions: FunctionGen::new(),
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
-            var_types: ScopedMap::new(types),
+            var_types: ScopedMap::new(HashMap::new()),
+            current_function: String::new(),
 
             fn_blueprints: HashMap::new(),
             instantiated_fns: std::collections::HashSet::new(),
@@ -83,10 +85,15 @@ impl IRGen {
         }
     }
 
-    fn next_temp_with_type(&mut self, ty: Type) -> String {
-        let temp = self.temps.next();
-        self.var_types.insert(temp.clone(), ty);
-        temp
+    pub fn next_temp_with_type(&mut self, ty: Type) -> String {
+        let base_name = self.temps.next();
+        let qualified_name = if self.current_function.is_empty() {
+            base_name
+        } else {
+            format!("{}::{}", self.current_function, base_name)
+        };
+        self.var_types.insert(qualified_name.clone(), ty);
+        qualified_name
     }
 
     fn substitute_type(&self, ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
@@ -673,7 +680,14 @@ impl IRGen {
                 Value::Temp(result_temp)
             }
 
-            ExprKind::Identifier(name) => Value::Var(name.clone()),
+            ExprKind::Identifier(name) => {
+                let local_mangled = format!("{}::{}", self.current_function, name);
+                if self.var_types.get(&local_mangled).is_some() {
+                    Value::Var(local_mangled)
+                } else {
+                    Value::Var(name.clone())
+                }
+            }
 
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Positive => {
@@ -1097,17 +1111,20 @@ impl IRGen {
                 }
 
                 let start = self.functions.next(name.value.clone());
-                self.code.push(Instruction::FunctionLabel(start));
+                let old_func = self.current_function.clone();
+                self.current_function = start.clone();
 
-                // 1. Enter new function scope
-                self.var_types.push_scope();
+                self.code.push(Instruction::FunctionLabel(start.clone()));
 
                 for param in params {
                     if let Some(param_ty) = &param.ptype {
-                        self.var_types
-                            .insert(param.name.value.clone(), param_ty.clone());
+                        let resolved_param_ty = self.resolve_type(param_ty);
+                        let unique_param_name = format!("{}::{}", start, param.name.value);
+                        self.var_types.insert(unique_param_name, resolved_param_ty);
                     }
-                    self.gen_param(param);
+                    self.code.push(Instruction::Param {
+                        p: format!("{}::{}", start, param.name.value),
+                    });
                 }
 
                 for stmt in body {
@@ -1127,8 +1144,7 @@ impl IRGen {
                     });
                 }
 
-                // 2. Exit function scope
-                self.var_types.pop_scope();
+                self.current_function = old_func;
             }
             Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
@@ -1280,15 +1296,16 @@ impl IRGen {
 
     pub fn gen_program(&mut self, program: &Program) {
         for stmt in &program.statements {
-            if !matches!(stmt, Stmt::Function { .. })
-                && !matches!(stmt, Stmt::Extern { .. })
-                && !matches!(stmt, Stmt::Struct { .. })
-            {
-                println!(
-                    "Codegen Error: top-level statement outside of a function is not supported."
-                );
-                std::process::exit(1);
-            }
+            // stmts other than these outside of a function don't parse correctly so imma fix that soon, so you will be able to define statements outside of functions properly.
+            // if !matches!(stmt, Stmt::Function { .. })
+            //     && !matches!(stmt, Stmt::Extern { .. })
+            //     && !matches!(stmt, Stmt::Struct { .. })
+            // {
+            //     println!(
+            //         "Codegen Error: top-level statement outside of a function is not supported."
+            //     );
+            //     std::process::exit(1);
+            // }
             self.gen_stmt(stmt);
         }
 
@@ -1318,28 +1335,35 @@ impl IRGen {
                     let old_subs = self.current_substitutions.clone();
                     self.current_substitutions = substitutions;
 
+                    let old_func = self.current_function.clone();
+                    self.current_function = resolved_func_name.clone();
+
                     self.code
                         .push(Instruction::FunctionLabel(resolved_func_name.clone()));
-
-                    // 1. Enter new function scope for deferred generic instantiations
-                    self.var_types.push_scope();
 
                     for param in params {
                         if let Some(param_ty) = &param.ptype {
                             let resolved_param_ty = self.resolve_type(param_ty);
-                            self.var_types
-                                .insert(param.name.value.clone(), resolved_param_ty);
+
+                            let unique_param_name =
+                                format!("{}::{}", resolved_func_name, param.name.value);
+                            self.var_types.insert(unique_param_name, resolved_param_ty);
                         }
-                        self.gen_param(&param);
+
+                        self.code.push(Instruction::Param {
+                            p: format!("{}::{}", resolved_func_name, param.name.value),
+                        });
                     }
 
                     for stmt in body {
                         self.gen_stmt(&stmt);
                     }
 
-                    let return_ty = rttype.unwrap_or(Type::Void);
+                    let base_return_ty = rttype.unwrap_or(Type::Void);
+                    let resolved_return_ty = self.resolve_type(&base_return_ty);
+
                     if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
-                        let fallback_val = if return_ty == Type::Void {
+                        let fallback_val = if resolved_return_ty == Type::Void {
                             Value::Void
                         } else {
                             Value::Const(0)
@@ -1349,9 +1373,7 @@ impl IRGen {
                         });
                     }
 
-                    // 2. Exit scope
-                    self.var_types.pop_scope();
-
+                    self.current_function = old_func;
                     self.current_substitutions = old_subs;
                 }
             }

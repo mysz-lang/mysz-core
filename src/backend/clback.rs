@@ -314,8 +314,7 @@ impl CraneliftBackend {
 
     /// Materialises a TAC `Value` as a Cranelift SSA value: constants become
     /// immediates, string literals become data references, and named values
-    /// are either loaded from their stack slot (if they're an out-of-line
-    /// aggregate) or read from their SSA variable.
+    /// are either loaded from their stack slot (if they're an out-of-line aggregate) or read from their SSA variable.
     ///
     /// This is the single place that knows how to turn a `Value` into a
     /// `cranelift::prelude::Value`; every instruction handler below that
@@ -324,7 +323,7 @@ impl CraneliftBackend {
         &mut self,
         builder: &mut FunctionBuilder,
         value: &Value,
-        var_types: &ScopedMap, // Changed from &HashMap<String, Type>
+        var_types: &ScopedMap,
         var_map: &mut HashMap<String, Variable>,
         var_idx: &mut usize,
         stack_slot_map: &HashMap<String, StackSlot>,
@@ -348,7 +347,6 @@ impl CraneliftBackend {
             }
             Value::Var(name) | Value::Temp(name) => {
                 if let Some(&slot) = stack_slot_map.get(name) {
-                    // Out-of-line aggregate: read its raw bytes back in.
                     builder.ins().stack_load(ty, slot, 0)
                 } else {
                     let var_ty = value_backend_type(value, var_types);
@@ -371,7 +369,7 @@ impl CraneliftBackend {
         let ptr_type = self.module.target_config().pointer_type();
         let mut var_types = incoming_var_types.clone();
         var_types.push_scope();
-        
+
         let mut param_idx = 0;
         for inst in insts {
             if let Instruction::Param { p } = inst {
@@ -408,7 +406,6 @@ impl CraneliftBackend {
             | Instruction::Unary { dst, .. }
             | Instruction::Load { dst, .. } = inst
             {
-                // ScopedMap uses `.get(dst).is_none()` instead of `!contains_key`
                 if var_types.get(dst).is_none() {
                     if let Some(ty) = incoming_var_types.get(dst) {
                         var_types.insert(dst.clone(), ty.clone());
@@ -575,7 +572,6 @@ impl CraneliftBackend {
                     let blk = get_or_create_block(&mut builder, &mut block_map, lbl_name);
                     all_blocks.push(blk);
 
-                    // Safe approach: Check if the current block layout already ends with a terminator instruction
                     let current_blk = builder.current_block();
                     let needs_jump = if let Some(curr) = current_blk {
                         match builder.func.layout.last_inst(curr) {
@@ -700,7 +696,11 @@ impl CraneliftBackend {
                     let frontend_type = var_types.get(name).unwrap_or(&Type::Int);
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
 
-                    if let AbiType::Aggregate { total_size, .. } = abi {
+                    if let AbiType::Aggregate {
+                        total_size,
+                        chunk_count,
+                    } = abi
+                    {
                         let dest_slot = *stack_slot_map.get(name).unwrap();
                         let dest_addr = builder.ins().stack_addr(ptr_type, dest_slot, 0);
 
@@ -717,6 +717,14 @@ impl CraneliftBackend {
                                     src_addr,
                                     size_val,
                                 );
+                            }
+                            Value::Const(0) => {
+                                let zero_val = builder.ins().iconst(types::I64, 0);
+                                for i in 0..chunk_count {
+                                    builder
+                                        .ins()
+                                        .stack_store(zero_val, dest_slot, (i * 8) as i32);
+                                }
                             }
                             _ => panic!("Direct block assignment from literals is unsupported."),
                         }
@@ -920,25 +928,20 @@ impl CraneliftBackend {
                         IrOp::Pos => src_val,
                         IrOp::Ref => {
                             if let Value::Var(name) | Value::Temp(name) = src {
-                                // If it's already an aggregate/stack-allocated item, get its slot
                                 let slot = if let Some(&slot) = stack_slot_map.get(name) {
                                     slot
                                 } else {
-                                    // Otherwise, it's a primitive variable living in an SSA register.
-                                    // To take its address, we create a stack slot on the fly and spill it.
                                     let src_front_ty = var_types.get(name).unwrap_or(&Type::Int);
                                     let src_backend_ty = BackendType::from_frontend(src_front_ty);
                                     let clif_ty = src_backend_ty.to_clif_type(ptr_type);
-                                    
+
                                     let slot = builder.create_sized_stack_slot(StackSlotData::new(
                                         StackSlotKind::ExplicitSlot,
                                         clif_ty.bytes(),
                                     ));
-                                    
-                                    // Store the current SSA value into the slot so the pointer reads the correct value
+
                                     builder.ins().stack_store(src_val, slot, 0);
-                                    
-                                    // Save it to stack_slot_map for any future loads/stores
+
                                     stack_slot_map.insert(name.clone(), slot);
                                     slot
                                 };
@@ -1059,8 +1062,7 @@ impl CraneliftBackend {
         }
 
         let mut sealed_blocks = std::collections::HashSet::new();
-        
-        // Seal the entry block explicitly right away
+
         builder.seal_block(entry_block);
         sealed_blocks.insert(entry_block);
 

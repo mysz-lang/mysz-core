@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::{parse::parsing::Type, utils::location::Location};
 
 pub struct Symbol {
-    pub data_type: Type,
+    pub name: String,
+    pub ty: Type,
 }
 
 pub struct Scope {

@@ -158,12 +158,16 @@ pub fn compile_root_file<P: AsRef<Path>>(
 }
 
 pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(), String> {
+    // println!("{:#?}", program);
+
     let mut analyser = Analyser::new();
     analyser.analyse(program)?;
 
-    let mut irgen = IRGen::new(analyser.types);
+    let mut irgen = IRGen::new();
     irgen.gen_program(program);
-    // irgen.dump();
+    irgen.dump();
+
+    println!("irgen.var_types: {:#?}", irgen.var_types);
 
     let tac_instructions = irgen.code;
 
