@@ -8,8 +8,6 @@ pub mod utils;
 
 use std::path::{Path, PathBuf};
 
-/// Public entry point allowing package managers and builders to compile source files
-/// while injecting custom paths for cross-module dependencies.
 pub fn compile_file<P: AsRef<Path>>(
     input_path: P,
     output_filename: &str,

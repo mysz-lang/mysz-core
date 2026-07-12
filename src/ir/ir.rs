@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ir::tac::{Instruction, IrOp, Value},
+    ir::tac::{Instruction, IrOp, ScopedMap, Value},
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
 };
 
@@ -55,7 +55,7 @@ pub struct IRGen {
     temps: TempGen,
     labels: LabelGen,
     functions: FunctionGen,
-    pub var_types: HashMap<String, Type>,
+    pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
 
@@ -74,7 +74,7 @@ impl IRGen {
             functions: FunctionGen::new(),
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
-            var_types: types,
+            var_types: ScopedMap::new(types),
 
             fn_blueprints: HashMap::new(),
             instantiated_fns: std::collections::HashSet::new(),
@@ -798,7 +798,6 @@ impl IRGen {
                     }
                 }
 
-                // Add this block to queue instantiation and pre-resolve return types:
                 if !generic_args.is_empty() && !self.instantiated_fns.contains(&resolved_func_name)
                 {
                     self.instantiated_fns.insert(resolved_func_name.clone());
@@ -974,7 +973,6 @@ impl IRGen {
                         }
                     }
 
-                    // Add this block to queue instantiation and pre-resolve return types:
                     if !generic_args.is_empty()
                         && !self.instantiated_fns.contains(&resolved_func_name)
                     {
@@ -1101,6 +1099,9 @@ impl IRGen {
                 let start = self.functions.next(name.value.clone());
                 self.code.push(Instruction::FunctionLabel(start));
 
+                // 1. Enter new function scope
+                self.var_types.push_scope();
+
                 for param in params {
                     if let Some(param_ty) = &param.ptype {
                         self.var_types
@@ -1125,6 +1126,9 @@ impl IRGen {
                         value: fallback_val,
                     });
                 }
+
+                // 2. Exit function scope
+                self.var_types.pop_scope();
             }
             Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
@@ -1317,6 +1321,9 @@ impl IRGen {
                     self.code
                         .push(Instruction::FunctionLabel(resolved_func_name.clone()));
 
+                    // 1. Enter new function scope for deferred generic instantiations
+                    self.var_types.push_scope();
+
                     for param in params {
                         if let Some(param_ty) = &param.ptype {
                             let resolved_param_ty = self.resolve_type(param_ty);
@@ -1341,6 +1348,9 @@ impl IRGen {
                             value: fallback_val,
                         });
                     }
+
+                    // 2. Exit scope
+                    self.var_types.pop_scope();
 
                     self.current_substitutions = old_subs;
                 }

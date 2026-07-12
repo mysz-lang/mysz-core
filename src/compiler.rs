@@ -78,7 +78,6 @@ fn flatten_program_statements(
                 return Err(res.err().unwrap().to_string());
             }
 
-
             let mut parser = myszparser::new(lexer.tokens);
             parser.parse();
             if !parser.parser_errs.is_empty() {
@@ -162,7 +161,6 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     let mut analyser = Analyser::new();
     analyser.analyse(program)?;
 
-
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(program);
     // irgen.dump();
@@ -181,7 +179,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
         }
     }
 
-    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs);
+    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, analyser.functions.clone());
     backend.scan_externs(&tac_instructions);
 
     let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();

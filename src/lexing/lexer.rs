@@ -413,10 +413,6 @@ impl Lexer {
     }
 
     fn lex_string(&mut self) -> Token {
-        // Unchanged — no panics here; an unterminated string just
-        // runs to EOF and returns whatever was collected. If you want
-        // that treated as an error too, this needs the same Result
-        // treatment as lex_char.
         let loc = self.current_location();
         let mut string: Vec<char> = Vec::new();
         self.advance(); // "
@@ -440,7 +436,6 @@ impl Lexer {
     }
 
     fn lex_numeric(&mut self) -> Token {
-        // unchanged, no panics
         let loc = self.current_location();
         let mut numstring: Vec<char> = Vec::new();
 
@@ -461,7 +456,6 @@ impl Lexer {
     }
 
     fn lex_identifier_and_keyword(&mut self) -> Token {
-        // unchanged, no panics — keyword matching is exhaustive-safe
         let loc = self.current_location();
         let mut buf: Vec<char> = Vec::new();
 

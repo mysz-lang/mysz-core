@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::parse::parsing::Type;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,4 +95,43 @@ pub enum Instruction {
     Extern {
         fnname: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopedMap {
+    scopes: Vec<HashMap<String, Type>>,
+}
+
+impl ScopedMap {
+    pub fn new(initial: HashMap<String, Type>) -> Self {
+        Self {
+            scopes: vec![initial],
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        if self.scopes.len() > 1 {
+            self.scopes.pop();
+        }
+    }
+
+    pub fn insert(&mut self, key: String, value: Type) {
+        if let Some(current_scope) = self.scopes.last_mut() {
+            current_scope.insert(key, value);
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Type> {
+        // Search from the current innermost scope up to the global scope
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.get(key) {
+                return Some(ty);
+            }
+        }
+        None
+    }
 }
