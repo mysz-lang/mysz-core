@@ -73,11 +73,18 @@ fn flatten_program_statements(
                 .map_err(|e| e.to_string())?;
 
             let mut lexer = Lexer::new(source);
-            lexer.lex();
+            let res = lexer.lex();
+            if res.is_err() {
+                return Err(res.err().unwrap().to_string());
+            }
+
 
             let mut parser = myszparser::new(lexer.tokens);
             parser.parse();
             if !parser.parser_errs.is_empty() {
+                for perr in parser.parser_errs {
+                    eprintln!("{:#}", perr);
+                }
                 return Err(format!("Parsing module {:?} failed", resolved_path));
             }
 
@@ -154,6 +161,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
 pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(), String> {
     let mut analyser = Analyser::new();
     analyser.analyse(program)?;
+
 
     let mut irgen = IRGen::new(analyser.types);
     irgen.gen_program(program);

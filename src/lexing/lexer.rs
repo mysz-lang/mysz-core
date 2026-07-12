@@ -3,17 +3,31 @@ use crate::utils::location::Location;
 
 #[derive(Debug, Clone)]
 pub enum LexError {
-    UnexpectedEof { context: &'static str, location: Location },
-    UnknownEscapeSequence { ch: char, location: Location },
-    UnterminatedCharLiteral { location: Location },
-    UnterminatedComment { location: Location },
+    UnexpectedEof {
+        context: &'static str,
+        location: Location,
+    },
+    UnknownEscapeSequence {
+        ch: char,
+        location: Location,
+    },
+    UnterminatedCharLiteral {
+        location: Location,
+    },
+    UnterminatedComment {
+        location: Location,
+    },
 }
 
 impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LexError::UnexpectedEof { context, location } => {
-                write!(f, "Unexpected EOF while lexing {} at {:?}", context, location)
+                write!(
+                    f,
+                    "Unexpected EOF while lexing {} at {:?}",
+                    context, location
+                )
             }
             LexError::UnknownEscapeSequence { ch, location } => {
                 write!(f, "Unknown escape sequence '\\{}' at {:?}", ch, location)
@@ -66,7 +80,9 @@ impl Lexer {
 
     fn peek(&self, offset: i32) -> Option<char> {
         let true_offset = self.token_idx + offset as usize;
-        self.source.get(true_offset..).and_then(|s| s.chars().next())
+        self.source
+            .get(true_offset..)
+            .and_then(|s| s.chars().next())
     }
 
     pub fn get_char(&self) -> Option<char> {
@@ -477,6 +493,10 @@ impl Lexer {
             _ => TokenType::Identifier,
         };
 
-        Token { ttype, location: loc, value }
+        Token {
+            ttype,
+            location: loc,
+            value,
+        }
     }
 }

@@ -10,32 +10,21 @@ use lexing::lexer::Lexer;
 use parse::parser::Parser as myszparser;
 
 fn main() {
-    let source: &str = r#"
-// this is a comment!
-
-//'
-This is a multi-line
-comment
-'//
-
-//' testing single-line multi-line comment '//
-
-extern fn print_str(val: str);
-
-fn pub main(): int {
-    var x: str = "https://github.com";
-    print_str(x);
-    return 0;
-};
-    "#;
+    let source: &str = r#""#;
 
     let mut lexer = Lexer::new(source.to_string());
-    lexer.lex();
+    let res = lexer.lex();
+
+    if res.is_err() {
+        eprintln!("{:#}", res.err().unwrap());
+    }
 
     let mut parser = myszparser::new(lexer.tokens);
     parser.parse();
     if !parser.parser_errs.is_empty() {
-        eprintln!("Parsing inline source failed.");
+        for perr in parser.parser_errs {
+            eprintln!("{:#}", perr);
+        }
         return;
     }
 

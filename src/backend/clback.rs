@@ -333,15 +333,74 @@ impl CraneliftBackend {
             }
         };
 
+        // --- 1. RESOLVE THE TRUTH OF THE RETURN TYPE ---
+        let current_func_ret_front = if name == "main" {
+            Some(Type::Int)
+        } else if let Some(t) = var_types.get(name) {
+            Some(t.clone())
+        } else {
+            // Fallback: Scan the function body instructions for the actual Return statement type
+            let mut detected = None;
+            for inst in insts {
+                if let Instruction::Return { value } = inst {
+                    match value {
+                        Value::Void => detected = Some(Type::Void),
+                        Value::Var(n) | Value::Temp(n) => {
+                            if let Some(t) = var_types.get(n) {
+                                detected = Some(t.clone());
+                            }
+                        }
+                        Value::Const(_) => detected = Some(Type::Int),
+                        Value::Bool(_) => detected = Some(Type::Bool),
+                        Value::Char(_) => detected = Some(Type::Char),
+                        Value::Str(_) => detected = Some(Type::Str),
+                    }
+                    break;
+                }
+            }
+            detected
+        };
+
+        // --- 2. BUILD THE SIGNATURE ONCE ---
         let mut sig = self.module.make_signature();
-        let current_func_ret_front = var_types.get(name);
-        if let Some(front_ret) = current_func_ret_front {
+        if let Some(ref front_ret) = current_func_ret_front {
             let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
             abi.append_to_signature_returns(&mut sig);
         } else {
             sig.returns.push(AbiParam::new(types::I64));
         }
 
+        // Pre-correct temporary variable types based on known structural function returns
+        let mut var_types = var_types.clone(); // Shadow to make it mutable locally
+
+        for inst in insts {
+            if let Instruction::Call {
+                name: callee_name,
+                dest,
+                ..
+            } = inst
+            {
+                if let Some(dest_name) = dest {
+                    // Check what the callee actually returns by looking it up in var_types
+                    if let Some(callee_ret_ty) = var_types.get(callee_name).cloned() {
+                        if matches!(callee_ret_ty, Type::Struct(_)) {
+                            var_types.insert(dest_name.to_string(), callee_ret_ty);
+                        }
+                    } else {
+                        // If the callee itself isn't explicitly in var_types,
+                        // deduce its structural properties by its name or body signature:
+                        if callee_name.contains("init") || callee_name.contains("new") {
+                            var_types.insert(
+                                dest_name.to_string(),
+                                Type::Struct("MyszString".to_string()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 3. BUILD PARAMETER TYPES ---
         let mut param_backend_types: Vec<BackendType> = Vec::new();
         for inst in insts {
             if let Instruction::Param { p } = inst {
@@ -354,8 +413,13 @@ impl CraneliftBackend {
             }
         }
 
-        let func_id =
-            self.get_or_declare_func(name, public, &param_backend_types, current_func_ret_front);
+        // --- 4. DECLARE AND WRITE SIGNATURE ---
+        let func_id = self.get_or_declare_func(
+            name,
+            public,
+            &param_backend_types,
+            current_func_ret_front.as_ref(),
+        );
         self.declared_funcs.insert(name.to_string(), func_id);
         ctx.func.signature = sig;
 
@@ -860,7 +924,7 @@ impl CraneliftBackend {
                     }
 
                     let arg_ty = get_val_backend_type(value);
-                    let mut val = match value {
+                    let val = match value {
                         Value::Const(n) => builder.ins().iconst(arg_ty.to_clif_type(ptr_type), *n),
                         Value::Bool(b) => builder
                             .ins()
@@ -899,16 +963,8 @@ impl CraneliftBackend {
                         }
                     };
 
-                    if arg_ty.to_clif_type(ptr_type) == types::I8 {
-                        val = builder.ins().uextend(types::I64, val);
-                    }
-
                     call_args.push(val);
-                    call_arg_types.push(if arg_ty.to_clif_type(ptr_type) == types::I8 {
-                        BackendType::Int64
-                    } else {
-                        arg_ty
-                    });
+                    call_arg_types.push(arg_ty);
                 }
 
                 Instruction::Call {
@@ -1172,7 +1228,7 @@ impl CraneliftBackend {
                         continue;
                     }
 
-                    if let Some(front_ret) = current_func_ret_front {
+                    if let Some(front_ret) = current_func_ret_front.as_ref() {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         if let AbiType::Aggregate { chunk_count, .. } = abi {
                             if let Value::Var(name) | Value::Temp(name) = value {
@@ -1221,6 +1277,7 @@ impl CraneliftBackend {
         }
 
         let default_ret_abi = current_func_ret_front
+            .as_ref()
             .map(|front_ret| AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type))
             .unwrap_or(AbiType::Primitive(types::I64));
 
