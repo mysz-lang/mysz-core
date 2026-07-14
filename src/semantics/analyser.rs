@@ -51,6 +51,13 @@ impl Analyser {
 
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match ty {
+            Type::GenericParam(name) => mapping
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // If not found, keep it as is (might be resolved later)
+                    Type::GenericParam(name.clone())
+                }),
             Type::Struct(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, mapping))),
             Type::Array { element_type, size } => Type::Array {

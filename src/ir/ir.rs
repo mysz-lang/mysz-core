@@ -119,6 +119,10 @@ impl IRGen {
                     .map(|arg| self.substitute_type(arg, substitutions))
                     .collect(),
             },
+            Type::GenericParam(name) => substitutions
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| panic!("Unresolved generic parameter: {}", name)),
 
             Type::Int
             | Type::UInt
@@ -252,6 +256,9 @@ impl IRGen {
             Type::Str => 8,
             Type::Ptr(_) => 8,
             Type::Array { element_type, size } => self.element_size(element_type) * (*size as i64),
+            Type::GenericParam(name) => {
+                panic!("Cannot get size of unresolved generic parameter: {}", name)
+            }
             Type::Char => 1,
             Type::Struct(name) => self
                 .get_struct_layout(name)
@@ -279,6 +286,12 @@ impl IRGen {
         match ty {
             Type::Int | Type::UInt => 8,
             Type::Bool => 1,
+            Type::GenericParam(name) => {
+                panic!(
+                    "Cannot get alignment of unresolved generic parameter: {}",
+                    name
+                )
+            }
             Type::Char => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
@@ -305,11 +318,7 @@ impl IRGen {
     }
 
     fn element_size(&self, ty: &Type) -> i64 {
-        match ty {
-            Type::Bool => 1,
-            Type::Char => 1,
-            _ => self.type_size(ty),
-        }
+        self.type_size(ty)
     }
 
     fn emit_binary(&mut self, op: IrOp, lhs: Value, rhs: Value) -> Value {
@@ -565,7 +574,9 @@ impl IRGen {
         match &expr.kind {
             ExprKind::Sizeof { ty } => {
                 let resolved_ty = self.resolve_type(ty);
+                eprintln!("sizeof: ty={:?}, resolved_ty={:?}", ty, resolved_ty);
                 let size = self.type_size(&resolved_ty);
+                eprintln!("sizeof: size={}", size);
                 Value::Const(size)
             }
             ExprKind::Literal(lit) => match lit {

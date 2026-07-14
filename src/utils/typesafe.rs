@@ -31,6 +31,7 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
             }
             base
         }
+        Type::GenericParam(s) => format!("gparam__{}", s),
     }
 }
 
@@ -101,5 +102,6 @@ pub fn type_to_string(ty: &Type) -> String {
             let args_str: Vec<String> = args.iter().map(|arg| type_to_string(arg)).collect();
             format!("{}<{}>", name, args_str.join(", "))
         }
+        Type::GenericParam(s) => format!("<{}>", s),
     }
 }

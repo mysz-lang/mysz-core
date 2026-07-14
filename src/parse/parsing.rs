@@ -32,10 +32,12 @@ pub enum Type {
     },
     Struct(String),
 
+    // Generics
     GenericInstance {
         name: String,
         args: Vec<Type>,
     },
+    GenericParam(String),
 
     Any,
 }

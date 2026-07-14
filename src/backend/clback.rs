@@ -106,7 +106,10 @@ impl BackendType {
         match ty {
             Type::Str => BackendType::Ptr,
             Type::GenericInstance { .. } => {
-                unreachable!("generic instances must be monomorphized before codegen")
+                unreachable!("generic instances must be monomorphised before codegen")
+            }
+            Type::GenericParam(_) => {
+                unreachable!("generic parameters must be monomorphised before codegen")
             }
             Type::Any => BackendType::Ptr,
             Type::Int => BackendType::Int64,

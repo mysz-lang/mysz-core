@@ -10,6 +10,7 @@ pub struct Parser {
     pub token_idx: usize,
     pub ast: Program,
     pub parser_errs: Vec<ParserError>,
+    pub generic_params: Vec<String>,
 }
 
 impl Parser {
@@ -21,6 +22,7 @@ impl Parser {
                 statements: Vec::new(),
             },
             parser_errs: Vec::new(),
+            generic_params: Vec::new(),
         }
     }
 
@@ -199,20 +201,20 @@ impl Parser {
                     Some(Type::Char)
                 }
                 other => {
-                    let struct_name = other.to_string();
+                    let name = other.to_string();
                     self.advance();
 
-                    if matches!(
+                    // Check if this is a generic parameter in scope
+                    if self.generic_params.contains(&name) {
+                        Some(Type::GenericParam(name))
+                    } else if matches!(
                         self.get_token().map(|t| &t.ttype),
                         Some(TokenType::LessThan)
                     ) {
                         let args = self.parse_generic_args();
-                        Some(Type::GenericInstance {
-                            name: struct_name,
-                            args,
-                        })
+                        Some(Type::GenericInstance { name, args })
                     } else {
-                        Some(Type::Struct(struct_name))
+                        Some(Type::Struct(name))
                     }
                 }
             },
@@ -354,6 +356,10 @@ impl Parser {
 
         let generic_params = self.parse_generic_params();
 
+        for param in &generic_params {
+            self.generic_params.push(param.clone());
+        }
+
         self.expect(TokenType::LParen)?;
         let params = self.parse_params(TokenType::RParen);
 
@@ -363,6 +369,10 @@ impl Parser {
         } else {
             None
         };
+
+        for _ in &generic_params {
+            self.generic_params.pop();
+        }
 
         Some(Stmt::Extern {
             name: to_ident(Some(ident))?,
@@ -479,6 +489,10 @@ impl Parser {
 
         let generic_params = self.parse_generic_params();
 
+        for param in &generic_params {
+            self.generic_params.push(param.clone());
+        }
+
         self.expect(TokenType::LParen)?;
         let params = self.parse_params(TokenType::RParen);
 
@@ -490,6 +504,10 @@ impl Parser {
 
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
+
+        for _ in &generic_params {
+            self.generic_params.pop();
+        }
 
         Some(Stmt::Function {
             name: Identifier {
@@ -600,6 +618,10 @@ impl Parser {
 
         let generic_params = self.parse_generic_params();
 
+        for param in &generic_params {
+            self.generic_params.push(param.clone());
+        }
+
         self.expect(TokenType::LBrace)?;
         let mut fields = Vec::new();
 
@@ -624,6 +646,10 @@ impl Parser {
         }
 
         self.expect(TokenType::RBrace)?;
+
+        for _ in &generic_params {
+            self.generic_params.pop();
+        }
 
         Some(Stmt::Struct {
             name: to_ident(Some(ident))?,

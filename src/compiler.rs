@@ -36,47 +36,126 @@ fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<
     None
 }
 
-fn format_parser_errors(errors: &[crate::parse::parsing::ParserError], source: &str, file_path: &Path) -> String {
+fn format_error_with_location(
+    file_path: &Path,
+    line_num: usize,
+    column: usize,
+    message: &str,
+    source: Option<&str>,
+) -> String {
+    let source_lines: Vec<&str> = source.map(|s| s.lines().collect()).unwrap_or_default();
+    let source_line = if line_num > 0 && line_num <= source_lines.len() {
+        source_lines[line_num - 1]
+    } else {
+        ""
+    };
+
+    let column_offset = if column > 0 { column - 1 } else { 0 };
+
+    format!(
+        "  --> {}:{}:{}\n      {}\n      {}{}\n      {}",
+        file_path.display(),
+        line_num,
+        column,
+        source_line,
+        " ".repeat(column_offset),
+        "^".repeat(1),
+        message
+    )
+}
+
+fn format_simple_error(file_path: &Path, message: &str) -> String {
+    format!("  --> {}\n      {}", file_path.display(), message)
+}
+
+fn format_module_error(module_path: &str, message: &str) -> String {
+    format!("  --> module '{}'\n      {}", module_path, message)
+}
+
+fn format_parser_errors(
+    errors: &[crate::parse::parsing::ParserError],
+    source: &str,
+    file_path: &Path,
+) -> String {
     let source_lines: Vec<&str> = source.lines().collect();
     let mut error_messages = Vec::new();
-    
+
     for err in errors {
         let location = &err.location;
         let line_num = location.line;
         let column = location.col;
         let message = &err.message;
-        
+
         let source_line = if line_num > 0 && line_num <= source_lines.len() {
             source_lines[line_num - 1]
         } else {
             ""
         };
-        
+
+        let column_offset = if column > 0 { column - 1 } else { 0 };
+
         error_messages.push(format!(
             "  --> {}:{}:{}\n      {}\n      {}{}\n      {}",
             file_path.display(),
             line_num,
             column,
             source_line,
-            " ".repeat(column - 1),
+            " ".repeat(column_offset),
             "^".repeat(1),
             message
         ));
     }
-    
+
     error_messages.join("\n")
 }
 
-fn read_and_lex_file(file_path: &Path) -> Result<(String, Vec<crate::lexing::lexing::Token>), String> {
-    let mut file = File::open(file_path).map_err(|e| format!("Failed to open file '{}': {}", file_path.display(), e))?;
+fn format_semantic_error(err: &str, source: Option<&str>, file_path: &Path) -> String {
+    // Try to extract location from the error message
+    // Errors look like: "Type Error [li = 9, co = 21]: message"
+    let mut line_num = 0;
+    let mut column = 0;
+    let mut message = err;
+
+    // Find "[li = X, co = Y]"
+    if let Some(start) = err.find("[li = ") {
+        if let Some(end) = err[start..].find(']') {
+            let loc_part = &err[start..start + end + 1];
+            for part in loc_part.split(',').collect::<Vec<_>>() {
+                let trimmed = part.trim();
+                if trimmed.starts_with("li = ") {
+                    line_num = trimmed[5..].trim().parse().unwrap_or(0);
+                } else if trimmed.starts_with("co = ") {
+                    column = trimmed[5..].trim().parse().unwrap_or(0);
+                }
+            }
+            message = err[start + end + 1..].trim();
+        }
+    }
+
+    if line_num > 0 && column > 0 {
+        format_error_with_location(file_path, line_num, column, message, source)
+    } else {
+        format_simple_error(file_path, err)
+    }
+}
+
+fn read_and_lex_file(
+    file_path: &Path,
+) -> Result<(String, Vec<crate::lexing::lexing::Token>), String> {
+    let mut file = File::open(file_path)
+        .map_err(|e| format_simple_error(file_path, &format!("Failed to open file: {}", e)))?;
     let mut source = String::new();
-    file.read_to_string(&mut source).map_err(|e| format!("Failed to read file '{}': {}", file_path.display(), e))?;
+    file.read_to_string(&mut source)
+        .map_err(|e| format_simple_error(file_path, &format!("Failed to read file: {}", e)))?;
 
     let mut lexer = Lexer::new(source.clone());
     let res = lexer.lex();
 
     if let Err(err) = res {
-        return Err(format!("Lexer error in '{}':\n{}", file_path.display(), err));
+        return Err(format_simple_error(
+            file_path,
+            &format!("Lexer error: {}", err),
+        ));
     }
 
     Ok((source, lexer.tokens))
@@ -88,23 +167,24 @@ fn flatten_program_statements(
     visiting: &mut HashSet<PathBuf>,
     processed: &mut HashSet<PathBuf>,
     root_path: &Path,
+    root_source: &str,
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
     for stmt in statements {
         if let Stmt::Use { path } = stmt {
+            let module_path_str = path.join("::");
             let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
-                format!(
-                    "Module error: Could not find module '{}' in search paths or CWD.",
-                    path.join("::")
+                format_module_error(
+                    &module_path_str,
+                    &format!("Could not find module '{}' in search paths or CWD.", module_path_str)
                 )
             })?;
 
             if visiting.contains(&resolved_path) {
-                return Err(format!(
-                    "Module error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself.",
-                    path.join("::"),
-                    resolved_path
+                return Err(format_module_error(
+                    &module_path_str,
+                    &format!("Cyclic dependency detected! Module imports itself."),
                 ));
             }
 
@@ -117,10 +197,15 @@ fn flatten_program_statements(
             let (source, tokens) = read_and_lex_file(&resolved_path)?;
             let mut parser = myszparser::new(tokens);
             parser.parse();
-            
+
             if !parser.parser_errs.is_empty() {
-                let error_report = format_parser_errors(&parser.parser_errs, &source, &resolved_path);
-                return Err(format!("Parser errors in module '{}':\n{}", path.join("::"), error_report));
+                let error_report =
+                    format_parser_errors(&parser.parser_errs, &source, &resolved_path);
+                return Err(format!(
+                    "Parser errors in module '{}':\n{}",
+                    module_path_str,
+                    error_report
+                ));
             }
 
             let module_stmts = flatten_program_statements(
@@ -129,6 +214,7 @@ fn flatten_program_statements(
                 visiting,
                 processed,
                 root_path,
+                root_source,
             )?;
 
             flattened.extend(module_stmts);
@@ -150,7 +236,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
     let input_path = input_path
         .as_ref()
         .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
+        .map_err(|e| format_simple_error(input_path.as_ref(), &format!("Failed to canonicalize path: {}", e)))?;
 
     let mut search_paths = Vec::new();
     if let Some(parent) = input_path.parent() {
@@ -160,11 +246,11 @@ pub fn compile_root_file<P: AsRef<Path>>(
 
     // Read and lex the main file
     let (source, tokens) = read_and_lex_file(&input_path)?;
-    
+
     // Parse the main file
     let mut parser = myszparser::new(tokens);
     parser.parse();
-    
+
     if !parser.parser_errs.is_empty() {
         let error_report = format_parser_errors(&parser.parser_errs, &source, &input_path);
         return Err(format!("Parser errors:\n{}", error_report));
@@ -181,20 +267,27 @@ pub fn compile_root_file<P: AsRef<Path>>(
         &mut visiting,
         &mut processed,
         &input_path,
+        &source,
     )?;
 
     let program = Program {
         statements: flattened_statements,
     };
 
-    compile_ast_program(&program, output_filename)
+    compile_ast_program(&program, output_filename, Some(&source), &input_path)
 }
 
-pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(), String> {
+pub fn compile_ast_program(
+    program: &Program,
+    output_filename: &str,
+    source: Option<&str>,
+    file_path: &Path,
+) -> Result<(), String> {
     // Semantic analysis
     let mut analyser = Analyser::new();
     if let Err(err) = analyser.analyse(program) {
-        return Err(format!("Semantic error: {}", err));
+        let formatted = format_semantic_error(&err, source, file_path);
+        return Err(format!("Semantic error:\n{}", formatted));
     }
 
     // IR generation
@@ -282,13 +375,17 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     let product = backend.finish();
     let emit_result = product
         .emit()
-        .map_err(|e| format!("Failed to emit object code: {}", e))?;
+        .map_err(|e| format_simple_error(file_path, &format!("Failed to emit object code: {}", e)))?;
 
     let mut file = File::create(output_filename)
-        .map_err(|e| format!("Failed to create output file '{}': {}", output_filename, e))?;
-    
-    file.write_all(&emit_result)
-        .map_err(|e| format!("Failed to write to output file '{}': {}", output_filename, e))?;
+        .map_err(|e| format_simple_error(file_path, &format!("Failed to create output file '{}': {}", output_filename, e)))?;
+
+    file.write_all(&emit_result).map_err(|e| {
+        format_simple_error(
+            file_path,
+            &format!("Failed to write to output file '{}': {}", output_filename, e),
+        )
+    })?;
 
     Ok(())
 }
