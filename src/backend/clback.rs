@@ -790,11 +790,11 @@ impl CraneliftBackend {
         let mut call_args: Vec<cranelift::prelude::Value> = Vec::new();
         let mut call_arg_types: Vec<BackendType> = Vec::new();
 
+        let mut param_index = 0;
+
         for inst in insts {
             match inst {
-                Instruction::FunctionLabel(_)
-                | Instruction::Param { .. }
-                | Instruction::Extern { .. } => {}
+                Instruction::FunctionLabel(_) | Instruction::Extern { .. } => {}
                 Instruction::Label(lbl_name) => {
                     let blk = get_or_create_block(&mut builder, &mut block_map, lbl_name);
                     all_blocks.push(blk);
@@ -815,6 +815,35 @@ impl CraneliftBackend {
                         builder.ins().jump(blk, &[]);
                     }
                     builder.switch_to_block(blk);
+                }
+                Instruction::Param { p } => {
+                    let arg_val = builder.block_params(entry_block)[param_index];
+
+                    // Look up the stack slot allocated for this parameter
+                    let slot = stack_slot_map.get(p).or_else(|| {
+                        let local_name = p.split("::").last().unwrap_or(p);
+                        stack_slot_map.get(local_name)
+                    });
+
+                    if let Some(&s) = slot {
+                        // Store the incoming register argument directly into the parameter's stack slot!
+                        builder.ins().stack_store(arg_val, s, 0);
+                    } else {
+                        // Fallback to var_map if no stack slot was created for it
+                        let dest_ty =
+                            BackendType::from_frontend(var_types.get(p).unwrap_or(&Type::Int));
+                        let var_id = get_or_create_var(
+                            &mut builder,
+                            &mut var_map,
+                            &mut var_idx,
+                            p,
+                            dest_ty,
+                            ptr_type,
+                        );
+                        builder.def_var(var_id, arg_val);
+                    }
+
+                    param_index += 1;
                 }
                 Instruction::Arg { value } => {
                     if let Value::Var(var_name) | Value::Temp(var_name) = value {
@@ -1545,7 +1574,7 @@ impl CraneliftBackend {
                 builder.seal_block(block);
             }
         }
-        
+
         builder.finalize();
         match self.module.define_function(func_id, ctx) {
             Ok(_) => {}
