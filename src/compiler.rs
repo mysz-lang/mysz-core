@@ -36,11 +36,58 @@ fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<
     None
 }
 
+fn format_parser_errors(errors: &[crate::parse::parsing::ParserError], source: &str, file_path: &Path) -> String {
+    let source_lines: Vec<&str> = source.lines().collect();
+    let mut error_messages = Vec::new();
+    
+    for err in errors {
+        let location = &err.location;
+        let line_num = location.line;
+        let column = location.col;
+        let message = &err.message;
+        
+        let source_line = if line_num > 0 && line_num <= source_lines.len() {
+            source_lines[line_num - 1]
+        } else {
+            ""
+        };
+        
+        error_messages.push(format!(
+            "  --> {}:{}:{}\n      {}\n      {}{}\n      {}",
+            file_path.display(),
+            line_num,
+            column,
+            source_line,
+            " ".repeat(column - 1),
+            "^".repeat(1),
+            message
+        ));
+    }
+    
+    error_messages.join("\n")
+}
+
+fn read_and_lex_file(file_path: &Path) -> Result<(String, Vec<crate::lexing::lexing::Token>), String> {
+    let mut file = File::open(file_path).map_err(|e| format!("Failed to open file '{}': {}", file_path.display(), e))?;
+    let mut source = String::new();
+    file.read_to_string(&mut source).map_err(|e| format!("Failed to read file '{}': {}", file_path.display(), e))?;
+
+    let mut lexer = Lexer::new(source.clone());
+    let res = lexer.lex();
+
+    if let Err(err) = res {
+        return Err(format!("Lexer error in '{}':\n{}", file_path.display(), err));
+    }
+
+    Ok((source, lexer.tokens))
+}
+
 fn flatten_program_statements(
     statements: Vec<Stmt>,
     search_paths: &[PathBuf],
     visiting: &mut HashSet<PathBuf>,
     processed: &mut HashSet<PathBuf>,
+    root_path: &Path,
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
@@ -48,14 +95,14 @@ fn flatten_program_statements(
         if let Stmt::Use { path } = stmt {
             let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
                 format!(
-                    "Module Error: Could not find module '{}' in search paths or CWD.",
+                    "Module error: Could not find module '{}' in search paths or CWD.",
                     path.join("::")
                 )
             })?;
 
             if visiting.contains(&resolved_path) {
                 return Err(format!(
-                    "Module Error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself.",
+                    "Module error: Cyclic dependency detected! Module '{}' (path: {:?}) imports itself.",
                     path.join("::"),
                     resolved_path
                 ));
@@ -67,24 +114,13 @@ fn flatten_program_statements(
 
             visiting.insert(resolved_path.clone());
 
-            let mut file = File::open(&resolved_path).map_err(|e| e.to_string())?;
-            let mut source = String::new();
-            file.read_to_string(&mut source)
-                .map_err(|e| e.to_string())?;
-
-            let mut lexer = Lexer::new(source);
-            let res = lexer.lex();
-            if res.is_err() {
-                return Err(res.err().unwrap().to_string());
-            }
-
-            let mut parser = myszparser::new(lexer.tokens);
+            let (source, tokens) = read_and_lex_file(&resolved_path)?;
+            let mut parser = myszparser::new(tokens);
             parser.parse();
+            
             if !parser.parser_errs.is_empty() {
-                for perr in parser.parser_errs {
-                    eprintln!("{:#}", perr);
-                }
-                return Err(format!("Parsing module {:?} failed", resolved_path));
+                let error_report = format_parser_errors(&parser.parser_errs, &source, &resolved_path);
+                return Err(format!("Parser errors in module '{}':\n{}", path.join("::"), error_report));
             }
 
             let module_stmts = flatten_program_statements(
@@ -92,6 +128,7 @@ fn flatten_program_statements(
                 search_paths,
                 visiting,
                 processed,
+                root_path,
             )?;
 
             flattened.extend(module_stmts);
@@ -113,7 +150,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
     let input_path = input_path
         .as_ref()
         .canonicalize()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
 
     let mut search_paths = Vec::new();
     if let Some(parent) = input_path.parent() {
@@ -121,56 +158,19 @@ pub fn compile_root_file<P: AsRef<Path>>(
     }
     search_paths.extend_from_slice(custom_search_paths);
 
-    let mut file = File::open(&input_path).map_err(|e| e.to_string())?;
-    let mut source = String::new();
-    file.read_to_string(&mut source)
-        .map_err(|e| e.to_string())?;
-
-    let src_copy = source.clone();
-
-    let mut lexer = Lexer::new(source);
-    let res = lexer.lex();
-
-    if res.is_err() {
-        res.err();
-    }
-
-    let mut parser = myszparser::new(lexer.tokens);
+    // Read and lex the main file
+    let (source, tokens) = read_and_lex_file(&input_path)?;
+    
+    // Parse the main file
+    let mut parser = myszparser::new(tokens);
     parser.parse();
     
     if !parser.parser_errs.is_empty() {
-        let source_lines: Vec<&str> = src_copy.lines().collect();
-        let mut error_messages = Vec::new();
-        
-        for err in &parser.parser_errs {
-            let location = &err.location;
-            let line_num = location.line;
-            let column = location.col;
-            let message = &err.message;
-            
-            // Get the source line (0-indexed, so subtract 1)
-            let source_line = if line_num > 0 && line_num <= source_lines.len() {
-                source_lines[line_num - 1]
-            } else {
-                ""
-            };
-            
-            error_messages.push(format!(
-                "  --> {}:{}:{}\n      {}\n      {}{}",
-                input_path.display(),
-                line_num,
-                column,
-                source_line,
-                " ".repeat(column - 1),
-                "^".repeat(1)
-            ));
-            error_messages.push(format!("      {}", message));
-        }
-        
-        let error_report = error_messages.join("\n");
+        let error_report = format_parser_errors(&parser.parser_errs, &source, &input_path);
         return Err(format!("Parser errors:\n{}", error_report));
     }
 
+    // Process imports
     let mut visiting = HashSet::new();
     let mut processed = HashSet::new();
     visiting.insert(input_path.clone());
@@ -180,6 +180,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
         &search_paths,
         &mut visiting,
         &mut processed,
+        &input_path,
     )?;
 
     let program = Program {
@@ -190,13 +191,17 @@ pub fn compile_root_file<P: AsRef<Path>>(
 }
 
 pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(), String> {
+    // Semantic analysis
     let mut analyser = Analyser::new();
-    analyser.analyse(program)?;
+    if let Err(err) = analyser.analyse(program) {
+        return Err(format!("Semantic error: {}", err));
+    }
 
+    // IR generation
     let mut irgen = IRGen::new();
     irgen.gen_program(program);
-    // irgen.dump();
 
+    // Filter duplicate function labels
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
     let mut skip_current_duplicate = false;
@@ -220,6 +225,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
         }
     }
 
+    // Collect public functions
     let mut public_functions = HashSet::new();
     for stmt in &program.statements {
         if let Stmt::Function { name, public, .. } = stmt {
@@ -229,6 +235,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
         }
     }
 
+    // Collect unique function names
     let mut unique_function_names = HashSet::new();
     for inst in &tac_instructions {
         if let Instruction::FunctionLabel(name) = inst {
@@ -236,6 +243,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
         }
     }
 
+    // Backend code generation
     let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, analyser.functions.clone());
     backend.scan_externs(&tac_instructions);
 
@@ -258,6 +266,7 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
             let mut ctx = Context::new();
             let mut func_ctx = FunctionBuilderContext::new();
 
+            // Backend compilation errors are panics for now
             backend.compile_function(
                 &func_name,
                 is_public,
@@ -269,12 +278,17 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
         }
     }
 
+    // Emit object file
     let product = backend.finish();
-    let emit_result = product.emit().expect("Failed to emit object code");
+    let emit_result = product
+        .emit()
+        .map_err(|e| format!("Failed to emit object code: {}", e))?;
 
-    let mut file = File::create(output_filename).expect("Failed to create output file");
+    let mut file = File::create(output_filename)
+        .map_err(|e| format!("Failed to create output file '{}': {}", output_filename, e))?;
+    
     file.write_all(&emit_result)
-        .expect("Failed to write to output file");
+        .map_err(|e| format!("Failed to write to output file '{}': {}", output_filename, e))?;
 
     Ok(())
 }
