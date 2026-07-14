@@ -245,8 +245,10 @@ pub fn compile_root_file<P: AsRef<Path>>(
     }
     search_paths.extend_from_slice(custom_search_paths);
 
+    // Read and lex the main file
     let (source, tokens) = read_and_lex_file(&input_path)?;
 
+    // Parse the main file
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -255,7 +257,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
         return Err(format!("Parser errors:\n{}", error_report));
     }
 
-    // Process import
+    // Process imports
     let mut visiting = HashSet::new();
     let mut processed = HashSet::new();
     visiting.insert(input_path.clone());
@@ -293,7 +295,6 @@ pub fn compile_ast_program(
     let mut irgen = IRGen::new();
     irgen.gen_program(program);
 
-    // Filter duplicate function labels
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
     let mut skip_current_duplicate = false;
@@ -317,7 +318,6 @@ pub fn compile_ast_program(
         }
     }
 
-    // Collect public functions
     let mut public_functions = HashSet::new();
     for stmt in &program.statements {
         if let Stmt::Function { name, public, .. } = stmt {
@@ -327,7 +327,6 @@ pub fn compile_ast_program(
         }
     }
 
-    // Collect unique function names
     let mut unique_function_names = HashSet::new();
     for inst in &tac_instructions {
         if let Instruction::FunctionLabel(name) = inst {
@@ -335,7 +334,6 @@ pub fn compile_ast_program(
         }
     }
 
-    // Backend code generation
     let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, analyser.functions.clone());
     backend.scan_externs(&tac_instructions);
 
@@ -358,7 +356,6 @@ pub fn compile_ast_program(
             let mut ctx = Context::new();
             let mut func_ctx = FunctionBuilderContext::new();
 
-            // Backend compilation errors are panics for now
             backend.compile_function(
                 &func_name,
                 is_public,
@@ -370,7 +367,6 @@ pub fn compile_ast_program(
         }
     }
 
-    // Emit object file
     let product = backend.finish();
     let emit_result = product.emit().map_err(|e| {
         format_simple_error(file_path, &format!("Failed to emit object code: {}", e))
