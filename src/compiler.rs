@@ -126,6 +126,8 @@ pub fn compile_root_file<P: AsRef<Path>>(
     file.read_to_string(&mut source)
         .map_err(|e| e.to_string())?;
 
+    let src_copy = source.clone();
+
     let mut lexer = Lexer::new(source);
     let res = lexer.lex();
 
@@ -135,8 +137,38 @@ pub fn compile_root_file<P: AsRef<Path>>(
 
     let mut parser = myszparser::new(lexer.tokens);
     parser.parse();
+    
     if !parser.parser_errs.is_empty() {
-        return Err("Parsing main file failed".to_string());
+        let source_lines: Vec<&str> = src_copy.lines().collect();
+        let mut error_messages = Vec::new();
+        
+        for err in &parser.parser_errs {
+            let location = &err.location;
+            let line_num = location.line;
+            let column = location.col;
+            let message = &err.message;
+            
+            // Get the source line (0-indexed, so subtract 1)
+            let source_line = if line_num > 0 && line_num <= source_lines.len() {
+                source_lines[line_num - 1]
+            } else {
+                ""
+            };
+            
+            error_messages.push(format!(
+                "  --> {}:{}:{}\n      {}\n      {}{}",
+                input_path.display(),
+                line_num,
+                column,
+                source_line,
+                " ".repeat(column - 1),
+                "^".repeat(1)
+            ));
+            error_messages.push(format!("      {}", message));
+        }
+        
+        let error_report = error_messages.join("\n");
+        return Err(format!("Parser errors:\n{}", error_report));
     }
 
     let mut visiting = HashSet::new();
