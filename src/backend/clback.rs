@@ -75,6 +75,8 @@ fn get_or_create_block(
 pub enum BackendType {
     Int32,
     Int64,
+    UInt32,
+    UInt64,
     Char,
     Bool,
     Ptr,
@@ -85,8 +87,8 @@ impl BackendType {
         match self {
             BackendType::Char => types::I8,
             BackendType::Bool => types::I8,
-            BackendType::Int32 => types::I32,
-            BackendType::Int64 => types::I64,
+            BackendType::Int32 | BackendType::UInt32 => types::I32,
+            BackendType::Int64 | BackendType::UInt64 => types::I64,
             BackendType::Ptr => ptr_type,
         }
     }
@@ -95,8 +97,8 @@ impl BackendType {
         match self {
             BackendType::Char => 1,
             BackendType::Bool => 1,
-            BackendType::Int32 => 4,
-            BackendType::Int64 => 8,
+            BackendType::Int32 | BackendType::UInt32 => 4,
+            BackendType::Int64 | BackendType::UInt64 => 8,
             BackendType::Ptr => 8,
         }
     }
@@ -109,6 +111,7 @@ impl BackendType {
             }
             Type::Any => BackendType::Ptr,
             Type::Int => BackendType::Int64,
+            Type::UInt => BackendType::UInt64,
             Type::Char => BackendType::Char,
             Type::Bool => BackendType::Bool,
             Type::Ptr(_) => BackendType::Ptr,
@@ -226,7 +229,11 @@ impl CraneliftBackend {
                 let linkage = Linkage::Import;
 
                 let mut sig = self.module.make_signature();
-                if let Some(func_sig) = self.functions.get(fnname) {
+                if let Some(func_sig) = self
+                    .functions
+                    .get(fnname)
+                    .or_else(|| self.functions.get(strip_mangling(fnname)))
+                {
                     let ptr_type = self.module.target_config().pointer_type();
                     for param_ty in &func_sig.param_types {
                         let backend_ty = BackendType::from_frontend(param_ty);
@@ -302,11 +309,14 @@ impl CraneliftBackend {
             return id;
         }
 
-        let s_name = strip_mangling(name);
-        let linkage = if public || name == "main" {
-            Linkage::Export
+        // DO NOT strip mangling for our own functions!
+        // This preserves "MyszHashSet_contains__int" in the object binary file.
+        let s_name = name;
+
+        let linkage = if public {
+            Linkage::Export // This matches your 'pub' visibility keyword
         } else {
-            Linkage::Local
+            Linkage::Local // This hidden visibility restricts access to this module
         };
 
         let ptr_type = self.module.target_config().pointer_type();
@@ -389,7 +399,11 @@ impl CraneliftBackend {
         let mut param_idx = 0;
         for inst in insts {
             if let Instruction::Param { p } = inst {
-                let resolved_ty = if let Some(func_sig) = self.functions.get(name) {
+                let resolved_ty = if let Some(func_sig) = self
+                    .functions
+                    .get(name)
+                    .or_else(|| self.functions.get(strip_mangling(name)))
+                {
                     if let Some(formal_ty) = func_sig.param_types.get(param_idx) {
                         formal_ty.clone()
                     } else {
@@ -403,11 +417,11 @@ impl CraneliftBackend {
             }
         }
 
-        let current_func_ret_front = if name == "main" {
-            Some(Type::Int)
-        } else {
-            self.functions.get(name).map(|sig| sig.return_type.clone())
-        };
+        let current_func_ret_front = self
+            .functions
+            .get(name)
+            .or_else(|| self.functions.get(strip_mangling(name)))
+            .map(|sig| sig.return_type.clone());
 
         let mut sig = self.module.make_signature();
         if let Some(ref front_ret) = current_func_ret_front {
@@ -422,7 +436,11 @@ impl CraneliftBackend {
 
         for inst in insts {
             if let Instruction::Param { p } = inst {
-                let ty = if let Some(func_sig) = self.functions.get(name) {
+                let ty = if let Some(func_sig) = self
+                    .functions
+                    .get(name)
+                    .or_else(|| self.functions.get(strip_mangling(name)))
+                {
                     if let Some(formal_ty) = func_sig.param_types.get(param_idx) {
                         BackendType::from_frontend(formal_ty)
                     } else {
@@ -604,14 +622,19 @@ impl CraneliftBackend {
                         if let Some(src_front_ty) = src_front_ty {
                             let abi =
                                 AbiType::from_frontend(src_front_ty, &self.struct_defs, ptr_type);
-                            if let AbiType::Aggregate { total_size, .. } = abi {
-                                if !stack_slot_map.contains_key(src_name) {
-                                    let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                        StackSlotKind::ExplicitSlot,
-                                        total_size,
-                                    ));
-                                    stack_slot_map.insert(src_name.clone(), slot);
-                                }
+
+                            // FIX: Determine size for both aggregates AND primitives
+                            let size = match abi {
+                                AbiType::Aggregate { total_size, .. } => total_size,
+                                _ => BackendType::from_frontend(src_front_ty).byte_size(),
+                            };
+
+                            if !stack_slot_map.contains_key(src_name) {
+                                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    size,
+                                ));
+                                stack_slot_map.insert(src_name.clone(), slot);
                             }
                         }
                     }
@@ -869,7 +892,9 @@ impl CraneliftBackend {
                     let callee_ret_front = self
                         .functions
                         .get(callee_name)
+                        .or_else(|| self.functions.get(strip_mangling(callee_name)))
                         .map(|sig| sig.return_type.clone());
+
                     if let Some(ref front_ret) = callee_ret_front {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         abi.append_to_signature_returns(&mut final_sig);
@@ -885,11 +910,33 @@ impl CraneliftBackend {
                         final_sig.returns.push(AbiParam::new(types::I64));
                     }
 
-                    let s_name = strip_mangling(callee_name);
-                    let fn_id = self
-                        .module
-                        .declare_function(s_name, Linkage::Import, &final_sig)
-                        .unwrap();
+                    // --- FIX: Unified declaration lookup ---
+                    let fn_id = if let Some(&id) = self.declared_funcs.get(callee_name) {
+                        // Already declared (as an extern runtime function or local definition)
+                        id
+                    } else {
+                        // Not declared yet. Check if it's a runtime function (its stripped name is in declared_funcs)
+                        let stripped = strip_mangling(callee_name);
+                        if let Some(&id) = self.declared_funcs.get(stripped) {
+                            id
+                        } else {
+                            // Forward-referenced local function. We MUST NOT declare this as Import.
+                            let linkage = if callee_name == "main" {
+                                Linkage::Export
+                            } else {
+                                Linkage::Local
+                            };
+
+                            let id = self
+                                .module
+                                .declare_function(callee_name, linkage, &final_sig)
+                                .unwrap();
+
+                            self.declared_funcs.insert(callee_name.to_string(), id);
+                            id
+                        }
+                    };
+
                     let local_func = self.module.declare_func_in_func(fn_id, &mut builder.func);
 
                     let inst_call = builder.ins().call(local_func, &call_args);
@@ -908,16 +955,22 @@ impl CraneliftBackend {
                             }
                         } else {
                             let dest_ty = BackendType::from_frontend(frontend_type);
-                            let v = get_or_create_var(
-                                &mut builder,
-                                &mut var_map,
-                                &mut var_idx,
-                                dest_name,
-                                dest_ty,
-                                ptr_type,
-                            );
                             if !call_results.is_empty() {
-                                builder.def_var(v, call_results[0]);
+                                let res_val = call_results[0];
+                                // FIX: If the destination has a stack slot, write to it!
+                                if let Some(&slot) = stack_slot_map.get(dest_name) {
+                                    builder.ins().stack_store(res_val, slot, 0);
+                                } else {
+                                    let v = get_or_create_var(
+                                        &mut builder,
+                                        &mut var_map,
+                                        &mut var_idx,
+                                        dest_name,
+                                        dest_ty,
+                                        ptr_type,
+                                    );
+                                    builder.def_var(v, res_val);
+                                }
                             }
                         }
                     }
@@ -925,6 +978,7 @@ impl CraneliftBackend {
                     call_args.clear();
                     call_arg_types.clear();
                 }
+
                 Instruction::Assign {
                     dst: dst_name,
                     src: value,
@@ -1006,14 +1060,6 @@ impl CraneliftBackend {
                         }
                     } else {
                         let dest_ty = BackendType::from_frontend(frontend_type);
-                        let v_dest = get_or_create_var(
-                            &mut builder,
-                            &mut var_map,
-                            &mut var_idx,
-                            dst_name,
-                            dest_ty,
-                            ptr_type,
-                        );
 
                         let val = self.lower_value(
                             &mut builder,
@@ -1024,7 +1070,19 @@ impl CraneliftBackend {
                             &stack_slot_map,
                             ptr_type,
                         );
-                        builder.def_var(v_dest, val);
+                        if let Some(&slot) = stack_slot_map.get(dst_name) {
+                            builder.ins().stack_store(val, slot, 0);
+                        } else {
+                            let v_dest = get_or_create_var(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                dst_name,
+                                dest_ty,
+                                ptr_type,
+                            );
+                            builder.def_var(v_dest, val);
+                        }
                     }
                 }
                 Instruction::Load {
@@ -1073,15 +1131,20 @@ impl CraneliftBackend {
                         let clif_ty = dest_ty.to_clif_type(ptr_type);
                         let loaded_val = builder.ins().load(clif_ty, MemFlags::new(), ptr_val, 0);
 
-                        let v_dest = get_or_create_var(
-                            &mut builder,
-                            &mut var_map,
-                            &mut var_idx,
-                            dest_name,
-                            dest_ty,
-                            ptr_type,
-                        );
-                        builder.def_var(v_dest, loaded_val);
+                        // FIX: If the destination has a stack slot, write to it!
+                        if let Some(&slot) = stack_slot_map.get(dest_name) {
+                            builder.ins().stack_store(loaded_val, slot, 0);
+                        } else {
+                            let v_dest = get_or_create_var(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                dest_name,
+                                dest_ty,
+                                ptr_type,
+                            );
+                            builder.def_var(v_dest, loaded_val);
+                        }
                     }
                 }
                 Instruction::Store { ptr, source: value } => {
@@ -1184,7 +1247,6 @@ impl CraneliftBackend {
                         dest_ty,
                         ptr_type,
                     );
-
                     let lhs_val = self.lower_value(
                         &mut builder,
                         lhs,
@@ -1194,7 +1256,6 @@ impl CraneliftBackend {
                         &stack_slot_map,
                         ptr_type,
                     );
-
                     let rhs_val = self.lower_value(
                         &mut builder,
                         rhs,
@@ -1205,30 +1266,82 @@ impl CraneliftBackend {
                         ptr_type,
                     );
 
+                    // Check if the destination or either operand resolves to an unsigned backend type
+                    let is_unsigned = matches!(dest_ty, BackendType::UInt32 | BackendType::UInt64)
+                        || match lhs {
+                            Value::Var(name) | Value::Temp(name) => {
+                                if let Some(t) = var_types.get(name) {
+                                    matches!(
+                                        BackendType::from_frontend(t),
+                                        BackendType::UInt32 | BackendType::UInt64
+                                    )
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        };
+
                     let res = match op {
                         IrOp::Add => builder.ins().iadd(lhs_val, rhs_val),
                         IrOp::Sub => builder.ins().isub(lhs_val, rhs_val),
                         IrOp::Mul => builder.ins().imul(lhs_val, rhs_val),
-                        IrOp::Div => builder.ins().sdiv(lhs_val, rhs_val),
-                        IrOp::Mod => builder.ins().srem(lhs_val, rhs_val),
+
+                        // Choose unsigned or signed division / remainder based on type
+                        IrOp::Div => {
+                            if is_unsigned {
+                                builder.ins().udiv(lhs_val, rhs_val)
+                            } else {
+                                builder.ins().sdiv(lhs_val, rhs_val)
+                            }
+                        }
+                        IrOp::Mod => {
+                            if is_unsigned {
+                                builder.ins().urem(lhs_val, rhs_val)
+                            } else {
+                                builder.ins().srem(lhs_val, rhs_val)
+                            }
+                        }
+
+                        // Choose signed vs. unsigned comparison flags
                         IrOp::Eq => builder.ins().icmp(IntCC::Equal, lhs_val, rhs_val),
                         IrOp::NEq => builder.ins().icmp(IntCC::NotEqual, lhs_val, rhs_val),
-                        IrOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs_val, rhs_val),
+                        IrOp::Lt => {
+                            let cond = if is_unsigned {
+                                IntCC::UnsignedLessThan
+                            } else {
+                                IntCC::SignedLessThan
+                            };
+                            builder.ins().icmp(cond, lhs_val, rhs_val)
+                        }
                         IrOp::LtE => {
-                            builder
-                                .ins()
-                                .icmp(IntCC::SignedLessThanOrEqual, lhs_val, rhs_val)
+                            let cond = if is_unsigned {
+                                IntCC::UnsignedLessThanOrEqual
+                            } else {
+                                IntCC::SignedLessThanOrEqual
+                            };
+                            builder.ins().icmp(cond, lhs_val, rhs_val)
                         }
-                        IrOp::Gt => builder
-                            .ins()
-                            .icmp(IntCC::SignedGreaterThan, lhs_val, rhs_val),
+                        IrOp::Gt => {
+                            let cond = if is_unsigned {
+                                IntCC::UnsignedGreaterThan
+                            } else {
+                                IntCC::SignedGreaterThan
+                            };
+                            builder.ins().icmp(cond, lhs_val, rhs_val)
+                        }
                         IrOp::GtE => {
-                            builder
-                                .ins()
-                                .icmp(IntCC::SignedGreaterThanOrEqual, lhs_val, rhs_val)
+                            let cond = if is_unsigned {
+                                IntCC::UnsignedGreaterThanOrEqual
+                            } else {
+                                IntCC::SignedGreaterThanOrEqual
+                            };
+                            builder.ins().icmp(cond, lhs_val, rhs_val)
                         }
-                        _ => panic!("Operator variant mapping is unhandled inside Binary pipeline"),
+
+                        IrOp::Neg | IrOp::Pos | IrOp::Ref | IrOp::Not => unreachable!(),
                     };
+
                     builder.def_var(v_dest, res);
                 }
                 Instruction::Unary {
@@ -1322,8 +1435,11 @@ impl CraneliftBackend {
                         }
                         _ => panic!("Unsupported unary structural instruction operation"),
                     };
-
-                    builder.def_var(v_dest, res);
+                    if let Some(&slot) = stack_slot_map.get(dest) {
+                        builder.ins().stack_store(res, slot, 0);
+                    } else {
+                        builder.def_var(v_dest, res);
+                    }
                 }
                 Instruction::JumpIfFalse { cond, target } => {
                     let cond_val = self.lower_value(
@@ -1352,6 +1468,10 @@ impl CraneliftBackend {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         match abi {
                             AbiType::Void => {
+                                println!(
+                                    "RETURN in {}: current_func_ret_front={:?}, value={:?}",
+                                    name, current_func_ret_front, value
+                                );
                                 builder.ins().return_(&[]);
                             }
                             AbiType::Primitive(clif_ty) => {
@@ -1378,6 +1498,10 @@ impl CraneliftBackend {
                                     Value::Void => builder.ins().iconst(clif_ty, 0),
                                     _ => panic!("Primitive unexpected literal type matching"),
                                 };
+                                println!(
+                                    "RETURN in {}: current_func_ret_front={:?}, value={:?}",
+                                    name, current_func_ret_front, value
+                                );
                                 builder.ins().return_(&[val]);
                             }
                             AbiType::Aggregate { chunk_count, .. } => {
@@ -1392,6 +1516,10 @@ impl CraneliftBackend {
                                         );
                                         chunks.push(val_part);
                                     }
+                                    println!(
+                                        "RETURN in {}: current_func_ret_front={:?}, value={:?}",
+                                        name, current_func_ret_front, value
+                                    );
                                     builder.ins().return_(&chunks);
                                 } else {
                                     panic!(
@@ -1401,6 +1529,10 @@ impl CraneliftBackend {
                             }
                         }
                     } else {
+                        println!(
+                            "RETURN in {}: current_func_ret_front={:?}, value={:?}",
+                            name, current_func_ret_front, value
+                        );
                         builder.ins().return_(&[]);
                     }
                 }
@@ -1443,8 +1575,27 @@ impl CraneliftBackend {
             }
         }
 
+        println!(
+            "{} returns {} values",
+            name,
+            builder.func.signature.returns.len()
+        );
+
+        for r in &builder.func.signature.returns {
+            println!("{:?}", r.value_type);
+        }
+
         builder.finalize();
-        self.module.define_function(func_id, ctx).unwrap();
+        match self.module.define_function(func_id, ctx) {
+            Ok(_) => {}
+            Err(cranelift_module::ModuleError::DuplicateDefinition(fnname)) => {
+                eprintln!(
+                    "warning: function '{}' has been defined more than once, more recently seen definition has been ignored.",
+                    fnname
+                );
+            }
+            Err(e) => panic!("Failed to define function: {:?}", e),
+        }
         ctx.clear();
     }
 

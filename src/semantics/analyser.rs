@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-
 use crate::parse::parsing::*;
 use crate::semantics::analysis::{FunctionSignature, Scope, StructSignature, Symbol};
 use crate::utils::location::Location;
+use crate::utils::typesafe::*;
+use std::collections::{HashMap, HashSet};
 
 pub struct Analyser {
     pub scopes: Vec<Scope>,
@@ -30,6 +30,8 @@ impl Analyser {
         }
     }
 
+    // --- Scope Operations ---
+
     pub fn enter_scope(&mut self) {
         let parent_idx = self.current_scope;
         let new_scope = Scope {
@@ -49,20 +51,17 @@ impl Analyser {
         self.current_scope = parent;
     }
 
+    // --- Clean Structural Substitution (TypeVisitor Pattern) ---
+
+    /// Unified substitute function replacing generic placeholders with concrete type mappings.
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match ty {
+            Type::Struct(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, mapping))),
             Type::Array { element_type, size } => Type::Array {
                 element_type: Box::new(self.substitute_type(element_type, mapping)),
                 size: *size,
             },
-            Type::Struct(name) => {
-                if let Some(target_type) = mapping.get(name) {
-                    target_type.clone()
-                } else {
-                    ty.clone()
-                }
-            }
             Type::GenericInstance { name, args } => {
                 let substituted_args = args
                     .iter()
@@ -76,67 +75,6 @@ impl Analyser {
             _ => ty.clone(),
         }
     }
-
-    fn mangle_name(&self, base_name: &str, args: &[Type]) -> String {
-        let mut name = base_name.to_string();
-        for arg in args {
-            name.push_str("__");
-            match arg {
-                Type::Int => name.push_str("int"),
-                Type::Bool => name.push_str("bool"),
-                Type::Str => name.push_str("str"),
-                Type::Char => name.push_str("char"),
-                Type::Void => name.push_str("void"),
-                Type::Any => name.push_str("any"),
-                Type::Struct(n) => name.push_str(n),
-                _ => name.push_str("type"),
-            }
-        }
-        name
-    }
-
-    fn normalise_type(&self, ty: &Type) -> Type {
-        match ty {
-            Type::GenericInstance { name, args } => {
-                fn flatten_name(t: &Type) -> String {
-                    match t {
-                        Type::Struct(n) => n.clone(),
-                        Type::GenericInstance {
-                            name: inner_name,
-                            args: inner_args,
-                        } => {
-                            let mut mangled = inner_name.clone();
-                            for arg in inner_args {
-                                mangled.push_str("__");
-                                mangled.push_str(&flatten_name(arg));
-                            }
-                            mangled
-                        }
-                        Type::Int => "int".to_string(),
-                        Type::Char => "char".to_string(),
-                        Type::Bool => "bool".to_string(),
-                        Type::Ptr(inner) => format!("ptr__{}", flatten_name(inner)),
-                        _ => format!("{:?}", t),
-                    }
-                }
-
-                let mut mangled_name = name.clone();
-                for arg in args {
-                    mangled_name.push_str("__");
-                    mangled_name.push_str(&flatten_name(arg));
-                }
-
-                Type::Struct(mangled_name)
-            }
-            Type::Ptr(inner) => Type::Ptr(Box::new(self.normalise_type(inner))),
-            Type::Array { element_type, size } => Type::Array {
-                element_type: Box::new(self.normalise_type(element_type)),
-                size: *size,
-            },
-            _ => ty.clone(),
-        }
-    }
-
     fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
         match ty {
             Type::Ptr(inner) => {
@@ -177,7 +115,7 @@ impl Analyser {
                     ));
                 }
 
-                let mangled = self.mangle_name(name, &resolved_args);
+                let mangled = mangle_name(name, &resolved_args);
 
                 if !self.structs.contains_key(&mangled) {
                     let mapping: HashMap<String, Type> = template
@@ -226,7 +164,7 @@ impl Analyser {
             name.to_string(),
             Symbol {
                 name: name.to_string(),
-                ty: data_type.clone(),
+                ty: data_type,
             },
         );
         Ok(())
@@ -341,13 +279,10 @@ impl Analyser {
     }
 
     pub fn check_truthiness(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Int => true,
-            Type::Bool => true,
-            Type::Str => true,
-            _ => false,
-        }
+        is_truthy_type(ty)
     }
+
+    // --- Expression Type Checking with Context Propagation ---
 
     pub fn check_expr(
         &mut self,
@@ -357,27 +292,43 @@ impl Analyser {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
             ExprKind::Literal(lit) => match lit {
-                Literal::Int(_) => Ok(Type::Int),
+                Literal::Int(_) => {
+                    if let Some(Type::UInt) = expected_type {
+                        Ok(Type::UInt)
+                    } else {
+                        Ok(Type::Int)
+                    }
+                }
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool),
                 Literal::Char(_) => Ok(Type::Char),
                 Literal::Arr { elements } => {
+                    let expected_elem_ty = match expected_type {
+                        Some(Type::Array { element_type, .. }) => Some(&**element_type),
+                        _ => None,
+                    };
+
                     let element_type = if elements.is_empty() {
-                        if let Some(Type::Array { element_type, .. }) = expected_type {
-                            *element_type.clone()
+                        if let Some(elem_ty) = expected_elem_ty {
+                            elem_ty.clone()
                         } else {
-                            return Err("Type Error: Cannot infer type of an empty array literal without explicit type context.".to_string());
+                            return Err(format!(
+                                "Type Error [{}]: Cannot infer the type of an empty array literal without explicit type context.",
+                                expr.span
+                            ));
                         }
                     } else {
-                        self.check_expr(&elements[0], None)?
+                        self.check_expr(&elements[0], expected_elem_ty)?
                     };
 
                     for el in elements {
                         let el_type = self.check_expr(el, Some(&element_type))?;
-                        if el_type != element_type {
+                        if !types_compatible(&element_type, &el_type) {
                             return Err(format!(
-                                "Type Error: Heterogeneous arrays are not allowed. Expected {:?}, found {:?}",
-                                element_type, el_type
+                                "Type Error [{}]: Heterogeneous array literals are not allowed. Expected elements of type '{}', found '{}'.",
+                                el.span,
+                                type_to_string(&element_type),
+                                type_to_string(&el_type)
                             ));
                         }
                     }
@@ -424,42 +375,20 @@ impl Analyser {
                             )
                         })?;
 
-                        let subst_map: HashMap<&String, &Type> =
-                            signature.generic_params.iter().zip(args.iter()).collect();
+                        // Map template generic parameter strings to actual arguments
+                        let mapping: HashMap<String, Type> = signature
+                            .generic_params
+                            .iter()
+                            .cloned()
+                            .zip(args.iter().cloned())
+                            .collect();
 
-                        fn substitute(
-                            ty: &Type,
-                            map: &std::collections::HashMap<&String, &Type>,
-                        ) -> Type {
-                            match ty {
-                                Type::Struct(s_name) => {
-                                    if let Some(&actual_ty) = map.get(s_name) {
-                                        actual_ty.clone()
-                                    } else {
-                                        ty.clone()
-                                    }
-                                }
-                                Type::GenericInstance {
-                                    name: g_name,
-                                    args: g_args,
-                                } => {
-                                    let new_args =
-                                        g_args.iter().map(|arg| substitute(arg, map)).collect();
-                                    Type::GenericInstance {
-                                        name: g_name.clone(),
-                                        args: new_args,
-                                    }
-                                }
-                                Type::Ptr(inner) => Type::Ptr(Box::new(substitute(inner, map))),
-                                _ => ty.clone(),
-                            }
-                        }
-
-                        Ok(substitute(raw_field_type, &subst_map))
+                        Ok(self.substitute_type(raw_field_type, &mapping))
                     }
                     _ => Err(format!(
-                        "Type Error [{}]: Cannot access a field on non-struct type '{:?}'.",
-                        expr.span, base_type
+                        "Type Error [{}]: Cannot access a field on non-struct type '{}'.",
+                        expr.span,
+                        type_to_string(&base_type)
                     )),
                 }
             }
@@ -481,7 +410,7 @@ impl Analyser {
 
                 if fields.len() != signature.fields.len() {
                     return Err(format!(
-                        "Type Error [{}]: Struct '{}' expects {} fields initialized, found {}.",
+                        "Type Error [{}]: Struct '{}' expects {} fields to be initialized, found {}.",
                         expr.span,
                         struct_name,
                         signature.fields.len(),
@@ -490,30 +419,27 @@ impl Analyser {
                 }
 
                 for (field_name, field_expr) in fields {
-                    let expected_type = {
-                        let ty = signature.fields.get(field_name).ok_or_else(|| {
-                            format!(
-                                "Semantic Error [{}]: Field '{}' does not exist in '{}'.",
-                                field_expr.span, field_name, struct_name,
-                            )
-                        })?;
+                    let expected_field_ty = signature.fields.get(field_name).ok_or_else(|| {
+                        format!(
+                            "Semantic Error [{}]: Field '{}' does not exist in struct '{}'.",
+                            field_expr.span, field_name, struct_name
+                        )
+                    })?;
 
-                        ty.clone()
-                    };
-
-                    let actual_type = self.check_expr(field_expr, Some(&expected_type))?;
-                    if actual_type != expected_type
-                        && actual_type != Type::Any
-                        && expected_type != Type::Any
-                    {
+                    let actual_type = self.check_expr(field_expr, Some(expected_field_ty))?;
+                    if !types_compatible(expected_field_ty, &actual_type) {
                         return Err(format!(
-                            "Type Error [{}]: Field '{}' of struct '{}' expects type '{:?}', found '{:?}'.",
-                            field_expr.span, field_name, struct_name, expected_type, actual_type
+                            "Type Error [{}]: Field '{}' of struct '{}' expects type '{}', but found '{}'.",
+                            field_expr.span,
+                            field_name,
+                            struct_name,
+                            type_to_string(expected_field_ty),
+                            type_to_string(&actual_type)
                         ));
                     }
                 }
 
-                let mut tracking_set = std::collections::HashSet::new();
+                let mut tracking_set = HashSet::new();
                 for (name, _) in fields {
                     if !tracking_set.insert(name) {
                         return Err(format!(
@@ -528,18 +454,23 @@ impl Analyser {
 
             ExprKind::Index { base, index } => {
                 let base_type = self.check_expr(base, None)?;
-                let index_type = self.check_expr(index, None)?;
+                let index_type = self.check_expr(index, Some(&Type::Int))?;
 
-                if index_type != Type::Int {
-                    return Err(format!("Array index must be an int."));
+                if !is_integer(&index_type) {
+                    return Err(format!(
+                        "Type Error [{}]: Array index must be an integer, found '{}'.",
+                        index.span,
+                        type_to_string(&index_type)
+                    ));
                 }
 
                 match base_type {
                     Type::Array { element_type, .. } => Ok(*element_type),
                     Type::Ptr(inner_type) => Ok(*inner_type),
                     _ => Err(format!(
-                        "Cannot index into non-indexable type '{:?}'",
-                        base_type
+                        "Type Error [{}]: Cannot index into non-indexable type '{}'.",
+                        expr.span,
+                        type_to_string(&base_type)
                     )),
                 }
             }
@@ -586,7 +517,7 @@ impl Analyser {
                         inst_args.push(self.instantiate_generic_types(g_arg, &callee.location)?);
                     }
 
-                    resolved_func_name = self.mangle_name(&callee.value, &inst_args);
+                    resolved_func_name = mangle_name(&callee.value, &inst_args);
 
                     if !self.functions.contains_key(&resolved_func_name) {
                         let mapping: HashMap<String, Type> = template
@@ -637,7 +568,7 @@ impl Analyser {
                 let return_type = sig.return_type.clone();
 
                 for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
-                    let arg_type = self.check_expr(arg, None)?;
+                    let arg_type = self.check_expr(arg, Some(expected))?;
                     match (expected, &arg_type) {
                         (
                             Type::Array {
@@ -649,44 +580,40 @@ impl Analyser {
                                 ..
                             },
                         ) => {
-                            if **expected_elem != Type::Any && **expected_elem != **actual_elem {
+                            if **expected_elem != Type::Any
+                                && !types_compatible(expected_elem, actual_elem)
+                            {
                                 return Err(format!(
-                                    "Type Error [{}]: Argument {} to '{}' expects array of '{:?}', found array of '{:?}'",
+                                    "Type Error [{}]: Argument {} to '{}' expects array of '{}', found array of '{}'",
                                     arg.span,
                                     i + 1,
                                     callee.value,
-                                    expected_elem,
-                                    actual_elem,
+                                    type_to_string(expected_elem),
+                                    type_to_string(actual_elem),
                                 ));
                             }
                         }
 
                         (Type::Array { .. }, _) => {
                             return Err(format!(
-                                "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
+                                "Type Error [{}]: Argument {} to '{}' expects '{}', found '{}'",
                                 arg.span,
                                 i + 1,
                                 callee.value,
-                                expected,
-                                arg_type,
+                                type_to_string(expected),
+                                type_to_string(&arg_type),
                             ));
                         }
 
                         _ => {
-                            let norm_expected = self.normalise_type(expected);
-                            let norm_arg = self.normalise_type(&arg_type);
-
-                            if norm_expected != norm_arg
-                                && *expected != Type::Any
-                                && arg_type != Type::Any
-                            {
+                            if !types_compatible(expected, &arg_type) {
                                 return Err(format!(
-                                    "Type Error [{}]: Argument {} to '{}' expects '{:?}', found '{:?}'",
+                                    "Type Error [{}]: Argument {} to '{}' expects '{}', found '{}'",
                                     arg.span,
                                     i + 1,
                                     callee.value,
-                                    expected,
-                                    arg_type,
+                                    type_to_string(expected),
+                                    type_to_string(&arg_type),
                                 ));
                             }
                         }
@@ -697,40 +624,54 @@ impl Analyser {
             }
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
-                let right_type = self.check_expr(right, None)?;
+                // Propagate left type as a contextual hint to simplify literals on the right hand side
+                let right_type = self.check_expr(right, Some(&left_type))?;
 
                 match op {
                     BinaryOp::Add => {
-                        if left_type == Type::Int && right_type == Type::Int {
-                            Ok(Type::Int)
-                        } else if (left_type == Type::Int || left_type == Type::Any)
-                            && (right_type == Type::Int || right_type == Type::Any)
-                        {
-                            Ok(Type::Int)
-                        } else if left_type == Type::Str && right_type == Type::Str {
-                            Ok(Type::Str)
-                        } else if (left_type == Type::Str || left_type == Type::Any)
-                            && (right_type == Type::Str || right_type == Type::Any)
+                        if is_integer(&left_type) && is_integer(&right_type) {
+                            if left_type == right_type {
+                                Ok(left_type)
+                            } else {
+                                Err(format!(
+                                    "Type Error [{}]: Cannot add mismatched integer types '{}' and '{}'",
+                                    expr.span,
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ))
+                            }
+                        } else if types_compatible(&Type::Str, &left_type)
+                            && types_compatible(&Type::Str, &right_type)
                         {
                             Ok(Type::Str)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Cannot add type '{:?}' and '{:?}'",
-                                expr.span, left_type, right_type
+                                "Type Error [{}]: Cannot add type '{}' and '{}'",
+                                expr.span,
+                                type_to_string(&left_type),
+                                type_to_string(&right_type)
                             ))
                         }
                     }
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                        if left_type == Type::Int && right_type == Type::Int {
-                            Ok(Type::Int)
+                        if is_integer(&left_type) && is_integer(&right_type) {
+                            if left_type == right_type {
+                                Ok(left_type)
+                            } else {
+                                Err(format!(
+                                    "Type Error [{}]: Mixed-type integer arithmetic ('{}' and '{}') is not allowed",
+                                    expr.span,
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ))
+                            }
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Operator '{:?}' expects '{:?}', but found '{:?}' and '{:?}'",
+                                "Type Error [{}]: Operator '{:?}' expects integers, but found '{}' and '{}'",
                                 expr.span,
                                 op,
-                                Type::Int,
-                                left_type,
-                                right_type
+                                type_to_string(&left_type),
+                                type_to_string(&right_type)
                             ))
                         }
                     }
@@ -739,19 +680,31 @@ impl Analyser {
                     | BinaryOp::Gt
                     | BinaryOp::GtE
                     | BinaryOp::Lt
-                    | BinaryOp::LtE => Ok(Type::Bool),
+                    | BinaryOp::LtE => {
+                        if types_compatible(&left_type, &right_type) {
+                            Ok(Type::Bool)
+                        } else {
+                            Err(format!(
+                                "Type Error [{}]: Cannot compare incompatible types '{}' and '{}'",
+                                expr.span,
+                                type_to_string(&left_type),
+                                type_to_string(&right_type)
+                            ))
+                        }
+                    }
                 }
             }
             ExprKind::Unary { op, expr: sub_expr } => {
                 let expr_type = self.check_expr(sub_expr, None)?;
                 match op {
                     UnaryOp::Positive | UnaryOp::Negative => {
-                        if expr_type == Type::Int {
-                            Ok(Type::Int)
+                        if is_signed_integer(&expr_type) {
+                            Ok(expr_type)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Unary arithmetic operator expects 'int', found '{:?}'",
-                                expr.span, expr_type
+                                "Type Error [{}]: Unary sign operators are only supported on signed integers, found '{}'",
+                                expr.span,
+                                type_to_string(&expr_type)
                             ))
                         }
                     }
@@ -760,8 +713,9 @@ impl Analyser {
                             Ok(Type::Bool)
                         } else {
                             Err(format!(
-                                "Type Error [{}]: Unary boolean operator expects 'bool' found '{:?}'",
-                                expr.span, expr_type
+                                "Type Error [{}]: Unary boolean operator expects 'bool', found '{}'",
+                                expr.span,
+                                type_to_string(&expr_type)
                             ))
                         }
                     }
@@ -769,14 +723,17 @@ impl Analyser {
                     UnaryOp::Deref => match expr_type {
                         Type::Ptr(inner_type) => Ok(*inner_type),
                         _ => Err(format!(
-                            "Type Error [{}]: Cannot dereference non-pointer type '{:?}'",
-                            expr.span, expr_type
+                            "Type Error [{}]: Cannot dereference non-pointer type '{}'",
+                            expr.span,
+                            type_to_string(&expr_type)
                         )),
                     },
                 }
             }
         }
     }
+
+    // --- Statement Type Checking ---
 
     pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
@@ -873,10 +830,13 @@ impl Analyser {
                         self.validate_type_exists(&instantiated, &ident.location)?;
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
-                        if instantiated != expr_type {
+                        if !types_compatible(&instantiated, &expr_type) {
                             return Err(format!(
-                                "Type Error [{}]: Variable '{}' declared as '{:?}' but assigned type '{:?}'",
-                                expr_node.span, ident.value, instantiated, expr_type
+                                "Type Error [{}]: Variable '{}' declared as '{}' but assigned type '{}'",
+                                expr_node.span,
+                                ident.value,
+                                type_to_string(&instantiated),
+                                type_to_string(&expr_type)
                             ));
                         }
                         instantiated
@@ -897,13 +857,13 @@ impl Analyser {
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                    if existing_symbol.ty != variable_type
-                        && existing_symbol.ty != Type::Any
-                        && variable_type != Type::Any
-                    {
+                    if !types_compatible(&existing_symbol.ty, &variable_type) {
                         return Err(format!(
-                            "Type Error [{}]: Cannot reassign type '{:?}' to variable '{}' of type '{:?}'",
-                            ident.location, variable_type, ident.value, existing_symbol.ty
+                            "Type Error [{}]: Cannot reassign type '{}' to variable '{}' of type '{}'",
+                            ident.location,
+                            type_to_string(&variable_type),
+                            ident.value,
+                            type_to_string(&existing_symbol.ty)
                         ));
                     }
                 } else {
@@ -917,13 +877,12 @@ impl Analyser {
                 let target_resolved_type = self.check_expr(target, None)?;
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                if target_resolved_type != expr_type
-                    && target_resolved_type != Type::Any
-                    && expr_type != Type::Any
-                {
+                if !types_compatible(&target_resolved_type, &expr_type) {
                     return Err(format!(
-                        "Type Error [{}]: Cannot assign type '{:?}' to target location of type '{:?}'",
-                        expr.span, expr_type, target_resolved_type
+                        "Type Error [{}]: Cannot assign type '{}' to target location of type '{}'",
+                        expr.span,
+                        type_to_string(&expr_type),
+                        type_to_string(&target_resolved_type)
                     ));
                 }
 
@@ -931,19 +890,28 @@ impl Analyser {
             }
 
             Stmt::Reassignment { ident, expr } => {
-                let expr_type = self.check_expr(expr, None)?;
+                // 1. Look up and clone the expected type immediately, releasing the borrow on `self`
+                let expected_ty = self
+                    .resolve_variable(&ident.value)
+                    .map(|symbol| symbol.ty.clone())
+                    .ok_or_else(|| {
+                        format!(
+                            "Semantic Error [{}]: Cannot reassign to undefined variable '{}'",
+                            ident.location, ident.value
+                        )
+                    })?;
 
-                let symbol = self.resolve_variable(&ident.value).ok_or_else(|| {
-                    format!(
-                        "Semantic Error [{}]: Cannot reassign to undefined variable '{}'",
-                        ident.location, ident.value
-                    )
-                })?;
+                // 2. Now self can be borrowed mutably safely
+                let expr_type = self.check_expr(expr, Some(&expected_ty))?;
 
-                if symbol.ty != expr_type && symbol.ty != Type::Any && expr_type != Type::Any {
+                // 3. Perform the compatibility check
+                if !types_compatible(&expected_ty, &expr_type) {
                     return Err(format!(
-                        "Type Error [{}]: Cannot assign type '{:?}' to variable '{}' of type '{:?}'",
-                        expr.span, expr_type, ident.value, symbol.ty
+                        "Type Error [{}]: Cannot assign type '{}' to variable '{}' of type '{}'",
+                        expr.span,
+                        type_to_string(&expr_type),
+                        ident.value,
+                        type_to_string(&expected_ty)
                     ));
                 }
 
@@ -958,8 +926,9 @@ impl Analyser {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(format!(
-                        "Type Error [{}]: 'while' condition is not truthy, found '{:?}'",
-                        cond.span, cond_type
+                        "Type Error [{}]: 'while' condition is not truthy, found '{}'",
+                        cond.span,
+                        type_to_string(&cond_type)
                     ));
                 }
                 self.enter_scope();
@@ -986,8 +955,9 @@ impl Analyser {
                 if !self.check_truthiness(&cond_type) {
                     self.leave_scope();
                     return Err(format!(
-                        "Type Error [{}]: 'for' condition is not truthy, found '{:?}'",
-                        cond.span, cond_type
+                        "Type Error [{}]: 'for' condition is not truthy, found '{}'",
+                        cond.span,
+                        type_to_string(&cond_type)
                     ));
                 }
 
@@ -1010,8 +980,9 @@ impl Analyser {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(format!(
-                        "Type Error [{}]: 'if' condition is not truthy, found '{:?}'",
-                        cond.span, cond_type
+                        "Type Error [{}]: 'if' condition is not truthy, found '{}'",
+                        cond.span,
+                        type_to_string(&cond_type)
                     ));
                 }
 
@@ -1085,8 +1056,10 @@ impl Analyser {
 
                 if return_type != Type::Void && !returns {
                     return Err(format!(
-                        "Type Error [{}]: Function '{}' must return a value of type '{:?}'",
-                        name.location, name.value, return_type
+                        "Type Error [{}]: Function '{}' must return a value of type '{}'",
+                        name.location,
+                        name.value,
+                        type_to_string(&return_type)
                     ));
                 }
 
@@ -1096,11 +1069,7 @@ impl Analyser {
                 Ok(())
             }
             Stmt::Return { value, span } => {
-                let actual_type = match value {
-                    Some(e) => self.check_expr(e, None)?,
-                    None => Type::Void,
-                };
-
+                // 1. Get the expected return type first (and check if we are in a function)
                 let expected = self.current_return_type.clone().ok_or_else(|| {
                     format!(
                         "Semantic Error [{}]: 'return' used outside of a function",
@@ -1108,10 +1077,19 @@ impl Analyser {
                     )
                 })?;
 
-                if actual_type != expected {
+                // 2. Pass the reference to our local, cloned 'expected' type
+                let actual_type = match value {
+                    Some(e) => self.check_expr(e, Some(&expected))?,
+                    None => Type::Void,
+                };
+
+                // 3. Perform the compatibility check
+                if !types_compatible(&expected, &actual_type) {
                     return Err(format!(
-                        "Type Error [{}]: Function expects return type '{:?}', found '{:?}'",
-                        span, expected, actual_type
+                        "Type Error [{}]: Function expects return type '{}', found '{}'",
+                        span,
+                        type_to_string(&expected),
+                        type_to_string(&actual_type)
                     ));
                 }
 

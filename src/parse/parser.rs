@@ -167,6 +167,10 @@ impl Parser {
                     self.advance();
                     Some(Type::Int)
                 }
+                "uint" => {
+                    self.advance();
+                    Some(Type::UInt)
+                }
                 "bool" => {
                     self.advance();
                     Some(Type::Bool)

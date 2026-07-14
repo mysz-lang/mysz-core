@@ -158,30 +158,49 @@ pub fn compile_root_file<P: AsRef<Path>>(
 }
 
 pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(), String> {
-    // println!("{:#?}", program);
-
     let mut analyser = Analyser::new();
     analyser.analyse(program)?;
-
-    // println!("analysis.structs: {:#?}", analyser.structs);
 
     let mut irgen = IRGen::new();
     irgen.gen_program(program);
     // irgen.dump();
 
-    // println!("irgen.var_types: {:#?}", irgen.var_types);
+    let mut tac_instructions = Vec::new();
+    let mut seen_labels = HashSet::new();
+    let mut skip_current_duplicate = false;
 
-    let tac_instructions = irgen.code;
-
-    let mut unique_functions = HashSet::new();
-    for stmt in &program.statements {
-        if let Stmt::Function { name, public, .. } = stmt {
-            unique_functions.insert((name.value.clone(), *public));
+    for inst in irgen.code {
+        match &inst {
+            Instruction::FunctionLabel(name) => {
+                if seen_labels.contains(name) {
+                    skip_current_duplicate = true;
+                } else {
+                    seen_labels.insert(name.clone());
+                    skip_current_duplicate = false;
+                    tac_instructions.push(inst);
+                }
+            }
+            _ => {
+                if !skip_current_duplicate {
+                    tac_instructions.push(inst);
+                }
+            }
         }
     }
-    for (mangled_name, sig) in &analyser.functions {
-        if sig.generic_params.is_empty() {
-            unique_functions.insert((mangled_name.clone(), true));
+
+    let mut public_functions = HashSet::new();
+    for stmt in &program.statements {
+        if let Stmt::Function { name, public, .. } = stmt {
+            if *public {
+                public_functions.insert(name.value.clone());
+            }
+        }
+    }
+
+    let mut unique_function_names = HashSet::new();
+    for inst in &tac_instructions {
+        if let Instruction::FunctionLabel(name) = inst {
+            unique_function_names.insert(name.clone());
         }
     }
 
@@ -191,7 +210,9 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
     backend.pre_declare_strings(&instruction_refs);
 
-    for (func_name, is_public) in unique_functions {
+    for func_name in unique_function_names {
+        let is_public = public_functions.contains(&func_name);
+
         let func_instructions: Vec<&Instruction> = tac_instructions
             .iter()
             .skip_while(
@@ -217,7 +238,6 @@ pub fn compile_ast_program(program: &Program, output_filename: &str) -> Result<(
     }
 
     let product = backend.finish();
-
     let emit_result = product.emit().expect("Failed to emit object code");
 
     let mut file = File::create(output_filename).expect("Failed to create output file");

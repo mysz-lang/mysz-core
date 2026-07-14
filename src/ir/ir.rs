@@ -5,6 +5,10 @@ use crate::{
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
 };
 
+use crate::utils::typesafe::{
+    is_integer, is_signed_integer, is_truthy_type, mangle_name, normalise_type, types_compatible,
+};
+
 pub struct TempGen {
     counter: usize,
 }
@@ -120,32 +124,18 @@ impl IRGen {
                     .collect(),
             },
 
-            Type::Int | Type::Bool | Type::Str | Type::Char | Type::Void | Type::Any => ty.clone(),
+            Type::Int
+            | Type::UInt
+            | Type::Bool
+            | Type::Str
+            | Type::Char
+            | Type::Void
+            | Type::Any => ty.clone(),
         }
     }
 
     fn mangle_type(&self, ty: &Type) -> String {
-        match ty {
-            Type::Int => "int".to_string(),
-            Type::Bool => "bool".to_string(),
-            Type::Char => "char".to_string(),
-            Type::Str => "str".to_string(),
-            Type::Void => "void".to_string(),
-            Type::Any => "any".to_string(),
-            Type::Struct(n) => n.clone(),
-            Type::Ptr(inner) => format!("ptr_{}", self.mangle_type(inner)),
-            Type::Array { element_type, size } => {
-                format!("arr_{}_{}", size, self.mangle_type(element_type))
-            }
-            Type::GenericInstance { name, args } => {
-                let mut mangled = name.clone();
-                for arg in args {
-                    mangled.push_str("__");
-                    mangled.push_str(&self.mangle_type(arg));
-                }
-                mangled
-            }
-        }
+        crate::utils::typesafe::type_to_mangled_string(ty)
     }
 
     pub fn resolve_type(&mut self, ty: &Type) -> Type {
@@ -257,7 +247,7 @@ impl IRGen {
 
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int => 8,
+            Type::Int | Type::UInt => 8, // Explicitly handle UInt alongside Int!
             Type::Bool => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
@@ -276,7 +266,7 @@ impl IRGen {
 
     fn type_alignment(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int => 8,
+            Type::Int | Type::UInt => 8, // Explicitly handle UInt alongside Int!
             Type::Bool => 1,
             Type::Char => 1,
             Type::Str => 8,
@@ -1036,18 +1026,26 @@ impl IRGen {
                 }
 
                 let mut resolved_func_name = callee.value.clone();
-                if !generic_args.is_empty() {
-                    for arg_type in generic_args {
+                let substituted_generic_args: Vec<Type> = generic_args
+                    .iter()
+                    .map(|arg_type| self.substitute_type(arg_type, &self.current_substitutions))
+                    .collect();
+
+                if !substituted_generic_args.is_empty() {
+                    for arg_type in &substituted_generic_args {
                         resolved_func_name.push_str("__");
                         resolved_func_name.push_str(&self.mangle_type(arg_type));
                     }
                 }
 
-                if !generic_args.is_empty() && !self.instantiated_fns.contains(&resolved_func_name)
+                if !substituted_generic_args.is_empty()
+                    && !self.instantiated_fns.contains(&resolved_func_name)
                 {
                     self.instantiated_fns.insert(resolved_func_name.clone());
+
+                    // --- FIX: Push the substituted types so deferred instantiation works with concrete types! ---
                     self.deferred_instantiations
-                        .push((callee.value.clone(), generic_args.clone()));
+                        .push((callee.value.clone(), substituted_generic_args.clone()));
 
                     if let Some(Stmt::Function {
                         generic_params,
@@ -1055,10 +1053,11 @@ impl IRGen {
                         ..
                     }) = self.fn_blueprints.get(&callee.value).cloned()
                     {
+                        // --- FIX: Zip with substituted_generic_args ---
                         let substitutions: HashMap<String, Type> = generic_params
                             .iter()
                             .cloned()
-                            .zip(generic_args.iter().cloned())
+                            .zip(substituted_generic_args.iter().cloned())
                             .collect();
                         let unres_ty = rttype.unwrap_or(Type::Void);
                         let sub_ty = self.substitute_type(&unres_ty, &substitutions);
@@ -1210,20 +1209,27 @@ impl IRGen {
                         self.code.push(Instruction::Arg { value: val.clone() });
                     }
 
+                    // --- FIX: Substitute generic arguments using active context ---
                     let mut resolved_func_name = callee.value.clone();
-                    if !generic_args.is_empty() {
-                        for arg_type in generic_args {
+                    let substituted_generic_args: Vec<Type> = generic_args
+                        .iter()
+                        .map(|arg_type| self.substitute_type(arg_type, &self.current_substitutions))
+                        .collect();
+
+                    if !substituted_generic_args.is_empty() {
+                        for arg_type in &substituted_generic_args {
                             resolved_func_name.push_str("__");
                             resolved_func_name.push_str(&self.mangle_type(arg_type));
                         }
                     }
+                    // -------------------------------------------------------------
 
-                    if !generic_args.is_empty()
+                    if !substituted_generic_args.is_empty()
                         && !self.instantiated_fns.contains(&resolved_func_name)
                     {
                         self.instantiated_fns.insert(resolved_func_name.clone());
                         self.deferred_instantiations
-                            .push((callee.value.clone(), generic_args.clone()));
+                            .push((callee.value.clone(), substituted_generic_args.clone())); // Push substituted types
 
                         if let Some(Stmt::Function {
                             generic_params,
@@ -1234,7 +1240,7 @@ impl IRGen {
                             let substitutions: HashMap<String, Type> = generic_params
                                 .iter()
                                 .cloned()
-                                .zip(generic_args.iter().cloned())
+                                .zip(substituted_generic_args.iter().cloned()) // Use substituted types
                                 .collect();
                             let unres_ty = rttype.unwrap_or(Type::Void);
                             let sub_ty = self.substitute_type(&unres_ty, &substitutions);
@@ -1346,7 +1352,6 @@ impl IRGen {
                 generic_params,
                 params,
                 body,
-                rttype,
                 ..
             } => {
                 if !generic_params.is_empty() {
@@ -1376,12 +1381,7 @@ impl IRGen {
                 }
 
                 if !matches!(body.last(), Some(Stmt::Return { .. })) {
-                    let return_ty = rttype.clone().unwrap_or(Type::Void);
-                    let fallback_val = if return_ty == Type::Void {
-                        Value::Void
-                    } else {
-                        Value::Const(0)
-                    };
+                    let fallback_val = Value::Void;
 
                     self.code.push(Instruction::Return {
                         value: fallback_val,
@@ -1622,11 +1622,22 @@ impl IRGen {
                     let resolved_return_ty = self.resolve_type(&base_return_ty);
 
                     if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
+                        // --- CORRECTED WITH YOUR EXACT ENUM TYPES ---
                         let fallback_val = if resolved_return_ty == Type::Void {
                             Value::Void
+                        } else if matches!(
+                            resolved_return_ty,
+                            Type::Struct(_) | Type::GenericInstance { .. }
+                        ) {
+                            // Struct structures and instantiated generic structures are aggregates!
+                            // Generate a unique dummy temporary variable with this structure type
+                            // layout so clback.rs handles it as a structured aggregate chunk copy.
+                            let dummy_dst = self.next_temp_with_type(resolved_return_ty.clone());
+                            Value::Temp(dummy_dst)
                         } else {
                             Value::Const(0)
                         };
+
                         self.code.push(Instruction::Return {
                             value: fallback_val,
                         });

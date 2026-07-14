@@ -20,6 +20,7 @@ impl Literal {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
     Int,
+    UInt,
     Bool,
     Str,
     Char,
