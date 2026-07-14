@@ -115,7 +115,7 @@ impl Lexer {
             if char::is_numeric(ch) {
                 let t = self.lex_numeric();
                 self.add_token(t);
-            } else if char::is_alphabetic(ch) {
+            } else if char::is_alphabetic(ch) || ch == '_' {
                 let t = self.lex_identifier_and_keyword();
                 self.add_token(t);
             } else {
