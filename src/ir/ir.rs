@@ -141,7 +141,11 @@ impl IRGen {
             ty.clone()
         };
 
-        match &substituted {
+        if substituted != *ty {
+            return self.resolve_type(&substituted);
+        }
+
+        match substituted {
             Type::GenericInstance { name, args } => {
                 let resolved_args: Vec<Type> =
                     args.iter().map(|arg| self.resolve_type(arg)).collect();
@@ -153,7 +157,7 @@ impl IRGen {
                 }
 
                 if !self.struct_defs.contains_key(&mangled_name) {
-                    if let Some((params, fields)) = self.struct_blueprints.get(name).cloned() {
+                    if let Some((params, fields)) = self.struct_blueprints.get(&name).cloned() {
                         let substitutions: HashMap<String, Type> =
                             params.into_iter().zip(resolved_args.into_iter()).collect();
 
@@ -166,10 +170,10 @@ impl IRGen {
                 }
                 Type::Struct(mangled_name)
             }
-            Type::Ptr(inner) => Type::Ptr(Box::new(self.resolve_type(inner))),
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.resolve_type(&inner))),
             Type::Array { element_type, size } => Type::Array {
-                element_type: Box::new(self.resolve_type(element_type)),
-                size: *size,
+                element_type: Box::new(self.resolve_type(&element_type)),
+                size,
             },
             _ => substituted,
         }
@@ -249,14 +253,25 @@ impl IRGen {
             Type::Ptr(_) => 8,
             Type::Array { element_type, size } => self.element_size(element_type) * (*size as i64),
             Type::Char => 1,
-            Type::Struct(name) => {
-                if let Some(layout) = self.get_struct_layout(name) {
-                    layout.total_size
-                } else {
-                    8
+            Type::Struct(name) => self
+                .get_struct_layout(name)
+                .map(|l| l.total_size)
+                .unwrap_or_else(|| panic!("Failed to find layout for struct: {name}")),
+            Type::GenericInstance { name, args } => {
+                let mut mangled_name = name.clone();
+                for arg in args {
+                    mangled_name.push_str("__");
+                    mangled_name.push_str(&self.mangle_type(arg));
                 }
+                self.get_struct_layout(&mangled_name)
+                    .map(|l| l.total_size)
+                    .unwrap_or_else(|| {
+                        panic!("Failed to find layout for generic instance: {mangled_name}")
+                    })
             }
-            _ => 8,
+
+            Type::Void => 0,
+            Type::Any => 8, // default value, since any is unsafe anyway
         }
     }
 
@@ -268,19 +283,24 @@ impl IRGen {
             Type::Str => 8,
             Type::Ptr(_) => 8,
             Type::Array { element_type, .. } => self.type_alignment(element_type),
-            Type::Struct(name) => {
-                if let Some(layout) = self.get_struct_layout(name) {
-                    layout
-                        .field_offsets
-                        .values()
-                        .map(|(_, field_ty)| self.type_alignment(field_ty))
-                        .max()
-                        .unwrap_or(8)
-                } else {
-                    8
+            Type::Struct(name) => self
+                .get_struct_layout(name)
+                .map(|l| l.total_size)
+                .unwrap_or_else(|| panic!("Failed to find layout for struct: {name}")),
+            Type::GenericInstance { name, args } => {
+                let mut mangled_name = name.clone();
+                for arg in args {
+                    mangled_name.push_str("__");
+                    mangled_name.push_str(&self.mangle_type(arg));
                 }
+                self.get_struct_layout(&mangled_name)
+                    .map(|l| l.total_size)
+                    .unwrap_or_else(|| {
+                        panic!("Failed to find layout for generic instance: {mangled_name}")
+                    })
             }
-            _ => 8,
+            Type::Void => 0,
+            Type::Any => 8, // default value, since any is unsafe anyway
         }
     }
 
@@ -439,36 +459,28 @@ impl IRGen {
 
     fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
         match &expr.kind {
+            ExprKind::Identifier(name) => {
+                let ty = self.var_types.get(name).cloned().unwrap_or(Type::Int);
+                let temp = self.next_temp_with_type(Type::Ptr(Box::new(ty)));
+                self.code.push(Instruction::Unary {
+                    dst: temp.clone(),
+                    op: IrOp::Ref,
+                    value: Value::Var(name.clone()),
+                });
+                Value::Temp(temp)
+            }
+
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
             } => self.gen_expr(inner, None),
 
             ExprKind::Field { base, field } => {
-                let base_addr = if matches!(
-                    base.kind,
-                    ExprKind::Field { .. }
-                        | ExprKind::Index { .. }
-                        | ExprKind::Unary {
-                            op: UnaryOp::Deref,
-                            ..
-                        }
-                ) {
-                    self.gen_lvalue_addr(base)
-                } else {
-                    let base_val = self.gen_expr(base, None);
-                    let base_ty = self.get_value_type(&base_val);
-                    let addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(base_ty)));
-                    self.code.push(Instruction::Unary {
-                        dst: addr_temp.clone(),
-                        op: IrOp::Ref,
-                        value: base_val,
-                    });
-                    Value::Temp(addr_temp)
-                };
+                let base_addr = self.gen_lvalue_addr(base);
 
                 let base_type = self.expr_type(base).unwrap_or(Type::Int);
                 let resolved_base = self.resolve_type(&base_type);
+
                 let struct_name = match resolved_base {
                     Type::Struct(name) => name,
                     Type::GenericInstance { name, args } => {
@@ -479,30 +491,23 @@ impl IRGen {
                         }
                         mangled_name
                     }
-                    _ => panic!(
-                        "ICE: Attempted field address on non-struct type. Found: {:?}",
-                        base_type
-                    ),
+                    _ => panic!("Field access on non-struct type: {:?}", base_type),
                 };
 
-                let (offset, field_type) = self
-                    .get_struct_layout(&struct_name)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "ICE: Structural reference layout untracked for '{}'.",
-                            struct_name
-                        )
-                    })
-                    .field_offsets
-                    .get(field)
-                    .map(|(offset, field_ty)| (*offset, field_ty.clone()))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "ICE: Referenced struct field '{}' does not exist in '{}'.",
-                            field, struct_name
-                        )
-                    });
-                let field_type = self.resolve_type(&field_type);
+                let (offset, field_type) = {
+                    let (offset, unres_field_ty) = self
+                        .struct_defs
+                        .get(&struct_name)
+                        .unwrap_or_else(|| panic!("Struct layout not found: {}", struct_name))
+                        .field_offsets
+                        .get(field)
+                        .map(|(offset, field_ty)| (*offset, field_ty.clone()))
+                        .unwrap_or_else(|| {
+                            panic!("Field '{}' not found in struct '{}'", field, struct_name)
+                        });
+
+                    (offset, self.resolve_type(&unres_field_ty))
+                };
 
                 let field_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_type)));
                 self.code.push(Instruction::Binary {
@@ -516,9 +521,10 @@ impl IRGen {
             }
 
             ExprKind::Index { base, index } => {
+                let base_addr = self.gen_lvalue_addr(base);
                 let index_val = self.gen_expr(index, None);
-                let base_type = self.expr_type(base);
 
+                let base_type = self.expr_type(base);
                 let element_type = match &base_type {
                     Some(Type::Array { element_type, .. }) => *element_type.clone(),
                     Some(Type::Ptr(inner)) => match &**inner {
@@ -529,6 +535,7 @@ impl IRGen {
                 };
 
                 let stride = self.element_size(&element_type);
+
                 let offset_temp = self.next_temp_with_type(Type::Int);
                 self.code.push(Instruction::Binary {
                     dst: offset_temp.clone(),
@@ -537,64 +544,19 @@ impl IRGen {
                     rhs: Value::Const(stride),
                 });
 
-                let is_ptr_valued = matches!(base_type, Some(Type::Ptr(_)));
-                let base_val =
-                    if matches!(base.kind, ExprKind::Field { .. } | ExprKind::Index { .. })
-                        && is_ptr_valued
-                    {
-                        self.gen_expr(base, None)
-                    } else if matches!(
-                        base.kind,
-                        ExprKind::Unary {
-                            op: UnaryOp::Deref,
-                            ..
-                        }
-                    ) && is_ptr_valued
-                    {
-                        self.gen_expr(base, None)
-                    } else {
-                        self.gen_expr(base, None)
-                    };
+                let elem_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type)));
+                self.code.push(Instruction::Binary {
+                    dst: elem_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: base_addr,
+                    rhs: Value::Temp(offset_temp),
+                });
 
-                let target_addr_temp =
-                    self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-
-                if is_ptr_valued {
-                    self.code.push(Instruction::Binary {
-                        dst: target_addr_temp.clone(),
-                        op: IrOp::Add,
-                        lhs: base_val,
-                        rhs: Value::Temp(offset_temp),
-                    });
-                } else {
-                    let base_addr_temp =
-                        self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-                    self.code.push(Instruction::Unary {
-                        dst: base_addr_temp.clone(),
-                        op: IrOp::Ref,
-                        value: base_val,
-                    });
-                    self.code.push(Instruction::Binary {
-                        dst: target_addr_temp.clone(),
-                        op: IrOp::Add,
-                        lhs: Value::Temp(base_addr_temp),
-                        rhs: Value::Temp(offset_temp),
-                    });
-                }
-
-                Value::Temp(target_addr_temp)
+                Value::Temp(elem_addr_temp)
             }
 
             _ => {
-                let value = self.gen_expr(expr, None);
-                let inner_type = self.get_value_type(&value);
-                let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
-                self.code.push(Instruction::Unary {
-                    dst: temp.clone(),
-                    op: IrOp::Ref,
-                    value,
-                });
-                Value::Temp(temp)
+                panic!("Cannot take address of: {:?}", expr.kind);
             }
         }
     }
@@ -1387,33 +1349,123 @@ impl IRGen {
             Stmt::DerefReassignment { target, expr } => {
                 let value_to_store = self.gen_expr(expr, None);
 
-                if let ExprKind::Index { base, index } = &target.kind {
-                    let base_val = self.gen_expr(base, None);
-                    let index_val = self.gen_expr(index, None);
+                match &target.kind {
+                    ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        expr: inner,
+                    } => {
+                        let ptr_val = self.gen_expr(inner, None);
+                        self.code.push(Instruction::Store {
+                            ptr: ptr_val,
+                            source: value_to_store,
+                        });
+                    }
 
-                    let base_type = self.expr_type(base);
-                    let element_type = match &base_type {
-                        Some(Type::Array { element_type, .. }) => *element_type.clone(),
-                        Some(Type::Ptr(inner)) => match &**inner {
-                            Type::Array { element_type, .. } => *element_type.clone(),
-                            other => other.clone(),
-                        },
-                        _ => Type::Int,
-                    };
+                    ExprKind::Field { base, field } => {
+                        let base_addr = self.gen_lvalue_addr(base);
 
-                    let stride = self.element_size(&element_type);
-                    let offset_temp = self.next_temp_with_type(Type::Int);
-                    self.code.push(Instruction::Binary {
-                        dst: offset_temp.clone(),
-                        op: IrOp::Mul,
-                        lhs: index_val,
-                        rhs: Value::Const(stride),
-                    });
+                        let base_type = self.expr_type(base).unwrap_or(Type::Int);
+                        let resolved_base = self.resolve_type(&base_type);
 
-                    let target_addr_temp =
-                        self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-                    match base_type {
-                        Some(Type::Array { .. }) => {
+                        let struct_name = match resolved_base {
+                            Type::Struct(name) => name,
+                            Type::GenericInstance { name, args } => {
+                                let mut mangled_name = name;
+                                for arg in args {
+                                    mangled_name.push_str("__");
+                                    mangled_name.push_str(&self.mangle_type(&arg));
+                                }
+                                mangled_name
+                            }
+                            _ => panic!(
+                                "ICE: Field assignment on non-struct type. Found: {:?}",
+                                base_type
+                            ),
+                        };
+
+                        let (offset, field_type) = {
+                            let (offset, unres_field_ty) = self
+                                .struct_defs
+                                .get(&struct_name)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "ICE: Structural reference layout untracked for '{}'.",
+                                        struct_name
+                                    )
+                                })
+                                .field_offsets
+                                .get(field)
+                                .map(|(offset, field_ty)| (*offset, field_ty.clone()))
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "ICE: Referenced struct field '{}' does not exist in '{}'.",
+                                        field, struct_name
+                                    )
+                                });
+
+                            (offset, self.resolve_type(&unres_field_ty))
+                        };
+
+                        let field_addr_temp =
+                            self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+                        self.code.push(Instruction::Binary {
+                            dst: field_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: base_addr,
+                            rhs: Value::Const(offset),
+                        });
+
+                        self.code.push(Instruction::Store {
+                            ptr: Value::Temp(field_addr_temp),
+                            source: value_to_store,
+                        });
+                    }
+
+                    ExprKind::Index { base, index } => {
+                        let base_val = self.gen_expr(base, None);
+                        let index_val = self.gen_expr(index, None);
+
+                        let base_type = self.expr_type(base);
+                        let element_type = match &base_type {
+                            Some(Type::Array { element_type, .. }) => *element_type.clone(),
+                            Some(Type::Ptr(inner)) => match &**inner {
+                                Type::Array { element_type, .. } => *element_type.clone(),
+                                other => other.clone(),
+                            },
+                            _ => Type::Int,
+                        };
+
+                        let stride = self.element_size(&element_type);
+
+                        let offset_temp = self.next_temp_with_type(Type::Int);
+                        self.code.push(Instruction::Binary {
+                            dst: offset_temp.clone(),
+                            op: IrOp::Mul,
+                            lhs: index_val,
+                            rhs: Value::Const(stride),
+                        });
+
+                        let is_base_pointer = match &base.kind {
+                            ExprKind::Identifier(name) => {
+                                matches!(self.var_types.get(name), Some(Type::Ptr(_)))
+                            }
+                            ExprKind::Unary {
+                                op: UnaryOp::Deref, ..
+                            } => true,
+                            _ => false,
+                        };
+
+                        let target_addr_temp =
+                            self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
+
+                        if is_base_pointer || matches!(base_type, Some(Type::Ptr(_))) {
+                            self.code.push(Instruction::Binary {
+                                dst: target_addr_temp.clone(),
+                                op: IrOp::Add,
+                                lhs: base_val,
+                                rhs: Value::Temp(offset_temp),
+                            });
+                        } else {
                             let base_addr_temp =
                                 self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
                             self.code.push(Instruction::Unary {
@@ -1428,98 +1480,22 @@ impl IRGen {
                                 rhs: Value::Temp(offset_temp),
                             });
                         }
-                        Some(Type::Ptr(_)) => {
-                            self.code.push(Instruction::Binary {
-                                dst: target_addr_temp.clone(),
-                                op: IrOp::Add,
-                                lhs: base_val,
-                                rhs: Value::Temp(offset_temp),
-                            });
-                        }
-                        _ => {
-                            panic!("ICE: Attempted IR index calculation on non-indexable type.");
-                        }
-                    };
 
-                    self.code.push(Instruction::Store {
-                        ptr: Value::Temp(target_addr_temp),
-                        source: value_to_store,
-                    });
-                } else if let ExprKind::Field { base, field } = &target.kind {
-                    let base_val = self.gen_expr(base, None);
-
-                    let (struct_name, offset, field_type) = {
-                        let base_type = self.expr_type(base).unwrap_or(Type::Int);
-                        let resolved_base = self.resolve_type(&base_type);
-
-                        let name = match resolved_base {
-                            Type::Struct(n) => n,
-                            Type::GenericInstance { name, args } => {
-                                let mut mangled_name = name;
-                                for arg in args {
-                                    mangled_name.push_str("__");
-                                    mangled_name.push_str(&self.mangle_type(&arg));
-                                }
-                                mangled_name
-                            }
-                            _ => panic!(
-                                "ICE: Field writing targeted a non-struct entity. Found: {:?}",
-                                base_type
-                            ),
-                        };
-
-                        let layout = self.struct_defs.get(&name).unwrap_or_else(|| {
-                            panic!("ICE: Structural reference layout untracked for '{}'.", name)
-                        });
-                        let (offset, field_ty) =
-                            layout.field_offsets.get(field).unwrap_or_else(|| {
-                                panic!(
-                                    "ICE: Referenced struct field '{}' does not exist in '{}'.",
-                                    field, name
-                                )
-                            });
-
-                        (name, *offset, self.resolve_type(&field_ty.clone()))
-                    };
-
-                    let base_addr_temp =
-                        self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
-                    self.code.push(Instruction::Unary {
-                        dst: base_addr_temp.clone(),
-                        op: IrOp::Ref,
-                        value: base_val,
-                    });
-
-                    let target_addr_temp =
-                        self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
-                    self.code.push(Instruction::Binary {
-                        dst: target_addr_temp.clone(),
-                        op: IrOp::Add,
-                        lhs: Value::Temp(base_addr_temp),
-                        rhs: Value::Const(offset),
-                    });
-
-                    self.code.push(Instruction::Store {
-                        ptr: Value::Temp(target_addr_temp),
-                        source: value_to_store,
-                    });
-                } else {
-                    if let ExprKind::Unary {
-                        op: crate::parse::parsing::UnaryOp::Deref,
-                        expr: inner_expr,
-                    } = &target.kind
-                    {
-                        let target_ptr_val = self.gen_expr(inner_expr, None);
                         self.code.push(Instruction::Store {
-                            ptr: target_ptr_val,
+                            ptr: Value::Temp(target_addr_temp),
                             source: value_to_store,
                         });
-                    } else {
-                        let target_ptr_val = self.gen_expr(target, None);
-                        self.code.push(Instruction::Store {
-                            ptr: target_ptr_val,
-                            source: value_to_store,
+                    }
+
+                    ExprKind::Identifier(name) => {
+                        self.code.push(Instruction::Assign {
+                            dst: name.clone(),
+                            src: value_to_store,
                         });
+                    }
+
+                    _ => {
+                        panic!("Invalid lvalue in DerefReassignment: {:?}", target.kind);
                     }
                 }
             }

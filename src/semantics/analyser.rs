@@ -646,7 +646,7 @@ impl Analyser {
                     }
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                         if is_integer(&left_type) && is_integer(&right_type) {
-                            if left_type == right_type {
+                            if types_compatible(&left_type, &right_type) {
                                 Ok(left_type)
                             } else {
                                 Err(format!(

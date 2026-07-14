@@ -412,6 +412,14 @@ impl Lexer {
         })
     }
 
+    fn escapers(&self, v: String) -> String {
+        let nl_replace = v.replace("\\n", "\n");
+        let tb_replace = nl_replace.replace("\\t", "\t");
+        let rb_replace = tb_replace.replace("\\r", "\r");
+        let c0_replace = rb_replace.replace("\\0", "\0");
+        return c0_replace;
+    } 
+
     fn lex_string(&mut self) -> Token {
         let loc = self.current_location();
         let mut string: Vec<char> = Vec::new();
@@ -427,7 +435,8 @@ impl Lexer {
             }
         }
 
-        let value: String = string.into_iter().collect();
+        let value: String = self.escapers(string.into_iter().collect());
+        
         Token {
             ttype: TokenType::StringLiteral,
             location: loc,

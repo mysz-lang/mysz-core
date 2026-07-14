@@ -1167,27 +1167,17 @@ impl CraneliftBackend {
                     }
                 }
                 Instruction::Store { ptr, source: value } => {
-                    let ptr_ty = match ptr {
-                        Value::Var(n) | Value::Temp(n) => var_types
-                            .get(n)
-                            .map(BackendType::from_frontend)
-                            .unwrap_or(BackendType::Ptr),
-                        _ => BackendType::Ptr,
-                    };
-                    let ptr_val = match ptr {
-                        Value::Var(name) | Value::Temp(name) => {
-                            let v_ptr = get_or_create_var(
-                                &mut builder,
-                                &mut var_map,
-                                &mut var_idx,
-                                name,
-                                ptr_ty,
-                                ptr_type,
-                            );
-                            builder.use_var(v_ptr)
-                        }
-                        _ => panic!("Expected pointer target variable for storage operations"),
-                    };
+                    // FIX: Resolve ptr_val using lower_value so stack-allocated
+                    // variables and temporaries are correctly loaded from their stack slots.
+                    let ptr_val = self.lower_value(
+                        &mut builder,
+                        ptr,
+                        &var_types,
+                        &mut var_map,
+                        &mut var_idx,
+                        &stack_slot_map,
+                        ptr_type,
+                    );
 
                     let mut handled_as_aggregate = false;
                     if let Value::Var(src_name) | Value::Temp(src_name) = value {

@@ -256,18 +256,10 @@ impl Parser {
             TokenType::BreakKeyword => self.parse_break(),
             TokenType::UseKeyword => self.parse_import(),
             TokenType::ExternKeyword => self.parse_extern(),
-            TokenType::Identifier => self.parse_ident(),
-            TokenType::Star => {
-                let pointer_expr = self.parse_unary()?;
-
-                self.expect(TokenType::Assign)?;
-                let value_expr = self.parse_expr()?;
-
-                Some(Stmt::DerefReassignment {
-                    target: pointer_expr,
-                    expr: value_expr,
-                })
+            TokenType::Identifier | TokenType::LParen | TokenType::Star | TokenType::Ampersand => {
+                self.parse_assignment_expression()
             }
+
             _ => self.parse_expr().map(Stmt::Expr),
         };
 
@@ -280,6 +272,37 @@ impl Parser {
             }
         }
         stmt
+    }
+
+    fn parse_assignment_expression(&mut self) -> Option<Stmt> {
+        let lhs = self.parse_expr()?;
+
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Assign)) {
+            self.advance();
+            let rhs = self.parse_expr()?;
+
+            if self.is_valid_lvalue(&lhs) {
+                return Some(Stmt::DerefReassignment {
+                    target: lhs,
+                    expr: rhs,
+                });
+            }
+        }
+
+        Some(Stmt::Expr(lhs))
+    }
+
+    fn is_valid_lvalue(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(_) => true,
+            ExprKind::Field { base, .. } => self.is_valid_lvalue(base),
+            ExprKind::Index { base, .. } => self.is_valid_lvalue(base),
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                expr: inner,
+            } => self.is_valid_lvalue(inner),
+            _ => false,
+        }
     }
 
     fn parse_import(&mut self) -> Option<Stmt> {
@@ -347,35 +370,6 @@ impl Parser {
             generic_params,
             params,
         })
-    }
-
-    fn parse_ident(&mut self) -> Option<Stmt> {
-        let lhs_expr = self.parse_postfix()?;
-
-        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Assign)) {
-            self.advance();
-            let value_expr = self.parse_expr()?;
-
-            if matches!(
-                lhs_expr.kind,
-                ExprKind::Index { .. } | ExprKind::Field { .. }
-            ) {
-                return Some(Stmt::DerefReassignment {
-                    target: lhs_expr,
-                    expr: value_expr,
-                });
-            } else if let ExprKind::Identifier(name) = lhs_expr.kind {
-                return Some(Stmt::Reassignment {
-                    ident: Identifier {
-                        value: name,
-                        location: lhs_expr.span,
-                    },
-                    expr: value_expr,
-                });
-            }
-        }
-
-        Some(Stmt::Expr(lhs_expr))
     }
 
     fn parse_params(&mut self, ending: TokenType) -> Vec<Parameter> {
