@@ -1395,7 +1395,6 @@ impl CraneliftBackend {
                         }
                         IrOp::Ref => {
                             if let Value::Var(name) | Value::Temp(name) = src {
-                                // First, check if we already have a stack slot
                                 let slot = stack_slot_map
                                     .get(name)
                                     .copied()
@@ -1412,7 +1411,6 @@ impl CraneliftBackend {
                                 let slot = if let Some(s) = slot {
                                     s
                                 } else {
-                                    // No stack slot exists - create one
                                     let src_front_ty =
                                         var_types.get(name).cloned().unwrap_or(Type::Int);
                                     let abi = AbiType::from_frontend(
@@ -1433,9 +1431,6 @@ impl CraneliftBackend {
                                         size as u32,
                                     ));
 
-                                    // IMPORTANT: We need to store the current value of the variable
-                                    // into the stack slot. But we can't use src_val because it might be garbage.
-                                    // Instead, get the variable and store its value.
                                     let var_ty = value_backend_type(src, &var_types);
                                     let v = get_or_create_var(
                                         &mut builder,
