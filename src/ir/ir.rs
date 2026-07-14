@@ -574,9 +574,7 @@ impl IRGen {
         match &expr.kind {
             ExprKind::Sizeof { ty } => {
                 let resolved_ty = self.resolve_type(ty);
-                eprintln!("sizeof: ty={:?}, resolved_ty={:?}", ty, resolved_ty);
                 let size = self.type_size(&resolved_ty);
-                eprintln!("sizeof: size={}", size);
                 Value::Const(size)
             }
             ExprKind::Literal(lit) => match lit {

@@ -110,13 +110,10 @@ fn format_parser_errors(
 }
 
 fn format_semantic_error(err: &str, source: Option<&str>, file_path: &Path) -> String {
-    // Try to extract location from the error message
-    // Errors look like: "Type Error [li = 9, co = 21]: message"
     let mut line_num = 0;
     let mut column = 0;
     let mut message = err;
 
-    // Find "[li = X, co = Y]"
     if let Some(start) = err.find("[li = ") {
         if let Some(end) = err[start..].find(']') {
             let loc_part = &err[start..start + end + 1];
@@ -177,7 +174,10 @@ fn flatten_program_statements(
             let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
                 format_module_error(
                     &module_path_str,
-                    &format!("Could not find module '{}' in search paths or CWD.", module_path_str)
+                    &format!(
+                        "Could not find module '{}' in search paths or CWD.",
+                        module_path_str
+                    ),
                 )
             })?;
 
@@ -203,8 +203,7 @@ fn flatten_program_statements(
                     format_parser_errors(&parser.parser_errs, &source, &resolved_path);
                 return Err(format!(
                     "Parser errors in module '{}':\n{}",
-                    module_path_str,
-                    error_report
+                    module_path_str, error_report
                 ));
             }
 
@@ -233,10 +232,12 @@ pub fn compile_root_file<P: AsRef<Path>>(
     output_filename: &str,
     custom_search_paths: &[PathBuf],
 ) -> Result<(), String> {
-    let input_path = input_path
-        .as_ref()
-        .canonicalize()
-        .map_err(|e| format_simple_error(input_path.as_ref(), &format!("Failed to canonicalize path: {}", e)))?;
+    let input_path = input_path.as_ref().canonicalize().map_err(|e| {
+        format_simple_error(
+            input_path.as_ref(),
+            &format!("Failed to canonicalize path: {}", e),
+        )
+    })?;
 
     let mut search_paths = Vec::new();
     if let Some(parent) = input_path.parent() {
@@ -244,10 +245,8 @@ pub fn compile_root_file<P: AsRef<Path>>(
     }
     search_paths.extend_from_slice(custom_search_paths);
 
-    // Read and lex the main file
     let (source, tokens) = read_and_lex_file(&input_path)?;
 
-    // Parse the main file
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -256,7 +255,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
         return Err(format!("Parser errors:\n{}", error_report));
     }
 
-    // Process imports
+    // Process import
     let mut visiting = HashSet::new();
     let mut processed = HashSet::new();
     visiting.insert(input_path.clone());
@@ -373,17 +372,24 @@ pub fn compile_ast_program(
 
     // Emit object file
     let product = backend.finish();
-    let emit_result = product
-        .emit()
-        .map_err(|e| format_simple_error(file_path, &format!("Failed to emit object code: {}", e)))?;
+    let emit_result = product.emit().map_err(|e| {
+        format_simple_error(file_path, &format!("Failed to emit object code: {}", e))
+    })?;
 
-    let mut file = File::create(output_filename)
-        .map_err(|e| format_simple_error(file_path, &format!("Failed to create output file '{}': {}", output_filename, e)))?;
+    let mut file = File::create(output_filename).map_err(|e| {
+        format_simple_error(
+            file_path,
+            &format!("Failed to create output file '{}': {}", output_filename, e),
+        )
+    })?;
 
     file.write_all(&emit_result).map_err(|e| {
         format_simple_error(
             file_path,
-            &format!("Failed to write to output file '{}': {}", output_filename, e),
+            &format!(
+                "Failed to write to output file '{}': {}",
+                output_filename, e
+            ),
         )
     })?;
 

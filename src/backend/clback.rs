@@ -1395,6 +1395,7 @@ impl CraneliftBackend {
                         }
                         IrOp::Ref => {
                             if let Value::Var(name) | Value::Temp(name) = src {
+                                // First, check if we already have a stack slot
                                 let slot = stack_slot_map
                                     .get(name)
                                     .copied()
@@ -1411,24 +1412,43 @@ impl CraneliftBackend {
                                 let slot = if let Some(s) = slot {
                                     s
                                 } else {
-                                    let src_front_ty = var_types.get(name).unwrap_or(&Type::Int);
+                                    // No stack slot exists - create one
+                                    let src_front_ty =
+                                        var_types.get(name).cloned().unwrap_or(Type::Int);
                                     let abi = AbiType::from_frontend(
-                                        src_front_ty,
+                                        &src_front_ty,
                                         &self.struct_defs,
                                         ptr_type,
                                     );
 
                                     let size = match abi {
                                         AbiType::Aggregate { total_size, .. } => total_size,
-                                        _ => BackendType::from_frontend(src_front_ty).byte_size(),
+                                        _ => BackendType::from_frontend(&src_front_ty).byte_size(),
                                     };
+
+                                    let size = if size == 0 { 1 } else { size };
 
                                     let slot = builder.create_sized_stack_slot(StackSlotData::new(
                                         StackSlotKind::ExplicitSlot,
-                                        size,
+                                        size as u32,
                                     ));
 
-                                    builder.ins().stack_store(src_val, slot, 0);
+                                    // IMPORTANT: We need to store the current value of the variable
+                                    // into the stack slot. But we can't use src_val because it might be garbage.
+                                    // Instead, get the variable and store its value.
+                                    let var_ty = value_backend_type(src, &var_types);
+                                    let v = get_or_create_var(
+                                        &mut builder,
+                                        &mut var_map,
+                                        &mut var_idx,
+                                        name,
+                                        var_ty,
+                                        ptr_type,
+                                    );
+                                    let current_val = builder.use_var(v);
+
+                                    builder.ins().stack_store(current_val, slot, 0);
+
                                     stack_slot_map.insert(name.clone(), slot);
                                     slot
                                 };
