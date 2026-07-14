@@ -819,17 +819,14 @@ impl CraneliftBackend {
                 Instruction::Param { p } => {
                     let arg_val = builder.block_params(entry_block)[param_index];
 
-                    // Look up the stack slot allocated for this parameter
                     let slot = stack_slot_map.get(p).or_else(|| {
                         let local_name = p.split("::").last().unwrap_or(p);
                         stack_slot_map.get(local_name)
                     });
 
                     if let Some(&s) = slot {
-                        // Store the incoming register argument directly into the parameter's stack slot!
                         builder.ins().stack_store(arg_val, s, 0);
                     } else {
-                        // Fallback to var_map if no stack slot was created for it
                         let dest_ty =
                             BackendType::from_frontend(var_types.get(p).unwrap_or(&Type::Int));
                         let var_id = get_or_create_var(
@@ -1167,8 +1164,6 @@ impl CraneliftBackend {
                     }
                 }
                 Instruction::Store { ptr, source: value } => {
-                    // FIX: Resolve ptr_val using lower_value so stack-allocated
-                    // variables and temporaries are correctly loaded from their stack slots.
                     let ptr_val = self.lower_value(
                         &mut builder,
                         ptr,

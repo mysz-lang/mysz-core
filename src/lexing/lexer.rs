@@ -418,7 +418,7 @@ impl Lexer {
         let rb_replace = tb_replace.replace("\\r", "\r");
         let c0_replace = rb_replace.replace("\\0", "\0");
         return c0_replace;
-    } 
+    }
 
     fn lex_string(&mut self) -> Token {
         let loc = self.current_location();
@@ -436,7 +436,7 @@ impl Lexer {
         }
 
         let value: String = self.escapers(string.into_iter().collect());
-        
+
         Token {
             ttype: TokenType::StringLiteral,
             location: loc,
