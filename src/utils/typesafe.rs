@@ -1,12 +1,9 @@
-// --- Modern Type Classification & Introspection Helpers ---
-
 use crate::parse::parsing::Type;
 
 pub fn mangle_name(base_name: &str, args: &[Type]) -> String {
     let mut name = base_name.to_string();
     for arg in args {
         name.push_str("__");
-        // Use flat representation for compiler-internal mangling to keep symbols ASCII-safe
         name.push_str(&type_to_mangled_string(arg));
     }
     name
@@ -67,7 +64,6 @@ pub fn is_truthy_type(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::UInt | Type::Bool | Type::Str)
 }
 
-/// Determines if a source type (`from`) can be safely coerced or matched to an `expected` destination type.
 pub fn types_compatible(expected: &Type, from: &Type) -> bool {
     if expected == &Type::Any || from == &Type::Any {
         return true;
@@ -87,7 +83,6 @@ pub fn types_compatible(expected: &Type, from: &Type) -> bool {
     false
 }
 
-/// Recursively formats a compiler Type to a clean, user-friendly language representation.
 pub fn type_to_string(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),

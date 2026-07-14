@@ -5,10 +5,6 @@ use crate::{
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
 };
 
-use crate::utils::typesafe::{
-    is_integer, is_signed_integer, is_truthy_type, mangle_name, normalise_type, types_compatible,
-};
-
 pub struct TempGen {
     counter: usize,
 }
@@ -247,7 +243,7 @@ impl IRGen {
 
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int | Type::UInt => 8, // Explicitly handle UInt alongside Int!
+            Type::Int | Type::UInt => 8,
             Type::Bool => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
@@ -266,7 +262,7 @@ impl IRGen {
 
     fn type_alignment(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int | Type::UInt => 8, // Explicitly handle UInt alongside Int!
+            Type::Int | Type::UInt => 8,
             Type::Bool => 1,
             Type::Char => 1,
             Type::Str => 8,
@@ -441,14 +437,6 @@ impl IRGen {
         }
     }
 
-    /// Computes the address of an lvalue-producing expression (a struct field
-    /// access, an array/pointer index, or a pointer dereference) *without*
-    /// first loading its value into a fresh temporary. This is what `&expr`
-    /// must use for anything more complex than a bare identifier or literal --
-    /// calling `gen_expr` and then `Ref`-ing the result instead gives you the
-    /// address of a disconnected copy, silently breaking any write-through of
-    /// that pointer (e.g. `&map.buckets` no longer points at `map`'s real
-    /// `buckets` field).
     fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
         match &expr.kind {
             ExprKind::Unary {
@@ -957,11 +945,6 @@ impl IRGen {
                                 ..
                             }
                     ) {
-                        // These are lvalue-producing expressions: taking their address
-                        // must compute a pointer to the *original* storage location
-                        // (a struct field, an array/pointer element, or the pointee of
-                        // a pointer) rather than evaluating the expression (which loads
-                        // a copy of the value) and then taking the address of that copy.
                         self.gen_lvalue_addr(expr)
                     } else {
                         let value = self.gen_expr(expr, None);
@@ -1043,7 +1026,6 @@ impl IRGen {
                 {
                     self.instantiated_fns.insert(resolved_func_name.clone());
 
-                    // --- FIX: Push the substituted types so deferred instantiation works with concrete types! ---
                     self.deferred_instantiations
                         .push((callee.value.clone(), substituted_generic_args.clone()));
 
@@ -1053,7 +1035,6 @@ impl IRGen {
                         ..
                     }) = self.fn_blueprints.get(&callee.value).cloned()
                     {
-                        // --- FIX: Zip with substituted_generic_args ---
                         let substitutions: HashMap<String, Type> = generic_params
                             .iter()
                             .cloned()
@@ -1209,7 +1190,6 @@ impl IRGen {
                         self.code.push(Instruction::Arg { value: val.clone() });
                     }
 
-                    // --- FIX: Substitute generic arguments using active context ---
                     let mut resolved_func_name = callee.value.clone();
                     let substituted_generic_args: Vec<Type> = generic_args
                         .iter()
@@ -1222,14 +1202,13 @@ impl IRGen {
                             resolved_func_name.push_str(&self.mangle_type(arg_type));
                         }
                     }
-                    // -------------------------------------------------------------
 
                     if !substituted_generic_args.is_empty()
                         && !self.instantiated_fns.contains(&resolved_func_name)
                     {
                         self.instantiated_fns.insert(resolved_func_name.clone());
                         self.deferred_instantiations
-                            .push((callee.value.clone(), substituted_generic_args.clone())); // Push substituted types
+                            .push((callee.value.clone(), substituted_generic_args.clone()));
 
                         if let Some(Stmt::Function {
                             generic_params,
@@ -1240,7 +1219,7 @@ impl IRGen {
                             let substitutions: HashMap<String, Type> = generic_params
                                 .iter()
                                 .cloned()
-                                .zip(substituted_generic_args.iter().cloned()) // Use substituted types
+                                .zip(substituted_generic_args.iter().cloned())
                                 .collect();
                             let unres_ty = rttype.unwrap_or(Type::Void);
                             let sub_ty = self.substitute_type(&unres_ty, &substitutions);
@@ -1622,16 +1601,12 @@ impl IRGen {
                     let resolved_return_ty = self.resolve_type(&base_return_ty);
 
                     if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
-                        // --- CORRECTED WITH YOUR EXACT ENUM TYPES ---
                         let fallback_val = if resolved_return_ty == Type::Void {
                             Value::Void
                         } else if matches!(
                             resolved_return_ty,
                             Type::Struct(_) | Type::GenericInstance { .. }
                         ) {
-                            // Struct structures and instantiated generic structures are aggregates!
-                            // Generate a unique dummy temporary variable with this structure type
-                            // layout so clback.rs handles it as a structured aggregate chunk copy.
                             let dummy_dst = self.next_temp_with_type(resolved_return_ty.clone());
                             Value::Temp(dummy_dst)
                         } else {

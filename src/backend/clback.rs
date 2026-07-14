@@ -57,7 +57,6 @@ fn get_or_create_var(
     v
 }
 
-/// Looks up (or creates) the Cranelift `Block` for a TAC label.
 fn get_or_create_block(
     builder: &mut FunctionBuilder,
     block_map: &mut HashMap<String, Block>,
@@ -309,14 +308,12 @@ impl CraneliftBackend {
             return id;
         }
 
-        // DO NOT strip mangling for our own functions!
-        // This preserves "MyszHashSet_contains__int" in the object binary file.
         let s_name = name;
 
         let linkage = if public {
-            Linkage::Export // This matches your 'pub' visibility keyword
+            Linkage::Export
         } else {
-            Linkage::Local // This hidden visibility restricts access to this module
+            Linkage::Local
         };
 
         let ptr_type = self.module.target_config().pointer_type();
@@ -623,7 +620,6 @@ impl CraneliftBackend {
                             let abi =
                                 AbiType::from_frontend(src_front_ty, &self.struct_defs, ptr_type);
 
-                            // FIX: Determine size for both aggregates AND primitives
                             let size = match abi {
                                 AbiType::Aggregate { total_size, .. } => total_size,
                                 _ => BackendType::from_frontend(src_front_ty).byte_size(),
@@ -910,17 +906,13 @@ impl CraneliftBackend {
                         final_sig.returns.push(AbiParam::new(types::I64));
                     }
 
-                    // --- FIX: Unified declaration lookup ---
                     let fn_id = if let Some(&id) = self.declared_funcs.get(callee_name) {
-                        // Already declared (as an extern runtime function or local definition)
                         id
                     } else {
-                        // Not declared yet. Check if it's a runtime function (its stripped name is in declared_funcs)
                         let stripped = strip_mangling(callee_name);
                         if let Some(&id) = self.declared_funcs.get(stripped) {
                             id
                         } else {
-                            // Forward-referenced local function. We MUST NOT declare this as Import.
                             let linkage = if callee_name == "main" {
                                 Linkage::Export
                             } else {
@@ -957,7 +949,6 @@ impl CraneliftBackend {
                             let dest_ty = BackendType::from_frontend(frontend_type);
                             if !call_results.is_empty() {
                                 let res_val = call_results[0];
-                                // FIX: If the destination has a stack slot, write to it!
                                 if let Some(&slot) = stack_slot_map.get(dest_name) {
                                     builder.ins().stack_store(res_val, slot, 0);
                                 } else {
@@ -1131,7 +1122,6 @@ impl CraneliftBackend {
                         let clif_ty = dest_ty.to_clif_type(ptr_type);
                         let loaded_val = builder.ins().load(clif_ty, MemFlags::new(), ptr_val, 0);
 
-                        // FIX: If the destination has a stack slot, write to it!
                         if let Some(&slot) = stack_slot_map.get(dest_name) {
                             builder.ins().stack_store(loaded_val, slot, 0);
                         } else {
@@ -1266,7 +1256,6 @@ impl CraneliftBackend {
                         ptr_type,
                     );
 
-                    // Check if the destination or either operand resolves to an unsigned backend type
                     let is_unsigned = matches!(dest_ty, BackendType::UInt32 | BackendType::UInt64)
                         || match lhs {
                             Value::Var(name) | Value::Temp(name) => {
@@ -1287,7 +1276,6 @@ impl CraneliftBackend {
                         IrOp::Sub => builder.ins().isub(lhs_val, rhs_val),
                         IrOp::Mul => builder.ins().imul(lhs_val, rhs_val),
 
-                        // Choose unsigned or signed division / remainder based on type
                         IrOp::Div => {
                             if is_unsigned {
                                 builder.ins().udiv(lhs_val, rhs_val)
@@ -1303,7 +1291,6 @@ impl CraneliftBackend {
                             }
                         }
 
-                        // Choose signed vs. unsigned comparison flags
                         IrOp::Eq => builder.ins().icmp(IntCC::Equal, lhs_val, rhs_val),
                         IrOp::NEq => builder.ins().icmp(IntCC::NotEqual, lhs_val, rhs_val),
                         IrOp::Lt => {

@@ -30,8 +30,6 @@ impl Analyser {
         }
     }
 
-    // --- Scope Operations ---
-
     pub fn enter_scope(&mut self) {
         let parent_idx = self.current_scope;
         let new_scope = Scope {
@@ -51,9 +49,6 @@ impl Analyser {
         self.current_scope = parent;
     }
 
-    // --- Clean Structural Substitution (TypeVisitor Pattern) ---
-
-    /// Unified substitute function replacing generic placeholders with concrete type mappings.
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match ty {
             Type::Struct(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
@@ -282,8 +277,6 @@ impl Analyser {
         is_truthy_type(ty)
     }
 
-    // --- Expression Type Checking with Context Propagation ---
-
     pub fn check_expr(
         &mut self,
         expr: &Expr,
@@ -375,7 +368,6 @@ impl Analyser {
                             )
                         })?;
 
-                        // Map template generic parameter strings to actual arguments
                         let mapping: HashMap<String, Type> = signature
                             .generic_params
                             .iter()
@@ -624,7 +616,6 @@ impl Analyser {
             }
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
-                // Propagate left type as a contextual hint to simplify literals on the right hand side
                 let right_type = self.check_expr(right, Some(&left_type))?;
 
                 match op {
@@ -732,8 +723,6 @@ impl Analyser {
             }
         }
     }
-
-    // --- Statement Type Checking ---
 
     pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
@@ -890,7 +879,6 @@ impl Analyser {
             }
 
             Stmt::Reassignment { ident, expr } => {
-                // 1. Look up and clone the expected type immediately, releasing the borrow on `self`
                 let expected_ty = self
                     .resolve_variable(&ident.value)
                     .map(|symbol| symbol.ty.clone())
@@ -901,10 +889,8 @@ impl Analyser {
                         )
                     })?;
 
-                // 2. Now self can be borrowed mutably safely
                 let expr_type = self.check_expr(expr, Some(&expected_ty))?;
 
-                // 3. Perform the compatibility check
                 if !types_compatible(&expected_ty, &expr_type) {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{}' to variable '{}' of type '{}'",
@@ -1069,7 +1055,6 @@ impl Analyser {
                 Ok(())
             }
             Stmt::Return { value, span } => {
-                // 1. Get the expected return type first (and check if we are in a function)
                 let expected = self.current_return_type.clone().ok_or_else(|| {
                     format!(
                         "Semantic Error [{}]: 'return' used outside of a function",
@@ -1077,13 +1062,11 @@ impl Analyser {
                     )
                 })?;
 
-                // 2. Pass the reference to our local, cloned 'expected' type
                 let actual_type = match value {
                     Some(e) => self.check_expr(e, Some(&expected))?,
                     None => Type::Void,
                 };
 
-                // 3. Perform the compatibility check
                 if !types_compatible(&expected, &actual_type) {
                     return Err(format!(
                         "Type Error [{}]: Function expects return type '{}', found '{}'",
