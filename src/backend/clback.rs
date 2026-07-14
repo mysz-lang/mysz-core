@@ -1455,10 +1455,6 @@ impl CraneliftBackend {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
                         match abi {
                             AbiType::Void => {
-                                println!(
-                                    "RETURN in {}: current_func_ret_front={:?}, value={:?}",
-                                    name, current_func_ret_front, value
-                                );
                                 builder.ins().return_(&[]);
                             }
                             AbiType::Primitive(clif_ty) => {
@@ -1485,10 +1481,6 @@ impl CraneliftBackend {
                                     Value::Void => builder.ins().iconst(clif_ty, 0),
                                     _ => panic!("Primitive unexpected literal type matching"),
                                 };
-                                println!(
-                                    "RETURN in {}: current_func_ret_front={:?}, value={:?}",
-                                    name, current_func_ret_front, value
-                                );
                                 builder.ins().return_(&[val]);
                             }
                             AbiType::Aggregate { chunk_count, .. } => {
@@ -1503,10 +1495,6 @@ impl CraneliftBackend {
                                         );
                                         chunks.push(val_part);
                                     }
-                                    println!(
-                                        "RETURN in {}: current_func_ret_front={:?}, value={:?}",
-                                        name, current_func_ret_front, value
-                                    );
                                     builder.ins().return_(&chunks);
                                 } else {
                                     panic!(
@@ -1516,10 +1504,6 @@ impl CraneliftBackend {
                             }
                         }
                     } else {
-                        println!(
-                            "RETURN in {}: current_func_ret_front={:?}, value={:?}",
-                            name, current_func_ret_front, value
-                        );
                         builder.ins().return_(&[]);
                     }
                 }
@@ -1561,17 +1545,7 @@ impl CraneliftBackend {
                 builder.seal_block(block);
             }
         }
-
-        println!(
-            "{} returns {} values",
-            name,
-            builder.func.signature.returns.len()
-        );
-
-        for r in &builder.func.signature.returns {
-            println!("{:?}", r.value_type);
-        }
-
+        
         builder.finalize();
         match self.module.define_function(func_id, ctx) {
             Ok(_) => {}
