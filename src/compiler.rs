@@ -10,7 +10,7 @@ use crate::ir::ir::IRGen;
 use crate::ir::tac::Instruction;
 use crate::lexing::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
-use crate::parse::parsing::{Program, Stmt};
+use crate::parse::parsing::{Identifier, Parameter, Program, Stmt};
 use crate::semantics::analyser::Analyser;
 
 fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
@@ -274,6 +274,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
     let program = Program {
         statements: flattened_statements,
     };
+    // println!("{:#?}", program.statements);
 
     compile_ast_program(&program, output_filename, Some(&source), &input_path)
 }
@@ -290,10 +291,29 @@ pub fn compile_ast_program(
         let formatted = format_semantic_error(&err, source, file_path);
         return Err(format!("Semantic error:\n{}", formatted));
     }
+    // println!("functions: {:#?} \n constants: {:#?}", analyser.functions, analyser.constants);
 
     // IR generation
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
+    for (name, sig) in &analyser.structs {
+        if !sig.generic_params.is_empty() {
+            let fields_vec: Vec<Parameter> = sig
+                .fields
+                .iter()
+                .map(|(fname, ftype)| Parameter {
+                    name: Identifier {
+                        value: fname.clone(),
+                        location: crate::utils::location::Location { line: 0, col: 0 },
+                    },
+                    ptype: Some(ftype.clone()),
+                })
+                .collect();
+            irgen
+                .struct_blueprints
+                .insert(name.clone(), (sig.generic_params.clone(), fields_vec));
+        }
+    }
     irgen.gen_program(program);
     // irgen.dump();
 

@@ -21,7 +21,7 @@ pub struct StructSignature {
     pub location: Location,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FunctionSignature {
     pub generic_params: Vec<String>,
     pub param_types: Vec<Type>,

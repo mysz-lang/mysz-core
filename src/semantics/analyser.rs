@@ -4,6 +4,7 @@ use crate::utils::location::Location;
 use crate::utils::typesafe::*;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug)]
 pub struct Analyser {
     pub scopes: Vec<Scope>,
     pub current_scope: usize,
@@ -791,7 +792,11 @@ impl Analyser {
                 params,
             } => {
                 let return_type = match rttype {
-                    Some(rt) => rt.clone(),
+                    Some(rt) => {
+                        let instantiated = self.instantiate_generic_types(rt, &name.location)?;
+                        self.validate_type_exists(&instantiated, &name.location)?;
+                        instantiated
+                    }
                     None => Type::Void,
                 };
 
@@ -801,10 +806,15 @@ impl Analyser {
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
-                        Some(pt) => pt.clone(),
+                        Some(pt) => {
+                            let instantiated =
+                                self.instantiate_generic_types(pt, &param.name.location)?;
+                            self.validate_type_exists(&instantiated, &param.name.location)?;
+                            instantiated
+                        }
                         None => Type::Any,
                     };
-                    param_types.push(ptype.clone());
+                    param_types.push(ptype);
                 }
 
                 self.current_generic_params = prev_generic_params;
@@ -1045,25 +1055,42 @@ impl Analyser {
                 params,
                 body,
             } => {
+                let is_generic = !generic_params.is_empty();
+
                 let return_type = match rttype {
-                    Some(rt) => rt.clone(),
+                    Some(rt) => {
+                        if is_generic {
+                            rt.clone()
+                        } else {
+                            let instantiated =
+                                self.instantiate_generic_types(rt, &name.location)?;
+                            self.validate_type_exists(&instantiated, &name.location)?;
+                            instantiated
+                        }
+                    }
                     None => Type::Void,
                 };
 
                 let prev_generic_params =
                     std::mem::replace(&mut self.current_generic_params, generic_params.clone());
 
-                self.validate_type_exists(&return_type, &name.location)?;
-
                 let mut param_types = Vec::new();
                 for param in params {
                     let ptype = match &param.ptype {
-                        Some(pt) => pt.clone(),
+                        Some(pt) => {
+                            let ty = if is_generic {
+                                pt.clone()
+                            } else {
+                                let instantiated =
+                                    self.instantiate_generic_types(pt, &param.name.location)?;
+                                self.validate_type_exists(&instantiated, &param.name.location)?;
+                                instantiated
+                            };
+                            ty
+                        }
                         None => Type::Any,
                     };
-
-                    self.validate_type_exists(&ptype, &param.name.location)?;
-                    param_types.push(ptype.clone());
+                    param_types.push(ptype);
                 }
 
                 self.declare_function(
@@ -1099,10 +1126,10 @@ impl Analyser {
                 }
 
                 self.current_generic_params = prev_generic_params;
-
                 self.leave_scope();
                 Ok(())
             }
+
             Stmt::Return { value, span } => {
                 let expected = self.current_return_type.clone().ok_or_else(|| {
                     format!(

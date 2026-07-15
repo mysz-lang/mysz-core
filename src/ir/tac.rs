@@ -116,7 +116,12 @@ impl ScopedMap {
 
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
-            self.scopes.pop();
+            let popped = self.scopes.pop().unwrap();
+            if let Some(parent) = self.scopes.last_mut() {
+                for (key, value) in popped {
+                    parent.entry(key).or_insert(value);
+                }
+            }
         }
     }
 
@@ -127,7 +132,6 @@ impl ScopedMap {
     }
 
     pub fn get(&self, key: &str) -> Option<&Type> {
-        // Search from the current innermost scope up to the global scope
         for scope in self.scopes.iter().rev() {
             if let Some(ty) = scope.get(key) {
                 return Some(ty);

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ir::tac::{Instruction, IrOp, ScopedMap, Value},
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
+    utils::typesafe::type_to_string,
 };
 
 pub struct TempGen {
@@ -219,7 +220,7 @@ impl IRGen {
 
         let total_size = (current_offset + max_alignment - 1) & !(max_alignment - 1);
         self.struct_defs.insert(
-            mangled_name,
+            mangled_name.clone(),
             StructLayout {
                 total_size,
                 field_offsets,
@@ -244,7 +245,8 @@ impl IRGen {
     fn get_value_type(&self, value: &Value) -> Type {
         match value {
             Value::Temp(name) | Value::Var(name) => {
-                self.var_types.get(name).cloned().unwrap_or(Type::Int)
+                let ty = self.var_types.get(name).cloned().unwrap_or(Type::Int);
+                ty
             }
             Value::Const(_) => Type::Int,
             Value::Bool(_) => Type::Bool,
@@ -492,7 +494,9 @@ impl IRGen {
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
-            } => self.gen_expr(inner, None),
+            } => {
+                self.gen_expr(inner, None)
+            }
 
             ExprKind::Field { base, field } => {
                 let base_addr = self.gen_lvalue_addr(base);
@@ -510,7 +514,10 @@ impl IRGen {
                         }
                         mangled_name
                     }
-                    _ => panic!("Field access on non-struct type: {:?}", base_type),
+                    _ => panic!(
+                        "Field access on non-struct type: {}",
+                        type_to_string(&base_type)
+                    ),
                 };
 
                 let (offset, field_type) = {
@@ -670,8 +677,8 @@ impl IRGen {
                         mangled_name
                     }
                     _ => panic!(
-                        "ICE: Attempted field access on non-struct type. Found: {:?}",
-                        base_type
+                        "ICE: Attempted field access on non-struct type. Found: {}",
+                        type_to_string(&base_type)
                     ),
                 };
 
@@ -882,10 +889,12 @@ impl IRGen {
                 }
                 UnaryOp::Deref => {
                     let value = self.gen_expr(expr, None);
-                    let inner_type = self.expr_type(expr).unwrap_or(Type::Int);
+                    let inner_type = self.expr_type(expr).unwrap_or(Type::Void);
                     let value_type = match inner_type {
                         Type::Ptr(inner) => *inner,
-                        _ => Type::Int,
+                        _ => {
+                            Type::Void
+                        }
                     };
                     let result_temp = self.next_temp_with_type(value_type.clone());
                     self.code.push(Instruction::Load {
@@ -1082,16 +1091,17 @@ impl IRGen {
             Stmt::Constant { .. } => {
                 // Constants are generated at use sites
             }
-
             Stmt::Assignment { ident, vtype, expr } => {
+                let mangled_name = format!("{}::{}", self.current_function, ident.value);
+
                 if let Some(explicit_ty) = vtype {
                     let resolved = self.resolve_type(explicit_ty);
-                    self.var_types.insert(ident.value.clone(), resolved);
+                    self.var_types.insert(mangled_name.clone(), resolved);
                 }
 
                 let current_ty = vtype
                     .clone()
-                    .or_else(|| self.var_types.get(&ident.value).cloned())
+                    .or_else(|| self.var_types.get(&mangled_name).cloned())
                     .map(|ty| self.resolve_type(&ty));
 
                 let is_array = match current_ty {
@@ -1099,7 +1109,7 @@ impl IRGen {
                     _ => false,
                 };
 
-                let target_var = Value::Var(ident.value.clone());
+                let target_var = Value::Var(mangled_name.clone());
 
                 if let Some(expr_node) = expr {
                     if is_array {
@@ -1110,10 +1120,10 @@ impl IRGen {
                             let computed_ty = self.get_value_type(&value);
                             let resolved_computed = self.resolve_type(&computed_ty);
                             self.var_types
-                                .insert(ident.value.clone(), resolved_computed);
+                                .insert(mangled_name.clone(), resolved_computed);
                         }
                         self.code.push(Instruction::Assign {
-                            dst: ident.value.clone(),
+                            dst: mangled_name,
                             src: value,
                         });
                     }
@@ -1159,15 +1169,17 @@ impl IRGen {
                 }
             }
             Stmt::Reassignment { ident, expr } => {
-                let is_array = matches!(self.var_types.get(&ident.value), Some(Type::Array { .. }));
-                let target_var = Value::Var(ident.value.clone());
+                let mangled_name = format!("{}::{}", self.current_function, ident.value);
+                let is_array =
+                    matches!(self.var_types.get(&mangled_name), Some(Type::Array { .. }));
+                let target_var = Value::Var(mangled_name.clone());
 
                 if is_array {
                     self.gen_expr(expr, Some(target_var));
                 } else {
                     let value = self.gen_expr(expr, None);
                     self.code.push(Instruction::Assign {
-                        dst: ident.value.clone(),
+                        dst: mangled_name,
                         src: value,
                     });
                 }
@@ -1327,6 +1339,7 @@ impl IRGen {
                 generic_params,
                 params,
                 body,
+                rttype,
                 ..
             } => {
                 if !generic_params.is_empty() {
@@ -1334,9 +1347,19 @@ impl IRGen {
                     return;
                 }
 
+                let resolved_rttype = rttype
+                    .clone()
+                    .map(|ty| self.resolve_type(&ty))
+                    .unwrap_or(Type::Void);
+                self.var_types
+                    .insert(name.value.clone(), resolved_rttype);
+
                 let start = self.functions.next(name.value.clone());
                 let old_func = self.current_function.clone();
                 self.current_function = start.clone();
+
+                // Push a new scope for this function
+                self.var_types.push_scope();
 
                 self.code.push(Instruction::FunctionLabel(start.clone()));
 
@@ -1357,11 +1380,13 @@ impl IRGen {
 
                 if !matches!(body.last(), Some(Stmt::Return { .. })) {
                     let fallback_val = Value::Void;
-
                     self.code.push(Instruction::Return {
                         value: fallback_val,
                     });
                 }
+
+                // Pop the function scope
+                self.var_types.pop_scope();
 
                 self.current_function = old_func;
             }
@@ -1412,8 +1437,8 @@ impl IRGen {
                                 mangled_name
                             }
                             _ => panic!(
-                                "ICE: Field assignment on non-struct type. Found: {:?}",
-                                base_type
+                                "ICE: Field assignment on non-struct type. Found: {}",
+                                type_to_string(&base_type)
                             ),
                         };
 

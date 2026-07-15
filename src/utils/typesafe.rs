@@ -94,9 +94,9 @@ pub fn type_to_string(ty: &Type) -> String {
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
         Type::Struct(name) => name.clone(),
-        Type::Ptr(inner) => format!("*{}", type_to_string(inner)),
+        Type::Ptr(inner) => format!("ptr<{}>", type_to_string(inner)),
         Type::Array { element_type, size } => {
-            format!("{}[{}]", type_to_string(element_type), size)
+            format!("[{}; {}]", type_to_string(element_type), size)
         }
         Type::GenericInstance { name, args } => {
             let args_str: Vec<String> = args.iter().map(|arg| type_to_string(arg)).collect();

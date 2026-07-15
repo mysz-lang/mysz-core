@@ -60,6 +60,7 @@ fn get_or_create_var(
 fn get_or_create_block(
     builder: &mut FunctionBuilder,
     block_map: &mut HashMap<String, Block>,
+    all_blocks: &mut Vec<Block>,
     name: &str,
 ) -> Block {
     if let Some(&blk) = block_map.get(name) {
@@ -67,6 +68,7 @@ fn get_or_create_block(
     }
     let blk = builder.create_block();
     block_map.insert(name.to_string(), blk);
+    all_blocks.push(blk);
     blk
 }
 
@@ -105,11 +107,23 @@ impl BackendType {
     pub fn from_frontend(ty: &Type) -> Self {
         match ty {
             Type::Str => BackendType::Ptr,
-            Type::GenericInstance { .. } => {
-                unreachable!("generic instances must be monomorphised before codegen")
+            Type::GenericInstance { name, .. } => {
+                unreachable!(
+                    "{}",
+                    format!(
+                        "generic instances '{}' must be monomorphised before codegen",
+                        name
+                    )
+                )
             }
-            Type::GenericParam(_) => {
-                unreachable!("generic parameters must be monomorphised before codegen")
+            Type::GenericParam(s) => {
+                unreachable!(
+                    "{}",
+                    format!(
+                        "generic parameters '{}' must be monomorphised before codegen",
+                        s
+                    )
+                )
             }
             Type::Any => BackendType::Ptr,
             Type::Int => BackendType::Int64,
@@ -805,7 +819,12 @@ impl CraneliftBackend {
             match inst {
                 Instruction::FunctionLabel(_) | Instruction::Extern { .. } => {}
                 Instruction::Label(lbl_name) => {
-                    let blk = get_or_create_block(&mut builder, &mut block_map, lbl_name);
+                    let blk = get_or_create_block(
+                        &mut builder,
+                        &mut block_map,
+                        &mut all_blocks,
+                        lbl_name,
+                    );
                     all_blocks.push(blk);
 
                     let current_blk = builder.current_block();
@@ -970,11 +989,34 @@ impl CraneliftBackend {
                     let call_results = builder.inst_results(inst_call).to_vec();
 
                     if let Some(dest_name) = dest {
-                        let frontend_type = var_types.get(dest_name).unwrap_or(&Type::Int);
+                        let frontend_type = var_types
+                            .get(dest_name)
+                            .or_else(|| {
+                                let combined = format!("{}::{}", name, dest_name);
+                                var_types.get(&combined)
+                            })
+                            .or_else(|| {
+                                dest_name
+                                    .split("::")
+                                    .last()
+                                    .and_then(|suffix| var_types.get(suffix))
+                            })
+                            .unwrap_or(&Type::Int);
                         let abi =
                             AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
 
-                        if let AbiType::Aggregate { chunk_count, .. } = abi {
+                        if let AbiType::Aggregate {
+                            chunk_count,
+                            total_size,
+                        } = abi
+                        {
+                            if !stack_slot_map.contains_key(dest_name) {
+                                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    total_size,
+                                ));
+                                stack_slot_map.insert(dest_name.clone(), slot);
+                            }
                             let slot = *stack_slot_map.get(dest_name).unwrap();
                             for i in 0..chunk_count {
                                 let val_part = call_results[i];
@@ -1000,7 +1042,6 @@ impl CraneliftBackend {
                             }
                         }
                     }
-
                     call_args.clear();
                     call_arg_types.clear();
                 }
@@ -1477,7 +1518,8 @@ impl CraneliftBackend {
                         ptr_type,
                     );
 
-                    let f_blk = get_or_create_block(&mut builder, &mut block_map, target);
+                    let f_blk =
+                        get_or_create_block(&mut builder, &mut block_map, &mut all_blocks, target);
                     let next_blk = builder.create_block();
                     all_blocks.push(next_blk);
 
@@ -1486,7 +1528,8 @@ impl CraneliftBackend {
                     terminated = true;
                 }
                 Instruction::Jump(lbl) => {
-                    let blk = get_or_create_block(&mut builder, &mut block_map, lbl);
+                    let blk =
+                        get_or_create_block(&mut builder, &mut block_map, &mut all_blocks, lbl);
                     builder.ins().jump(blk, &[]);
                     terminated = true;
                 }
@@ -1523,8 +1566,23 @@ impl CraneliftBackend {
                                 };
                                 builder.ins().return_(&[val]);
                             }
-                            AbiType::Aggregate { chunk_count, .. } => {
+                            AbiType::Aggregate {
+                                chunk_count,
+                                total_size,
+                            } => {
                                 if let Value::Var(name) | Value::Temp(name) = value {
+                                    if !stack_slot_map.contains_key(name) {
+                                        let slot =
+                                            builder.create_sized_stack_slot(StackSlotData::new(
+                                                StackSlotKind::ExplicitSlot,
+                                                total_size,
+                                            ));
+                                        stack_slot_map.insert(name.clone(), slot);
+                                        panic!(
+                                            "Return aggregate slot missing for '{}' – ensure Call handler creates stack slot for aggregate results.",
+                                            name
+                                        );
+                                    }
                                     let slot = *stack_slot_map.get(name).unwrap();
                                     let mut chunks = Vec::new();
                                     for i in 0..chunk_count {
