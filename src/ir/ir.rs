@@ -397,12 +397,17 @@ impl IRGen {
             }
             ExprKind::Identifier(name) => {
                 let local_mangled = format!("{}::{}", self.current_function, name);
-                let base_ty = if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
-                    ty
-                } else {
-                    self.var_types.get(name).cloned()?
-                };
-                Some(self.resolve_type(&base_ty))
+                if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
+                    return Some(self.resolve_type(&ty));
+                }
+                if let Some((ty, _)) = self.analyser_constants.get(name) {
+                    let ty = ty.clone();
+                    return Some(self.resolve_type(&ty));
+                }
+                if let Some(ty) = self.var_types.get(name).cloned() {
+                    return Some(self.resolve_type(&ty));
+                }
+                None
             }
             ExprKind::Binary { left, op, .. } => match op {
                 BinaryOp::Eq
@@ -847,6 +852,10 @@ impl IRGen {
             }
 
             ExprKind::Identifier(name) => {
+                let local_mangled = format!("{}::{}", self.current_function, name);
+                if self.var_types.get(&local_mangled).is_some() {
+                    return Value::Var(local_mangled);
+                }
                 let maybe_const_expr = self
                     .analyser_constants
                     .get(name)
@@ -859,12 +868,7 @@ impl IRGen {
                     self.evaluated_constants.insert(name.clone(), val.clone());
                     return val;
                 }
-                let local_mangled = format!("{}::{}", self.current_function, name);
-                if self.var_types.get(&local_mangled).is_some() {
-                    Value::Var(local_mangled)
-                } else {
-                    Value::Var(name.clone())
-                }
+                Value::Var(name.clone())
             }
 
             ExprKind::Unary { op, expr } => match op {
