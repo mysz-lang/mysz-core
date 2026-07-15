@@ -134,6 +134,11 @@ pub enum Stmt {
         vtype: Option<Type>,
         expr: Option<Expr>,
     },
+    Constant {
+        name: Identifier,
+        vtype: Option<Type>,
+        expr: Expr,
+    },
     Reassignment {
         ident: Identifier,
         expr: Expr,

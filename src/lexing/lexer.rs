@@ -494,6 +494,7 @@ impl Lexer {
             "struct" => TokenType::StructKeyword,
             "sizeof" => TokenType::SizeOfKeyword,
             "break" => TokenType::BreakKeyword,
+            "const" => TokenType::ConstKeyword,
             _ => TokenType::Identifier,
         };
 

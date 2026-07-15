@@ -56,6 +56,8 @@ pub struct IRGen {
     labels: LabelGen,
     functions: FunctionGen,
     loop_exits: Vec<String>,
+    pub analyser_constants: HashMap<String, (Type, Expr)>,
+    pub evaluated_constants: HashMap<String, Value>,
     pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
@@ -79,6 +81,9 @@ impl IRGen {
             struct_blueprints: HashMap::new(),
             var_types: ScopedMap::new(HashMap::new()),
             current_function: String::new(),
+
+            analyser_constants: HashMap::new(),
+            evaluated_constants: HashMap::new(),
 
             fn_blueprints: HashMap::new(),
             instantiated_fns: std::collections::HashSet::new(),
@@ -842,6 +847,18 @@ impl IRGen {
             }
 
             ExprKind::Identifier(name) => {
+                let maybe_const_expr = self
+                    .analyser_constants
+                    .get(name)
+                    .map(|(_, expr)| expr.clone());
+                if let Some(expr) = maybe_const_expr {
+                    if let Some(val) = self.evaluated_constants.get(name) {
+                        return val.clone();
+                    }
+                    let val = self.gen_expr(&expr, None);
+                    self.evaluated_constants.insert(name.clone(), val.clone());
+                    return val;
+                }
                 let local_mangled = format!("{}::{}", self.current_function, name);
                 if self.var_types.get(&local_mangled).is_some() {
                     Value::Var(local_mangled)
@@ -1058,6 +1075,10 @@ impl IRGen {
                     self.instantiate_struct_layout(name.value.clone(), fields, &HashMap::new());
                 }
             }
+            Stmt::Constant { .. } => {
+                // Constants are generated at use sites
+            }
+
             Stmt::Assignment { ident, vtype, expr } => {
                 if let Some(explicit_ty) = vtype {
                     let resolved = self.resolve_type(explicit_ty);
@@ -1519,16 +1540,16 @@ impl IRGen {
 
     pub fn gen_program(&mut self, program: &Program) {
         for stmt in &program.statements {
-            // stmts other than these outside of a function don't parse correctly so imma fix that soon, so you will be able to define statements outside of functions properly.
-            // if !matches!(stmt, Stmt::Function { .. })
-            //     && !matches!(stmt, Stmt::Extern { .. })
-            //     && !matches!(stmt, Stmt::Struct { .. })
-            // {
-            //     println!(
-            //         "Codegen Error: top-level statement outside of a function is not supported."
-            //     );
-            //     std::process::exit(1);
-            // }
+            if !matches!(stmt, Stmt::Function { .. })
+                && !matches!(stmt, Stmt::Extern { .. })
+                && !matches!(stmt, Stmt::Struct { .. })
+                && !matches!(stmt, Stmt::Constant { .. })
+            {
+                println!(
+                    "Codegen Error: top-level statement outside of a function is not supported."
+                );
+                std::process::exit(1);
+            }
             self.gen_stmt(stmt);
         }
 

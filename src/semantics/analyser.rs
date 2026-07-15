@@ -9,6 +9,7 @@ pub struct Analyser {
     pub current_scope: usize,
     pub functions: HashMap<String, FunctionSignature>,
     pub structs: HashMap<String, StructSignature>,
+    pub constants: HashMap<String, (Type, Expr)>,
     current_return_type: Option<Type>,
     loop_depth: usize,
     pub current_generic_params: Vec<String>,
@@ -24,6 +25,7 @@ impl Analyser {
             current_scope: 0,
             functions: HashMap::new(),
             structs: HashMap::new(),
+            constants: HashMap::new(),
             current_return_type: None,
             loop_depth: 0,
             current_generic_params: Vec::new(),
@@ -51,9 +53,10 @@ impl Analyser {
 
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match ty {
-            Type::GenericParam(name) => mapping.get(name).cloned().unwrap_or_else(|| {
-                Type::GenericParam(name.clone())
-            }),
+            Type::GenericParam(name) => mapping
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| Type::GenericParam(name.clone())),
             Type::Struct(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, mapping))),
             Type::Array { element_type, size } => Type::Array {
@@ -472,9 +475,11 @@ impl Analyser {
             ExprKind::Identifier(name) => {
                 if let Some(symbol) = self.resolve_variable(name) {
                     Ok(symbol.ty.clone())
+                } else if let Some((const_type, _)) = self.constants.get(name) {
+                    Ok(const_type.clone())
                 } else {
                     Err(format!(
-                        "Semantic Error [{}]: Variable '{}' is used before definition.",
+                        "Semantic Error [{}]: Symbol '{}' is used before definition.",
                         expr.span, name
                     ))
                 }
@@ -811,6 +816,47 @@ impl Analyser {
                     return_type,
                     name.location.clone(),
                 )?;
+                Ok(())
+            }
+
+            Stmt::Constant { name, vtype, expr } => {
+                if self.current_return_type.is_some() {
+                    return Err(format!(
+                        "Semantic Error [{}]: Constant '{}' cannot be defined inside a function.",
+                        name.location, name.value
+                    ));
+                }
+
+                let const_type = match (vtype, expr) {
+                    (Some(explicit_type), expr_node) => {
+                        let instantiated =
+                            self.instantiate_generic_types(explicit_type, &name.location)?;
+                        self.validate_type_exists(&instantiated, &name.location)?;
+                        let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
+                        if !types_compatible(&instantiated, &expr_type) {
+                            return Err(format!(
+                                "Type Error [{}]: Constant '{}' declared as '{}' but initializer has type '{}'",
+                                expr_node.span,
+                                name.value,
+                                type_to_string(&instantiated),
+                                type_to_string(&expr_type)
+                            ));
+                        }
+                        instantiated
+                    }
+                    (None, expr_node) => self.check_expr(expr_node, None)?,
+                };
+
+                if self.constants.contains_key(&name.value) {
+                    return Err(format!(
+                        "Semantic Error [{}]: Constant '{}' already defined.",
+                        name.location, name.value
+                    ));
+                }
+
+                self.constants
+                    .insert(name.value.clone(), (const_type, expr.clone()));
+
                 Ok(())
             }
 

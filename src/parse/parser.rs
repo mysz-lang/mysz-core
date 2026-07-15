@@ -252,6 +252,7 @@ impl Parser {
             TokenType::StructKeyword => self.parse_struct(),
             TokenType::IfKeyword => self.parse_if(),
             TokenType::WhileKeyword => self.parse_while(),
+            TokenType::ConstKeyword => self.parse_const(),
             TokenType::FnKeyword => self.parse_function(),
             TokenType::ForKeyword => self.parse_for(),
             TokenType::ReturnKeyword => self.parse_return(),
@@ -543,6 +544,32 @@ impl Parser {
         Some(Stmt::Return {
             value: expr,
             span: tk.location,
+        })
+    }
+
+    fn parse_const(&mut self) -> Option<Stmt> {
+        self.advance();
+
+        let ident = self.expect(TokenType::Identifier)?;
+        let ident_loc = ident.location.clone();
+
+        let mut vtype = None;
+        if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Colon)) {
+            self.advance();
+            vtype = self.parse_type();
+        }
+
+        self.expect(TokenType::Assign)?;
+
+        let expr = self.parse_expr()?;
+
+        Some(Stmt::Constant {
+            name: Identifier {
+                value: ident.value,
+                location: ident_loc,
+            },
+            vtype,
+            expr,
         })
     }
 

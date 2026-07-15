@@ -392,6 +392,8 @@ impl CraneliftBackend {
         func_ctx: &mut FunctionBuilderContext,
         incoming_var_types: &ScopedMap,
     ) {
+        let mut terminated = false;
+
         let ptr_type = self.module.target_config().pointer_type();
         let mut var_types = incoming_var_types.clone();
         var_types.push_scope();
@@ -796,6 +798,11 @@ impl CraneliftBackend {
         let mut param_index = 0;
 
         for inst in insts {
+            if terminated {
+                // Skip any further instructions for this function (they are unreachable)
+                continue;
+            }
+
             match inst {
                 Instruction::FunctionLabel(_) | Instruction::Extern { .. } => {}
                 Instruction::Label(lbl_name) => {
@@ -1477,10 +1484,12 @@ impl CraneliftBackend {
 
                     builder.ins().brif(cond_val, next_blk, &[], f_blk, &[]);
                     builder.switch_to_block(next_blk);
+                    terminated = true;
                 }
                 Instruction::Jump(lbl) => {
                     let blk = get_or_create_block(&mut builder, &mut block_map, lbl);
                     builder.ins().jump(blk, &[]);
+                    terminated = true;
                 }
                 Instruction::Return { value } => {
                     if let Some(front_ret) = &current_func_ret_front {
@@ -1538,6 +1547,7 @@ impl CraneliftBackend {
                     } else {
                         builder.ins().return_(&[]);
                     }
+                    terminated = true;
                 }
             }
         }

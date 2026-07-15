@@ -293,7 +293,9 @@ pub fn compile_ast_program(
 
     // IR generation
     let mut irgen = IRGen::new();
+    irgen.analyser_constants = analyser.constants.clone();
     irgen.gen_program(program);
+    // irgen.dump();
 
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
