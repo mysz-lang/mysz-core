@@ -799,7 +799,6 @@ impl CraneliftBackend {
 
         for inst in insts {
             if terminated {
-                // Skip any further instructions for this function (they are unreachable)
                 continue;
             }
 
