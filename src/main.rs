@@ -7,7 +7,7 @@ pub mod semantics;
 pub mod utils;
 
 fn main() {
-    let res = compiler::compile_root_file("./test/main.mysz", "./test/main.o", &[]);
+    let res = compiler::compile_root_file("./interntest/main.mysz", "./interntest/main.o", &[]);
 
     if res.is_err() {
         println!("{:#}", res.err().unwrap());

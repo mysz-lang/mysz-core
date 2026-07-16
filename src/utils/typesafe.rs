@@ -69,7 +69,7 @@ pub fn types_compatible(expected: &Type, from: &Type) -> bool {
     if expected == &Type::Any || from == &Type::Any {
         return true;
     }
-
+   
     let norm_expected = normalise_type(expected);
     let norm_from = normalise_type(from);
 
@@ -78,6 +78,14 @@ pub fn types_compatible(expected: &Type, from: &Type) -> bool {
     }
 
     if is_integer(&norm_from) && is_integer(&norm_expected) {
+        return true;
+    }
+
+    if norm_from == Type::Ptr(Box::new(Type::Char)) && norm_expected == Type::Str {
+        return true;
+    }
+
+    if norm_expected == Type::Ptr(Box::new(Type::Char)) && norm_from == Type::Str {
         return true;
     }
 

@@ -813,7 +813,7 @@ impl CraneliftBackend {
         let mut param_index = 0;
 
         for inst in insts {
-            if terminated {
+            if terminated && !matches!(inst, Instruction::Label(_)) {
                 continue;
             }
 

@@ -16,3 +16,6 @@ target
 # Added by cargo
 
 /target
+
+# Internal tests to quick test mysz-core before writing a full test
+/interntest
