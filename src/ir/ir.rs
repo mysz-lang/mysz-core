@@ -893,7 +893,7 @@ impl IRGen {
                     let value_type = match inner_type {
                         Type::Ptr(inner) => *inner,
                         _ => {
-                            Type::Void
+                            unreachable!("non-pointer type dereferenced (this should be handled by analyser)")
                         }
                     };
                     let result_temp = self.next_temp_with_type(value_type.clone());
@@ -1131,37 +1131,37 @@ impl IRGen {
                     match current_ty {
                         Some(Type::Int) => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Const(0),
                             });
                         }
                         Some(Type::Bool) => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Bool(false),
                             });
                         }
                         Some(Type::Char) => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Char('\0'),
                             });
                         }
                         Some(Type::Str) | Some(Type::Ptr(_)) => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Const(0),
                             });
                         }
                         Some(Type::Struct(_)) | Some(Type::Array { .. }) => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Const(0),
                             });
                         }
                         _ => {
                             self.code.push(Instruction::Assign {
-                                dst: ident.value.clone(),
+                                dst: mangled_name,
                                 src: Value::Const(0),
                             });
                         }
@@ -1358,7 +1358,6 @@ impl IRGen {
                 let old_func = self.current_function.clone();
                 self.current_function = start.clone();
 
-                // Push a new scope for this function
                 self.var_types.push_scope();
 
                 self.code.push(Instruction::FunctionLabel(start.clone()));
@@ -1385,7 +1384,6 @@ impl IRGen {
                     });
                 }
 
-                // Pop the function scope
                 self.var_types.pop_scope();
 
                 self.current_function = old_func;
@@ -1547,8 +1545,14 @@ impl IRGen {
                     }
 
                     ExprKind::Identifier(name) => {
+                        let mangled_name = format!("{}::{}", self.current_function, name);
+                        let dst = if self.var_types.get(&mangled_name).is_some() {
+                            mangled_name
+                        } else {
+                            name.clone()
+                        };
                         self.code.push(Instruction::Assign {
-                            dst: name.clone(),
+                            dst,
                             src: value_to_store,
                         });
                     }

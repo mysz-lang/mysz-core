@@ -657,7 +657,8 @@ impl CraneliftBackend {
             }
 
             if let Instruction::Binary { dst: dest_name, .. }
-            | Instruction::Load { dst: dest_name, .. } = inst
+            | Instruction::Load { dst: dest_name, .. }
+            | Instruction::Assign { dst: dest_name, .. } = inst
             {
                 let f_ty = var_types
                     .get(dest_name)
@@ -843,6 +844,7 @@ impl CraneliftBackend {
                         builder.ins().jump(blk, &[]);
                     }
                     builder.switch_to_block(blk);
+                    terminated = false;
                 }
                 Instruction::Param { p } => {
                     let arg_val = builder.block_params(entry_block)[param_index];
@@ -1525,7 +1527,7 @@ impl CraneliftBackend {
 
                     builder.ins().brif(cond_val, next_blk, &[], f_blk, &[]);
                     builder.switch_to_block(next_blk);
-                    terminated = true;
+                    terminated = false;
                 }
                 Instruction::Jump(lbl) => {
                     let blk =
@@ -1568,18 +1570,12 @@ impl CraneliftBackend {
                             }
                             AbiType::Aggregate {
                                 chunk_count,
-                                total_size,
+                                ..
                             } => {
                                 if let Value::Var(name) | Value::Temp(name) = value {
                                     if !stack_slot_map.contains_key(name) {
-                                        let slot =
-                                            builder.create_sized_stack_slot(StackSlotData::new(
-                                                StackSlotKind::ExplicitSlot,
-                                                total_size,
-                                            ));
-                                        stack_slot_map.insert(name.clone(), slot);
                                         panic!(
-                                            "Return aggregate slot missing for '{}' – ensure Call handler creates stack slot for aggregate results.",
+                                            "Return aggregate slot missing for '{}' - ensure Call handler creates stack slot for aggregate results.",
                                             name
                                         );
                                     }

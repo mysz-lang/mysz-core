@@ -274,7 +274,6 @@ pub fn compile_root_file<P: AsRef<Path>>(
     let program = Program {
         statements: flattened_statements,
     };
-    // println!("{:#?}", program.statements);
 
     compile_ast_program(&program, output_filename, Some(&source), &input_path)
 }
@@ -291,7 +290,6 @@ pub fn compile_ast_program(
         let formatted = format_semantic_error(&err, source, file_path);
         return Err(format!("Semantic error:\n{}", formatted));
     }
-    // println!("functions: {:#?} \n constants: {:#?}", analyser.functions, analyser.constants);
 
     // IR generation
     let mut irgen = IRGen::new();

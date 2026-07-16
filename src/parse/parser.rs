@@ -204,7 +204,6 @@ impl Parser {
                     let name = other.to_string();
                     self.advance();
 
-                    // Check if this is a generic parameter in scope
                     if self.generic_params.contains(&name) {
                         Some(Type::GenericParam(name))
                     } else if matches!(
