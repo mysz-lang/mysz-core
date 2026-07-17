@@ -694,6 +694,24 @@ impl Parser {
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
+        let mut elseif_branches = Vec::new();
+
+        while matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::ElseIfKeyword)
+        ) {
+            self.advance();
+
+            self.expect(TokenType::LParen)?;
+            let elseif_cond = self.parse_expr()?;
+            self.expect(TokenType::RParen)?;
+
+            self.expect(TokenType::LBrace)?;
+            let elseif_body = self.parse_block();
+
+            elseif_branches.push((elseif_cond, elseif_body));
+        }
+
         let else_branch = if matches!(
             self.get_token().map(|t| &t.ttype),
             Some(TokenType::ElseKeyword)
@@ -708,6 +726,7 @@ impl Parser {
         Some(Stmt::If {
             cond,
             then_branch: body,
+            else_if_branches: elseif_branches,
             else_branch,
         })
     }
@@ -915,9 +934,9 @@ impl Parser {
             left = Expr {
                 kind: ExprKind::Cast {
                     left: Box::new(left),
-                    right: right
+                    right: right,
                 },
-                span
+                span,
             }
         }
 

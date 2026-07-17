@@ -56,6 +56,7 @@ pub enum TokenType {
     BreakKeyword,
     ConstKeyword,
     AsKeyword,
+    ElseIfKeyword,
 
     // identifier
     Identifier,

@@ -935,7 +935,6 @@ impl CraneliftBackend {
                     value,
                     to_type,
                 } => {
-                    // 1. Lower the incoming value to a Cranelift Value
                     let source_val = self.lower_value(
                         &mut builder,
                         value,
@@ -952,10 +951,12 @@ impl CraneliftBackend {
                     let casted_val = match cast_ty {
                         CastType::BitCast => {
                             // A bitcast reinterprets the bits without changing them
-                            builder.ins().bitcast(clif_target_ty, MemFlags::new(), source_val)
+                            builder
+                                .ins()
+                                .bitcast(clif_target_ty, MemFlags::new(), source_val)
                         }
                         CastType::Extend => {
-                            // If signed use ireduce/sextend. For safety with generic ints, 
+                            // If signed use ireduce/sextend. For safety with generic ints,
                             // standard zero/sign extension depending on signedness layout:
                             // Assuming unsigned/zero-extension default here:
                             builder.ins().uextend(clif_target_ty, source_val)
@@ -966,7 +967,6 @@ impl CraneliftBackend {
                         }
                     };
 
-                    // 4. Save the result back into your backend's storage tracking
                     if let Some(&slot) = stack_slot_map.get(dest_name) {
                         builder.ins().stack_store(casted_val, slot, 0);
                     } else {
@@ -1620,10 +1620,7 @@ impl CraneliftBackend {
                                 };
                                 builder.ins().return_(&[val]);
                             }
-                            AbiType::Aggregate {
-                                chunk_count,
-                                ..
-                            } => {
+                            AbiType::Aggregate { chunk_count, .. } => {
                                 if let Value::Var(name) | Value::Temp(name) = value {
                                     if !stack_slot_map.contains_key(name) {
                                         panic!(

@@ -69,7 +69,7 @@ pub fn types_compatible(expected: &Type, from: &Type) -> bool {
     if expected == &Type::Any || from == &Type::Any {
         return true;
     }
-   
+
     let norm_expected = normalise_type(expected);
     let norm_from = normalise_type(from);
 

@@ -55,7 +55,7 @@ pub enum BinaryOp {
     Gt,
     GtE,
     Lt,
-    LtE
+    LtE,
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOp {
@@ -156,6 +156,7 @@ pub enum Stmt {
     If {
         cond: Expr,
         then_branch: Vec<Stmt>,
+        else_if_branches: Vec<(Expr, Vec<Stmt>)>,
         else_branch: Option<Vec<Stmt>>,
     },
     While {

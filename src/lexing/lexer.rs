@@ -431,7 +431,8 @@ impl Lexer {
                 if ch == '\\' && self.peek(1).is_some() && self.peek(1).unwrap() == '"' {
                     string.push('\\');
                     string.push('"');
-                    self.advance(); self.advance();
+                    self.advance();
+                    self.advance();
                 } else {
                     string.push(ch);
                     self.advance();
@@ -489,6 +490,7 @@ impl Lexer {
             "var" => TokenType::VarKeyword,
             "if" => TokenType::IfKeyword,
             "else" => TokenType::ElseKeyword,
+            "elseif" => TokenType::ElseIfKeyword,
             "while" => TokenType::WhileKeyword,
             "fn" => TokenType::FnKeyword,
             "pub" => TokenType::PubKeyword,

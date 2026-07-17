@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value}, parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp}, utils::typesafe::type_to_string,
+    ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value},
+    parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
+    utils::typesafe::type_to_string,
 };
 
 pub struct TempGen {
@@ -493,9 +495,7 @@ impl IRGen {
             ExprKind::Unary {
                 op: UnaryOp::Deref,
                 expr: inner,
-            } => {
-                self.gen_expr(inner, None)
-            }
+            } => self.gen_expr(inner, None),
 
             ExprKind::Field { base, field } => {
                 let base_addr = self.gen_lvalue_addr(base);
@@ -594,17 +594,16 @@ impl IRGen {
                 Value::Const(size)
             }
 
-
             ExprKind::Cast { left, right } => {
                 let val_to_cast = self.gen_expr(left, None);
-                
+
                 let from_type = self.expr_type(left).unwrap_or(Type::Int);
                 let to_type = self.resolve_type(right);
 
                 let cast_kind = match (&from_type, &to_type) {
                     // Pointer to pointer
                     (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
-                    
+
                     // ptr<char> -> str (they're the exact same, just make sure the ptr<char> has a direct block of characters that end with \0 following it)
                     (Type::Ptr(_), Type::Str) => CastType::BitCast,
 
@@ -612,26 +611,26 @@ impl IRGen {
                     (Type::Int, Type::Int) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
-                        if from_size < to_size { 
-                            CastType::Extend 
-                        } else { 
-                            CastType::Truncate 
+                        if from_size < to_size {
+                            CastType::Extend
+                        } else {
+                            CastType::Truncate
                         }
                     }
-                    
+
                     // Fallback
                     _ => CastType::BitCast,
                 };
 
                 let result_temp = self.next_temp_with_type(to_type.clone());
-                
+
                 self.code.push(Instruction::Cast {
                     dst: result_temp.clone(),
                     cast_ty: cast_kind,
                     value: val_to_cast,
                     to_type,
                 });
-                
+
                 Value::Temp(result_temp)
             }
 
@@ -934,7 +933,9 @@ impl IRGen {
                     let value_type = match inner_type {
                         Type::Ptr(inner) => *inner,
                         _ => {
-                            unreachable!("non-pointer type dereferenced (this should be handled by analyser)")
+                            unreachable!(
+                                "non-pointer type dereferenced (this should be handled by analyser)"
+                            )
                         }
                     };
                     let result_temp = self.next_temp_with_type(value_type.clone());
@@ -1295,31 +1296,67 @@ impl IRGen {
             Stmt::If {
                 cond,
                 then_branch,
+                else_if_branches,
                 else_branch,
             } => {
-                let end = self.labels.next();
-                let cond_val = self.gen_expr(cond, None);
+                let true_end = self.labels.next();
 
+                let mut next_target = if !else_if_branches.is_empty() {
+                    self.labels.next()
+                } else if else_branch.is_some() {
+                    self.labels.next()
+                } else {
+                    true_end.clone()
+                };
+
+                let cond_val = self.gen_expr(cond, None);
                 self.code.push(Instruction::JumpIfFalse {
                     cond: cond_val,
-                    target: end.clone(),
+                    target: next_target.clone(),
                 });
 
                 for stmt in then_branch {
                     self.gen_stmt(stmt);
                 }
 
-                if else_branch.is_none() {
-                    self.code.push(Instruction::Label(end));
-                } else {
-                    let true_end = self.labels.next();
-                    self.code.push(Instruction::Jump(true_end.clone()));
-                    self.code.push(Instruction::Label(end));
-                    for stmt in else_branch.as_ref().unwrap() {
+                self.code.push(Instruction::Jump(true_end.clone()));
+
+                for (i, (ei_cond, ei_body)) in else_if_branches.iter().enumerate() {
+                    self.code.push(Instruction::Label(next_target));
+
+                    next_target = if i + 1 < else_if_branches.len() {
+                        self.labels.next()
+                    } else if else_branch.is_some() {
+                        self.labels.next()
+                    } else {
+                        true_end.clone()
+                    };
+
+                    let ei_cond_val = self.gen_expr(ei_cond, None);
+                    self.code.push(Instruction::JumpIfFalse {
+                        cond: ei_cond_val,
+                        target: next_target.clone(),
+                    });
+
+                    for stmt in ei_body {
                         self.gen_stmt(stmt);
                     }
-                    self.code.push(Instruction::Label(true_end));
+
+                    self.code.push(Instruction::Jump(true_end.clone()));
                 }
+
+                if let Some(else_stmts) = else_branch {
+                    self.code.push(Instruction::Label(next_target));
+                    for stmt in else_stmts {
+                        self.gen_stmt(stmt);
+                    }
+                } else {
+                    if next_target != true_end {
+                        self.code.push(Instruction::Label(next_target));
+                    }
+                }
+
+                self.code.push(Instruction::Label(true_end));
             }
             Stmt::While { cond, body } => {
                 let start = self.labels.next();
@@ -1392,8 +1429,7 @@ impl IRGen {
                     .clone()
                     .map(|ty| self.resolve_type(&ty))
                     .unwrap_or(Type::Void);
-                self.var_types
-                    .insert(name.value.clone(), resolved_rttype);
+                self.var_types.insert(name.value.clone(), resolved_rttype);
 
                 let start = self.functions.next(name.value.clone());
                 let old_func = self.current_function.clone();
@@ -1733,7 +1769,15 @@ impl IRGen {
                 Instruction::Load { dst, ptr, ty } => {
                     println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr)
                 }
-                Instruction::Cast { dst, cast_ty, value, to_type } => println!("{dst} = {:?} as {:?} [casttype: {:?}]", value, to_type, cast_ty)
+                Instruction::Cast {
+                    dst,
+                    cast_ty,
+                    value,
+                    to_type,
+                } => println!(
+                    "{dst} = {:?} as {:?} [casttype: {:?}]",
+                    value, to_type, cast_ty
+                ),
             }
         }
     }

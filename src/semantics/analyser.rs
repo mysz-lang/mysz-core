@@ -301,8 +301,8 @@ impl Analyser {
                     expr.span,
                     type_to_string(&leftty),
                     type_to_string(right)
-                ))
-            },
+                ));
+            }
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => {
                     if let Some(Type::UInt) = expected_type {
@@ -1032,6 +1032,7 @@ impl Analyser {
             Stmt::If {
                 cond,
                 then_branch,
+                else_if_branches,
                 else_branch,
             } => {
                 let cond_type = self.check_expr(cond, None)?;
@@ -1048,6 +1049,23 @@ impl Analyser {
                     self.check_stmt(block_stmt)?;
                 }
                 self.leave_scope();
+
+                for (cond, body) in else_if_branches {
+                    let cond_type = self.check_expr(cond, None)?;
+                    if !self.check_truthiness(&cond_type) {
+                        return Err(format!(
+                            "Type Error [{}]: 'elseif' condition is not truthy, found '{}'",
+                            cond.span,
+                            type_to_string(&cond_type)
+                        ));
+                    }
+
+                    self.enter_scope();
+                    for body_stmt in body {
+                        self.check_stmt(body_stmt)?;
+                    }
+                    self.leave_scope();
+                }
 
                 if let Some(else_stmts) = else_branch {
                     self.enter_scope();
