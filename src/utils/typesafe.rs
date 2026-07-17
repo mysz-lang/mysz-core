@@ -13,6 +13,8 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::UInt => "uint".to_string(),
+        Type::Int8 => "int8".to_string(),
+        Type::UInt8 => "uint8".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Str => "str".to_string(),
         Type::Char => "char".to_string(),
@@ -52,7 +54,7 @@ pub fn normalise_type(ty: &Type) -> Type {
 
 #[inline]
 pub fn is_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::UInt)
+    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8 )
 }
 
 #[inline]
@@ -62,7 +64,7 @@ pub fn is_signed_integer(ty: &Type) -> bool {
 
 #[inline]
 pub fn is_truthy_type(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::UInt | Type::Bool | Type::Str)
+    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str)
 }
 
 pub fn types_compatible(expected: &Type, from: &Type) -> bool {
@@ -96,6 +98,8 @@ pub fn type_to_string(ty: &Type) -> String {
     match ty {
         Type::Int => "int".to_string(),
         Type::UInt => "uint".to_string(),
+        Type::Int8 => "i8".to_string(),
+        Type::UInt8 => "u8".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Str => "str".to_string(),
         Type::Char => "char".to_string(),

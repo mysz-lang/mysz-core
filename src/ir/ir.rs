@@ -132,6 +132,8 @@ impl IRGen {
 
             Type::Int
             | Type::UInt
+            | Type::Int8
+            | Type::UInt8
             | Type::Bool
             | Type::Str
             | Type::Char
@@ -259,6 +261,7 @@ impl IRGen {
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
             Type::Int | Type::UInt => 8,
+            Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
@@ -292,6 +295,7 @@ impl IRGen {
     fn type_alignment(&self, ty: &Type) -> i64 {
         match ty {
             Type::Int | Type::UInt => 8,
+            Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::GenericParam(name) => {
                 panic!(
@@ -608,7 +612,7 @@ impl IRGen {
                     (Type::Ptr(_), Type::Str) => CastType::BitCast,
 
                     // Integer size transformations
-                    (Type::Int, Type::Int) => {
+                    (Type::Int | Type::UInt | Type::Int8 | Type::UInt8, Type::Int | Type::UInt | Type::Int8 | Type::UInt8) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
                         if from_size < to_size {

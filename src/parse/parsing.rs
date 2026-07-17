@@ -21,6 +21,8 @@ impl Literal {
 pub enum Type {
     Int,
     UInt,
+    Int8,
+    UInt8,
     Bool,
     Str,
     Char,

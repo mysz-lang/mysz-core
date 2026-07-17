@@ -74,8 +74,10 @@ fn get_or_create_block(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType {
+    Int8,
     Int32,
     Int64,
+    UInt8,
     UInt32,
     UInt64,
     Char,
@@ -88,6 +90,7 @@ impl BackendType {
         match self {
             BackendType::Char => types::I8,
             BackendType::Bool => types::I8,
+            BackendType::Int8 | BackendType::UInt8 => types::I8,
             BackendType::Int32 | BackendType::UInt32 => types::I32,
             BackendType::Int64 | BackendType::UInt64 => types::I64,
             BackendType::Ptr => ptr_type,
@@ -98,6 +101,7 @@ impl BackendType {
         match self {
             BackendType::Char => 1,
             BackendType::Bool => 1,
+            BackendType::Int8 | BackendType::UInt8 => 1,
             BackendType::Int32 | BackendType::UInt32 => 4,
             BackendType::Int64 | BackendType::UInt64 => 8,
             BackendType::Ptr => 8,
@@ -127,6 +131,8 @@ impl BackendType {
             }
             Type::Any => BackendType::Ptr,
             Type::Int => BackendType::Int64,
+            Type::Int8 => BackendType::Int8,
+            Type::UInt8 => BackendType::UInt8,
             Type::UInt => BackendType::UInt64,
             Type::Char => BackendType::Char,
             Type::Bool => BackendType::Bool,

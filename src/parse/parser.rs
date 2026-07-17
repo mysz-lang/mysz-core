@@ -171,6 +171,14 @@ impl Parser {
                     self.advance();
                     Some(Type::UInt)
                 }
+                "i8" => {
+                    self.advance();
+                    Some(Type::Int8)
+                }
+                "u8" => {
+                    self.advance();
+                    Some(Type::UInt8)
+                }
                 "bool" => {
                     self.advance();
                     Some(Type::Bool)
