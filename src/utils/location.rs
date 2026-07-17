@@ -10,6 +10,6 @@ impl Location {
 }
 impl std::fmt::Display for Location {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "li = {}, co = {}", self.line, self.col)
+        write!(f, "li = {}, co = {}", self.line + 1, self.col)
     }
 }
