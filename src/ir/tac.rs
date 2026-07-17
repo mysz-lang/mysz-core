@@ -36,6 +36,13 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone)]
+pub enum CastType {
+    BitCast,
+    Extend,
+    Truncate,
+}
+
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Assign {
         dst: String,
@@ -53,6 +60,13 @@ pub enum Instruction {
         dst: String,
         op: IrOp,
         value: Value,
+    },
+
+    Cast {
+        dst: String,
+        cast_ty: CastType,
+        value: Value,
+        to_type: Type, // Storing the target type is incredibly useful for the backend!
     },
 
     Label(String),

@@ -55,7 +55,7 @@ pub enum BinaryOp {
     Gt,
     GtE,
     Lt,
-    LtE,
+    LtE
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOp {
@@ -98,6 +98,11 @@ pub enum ExprKind {
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
+    },
+
+    Cast {
+        left: Box<Expr>,
+        right: Type,
     },
 
     Unary {

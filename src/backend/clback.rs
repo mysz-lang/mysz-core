@@ -6,7 +6,7 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ir::ir::StructLayout;
-use crate::ir::tac::{Instruction, IrOp, ScopedMap, Value};
+use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
 use crate::parse::parsing::Type;
 use crate::semantics::analysis::FunctionSignature;
 
@@ -928,6 +928,58 @@ impl CraneliftBackend {
 
                     call_args.push(val);
                     call_arg_types.push(arg_ty);
+                }
+                Instruction::Cast {
+                    dst: dest_name,
+                    cast_ty,
+                    value,
+                    to_type,
+                } => {
+                    // 1. Lower the incoming value to a Cranelift Value
+                    let source_val = self.lower_value(
+                        &mut builder,
+                        value,
+                        &var_types,
+                        &mut var_map,
+                        &mut var_idx,
+                        &stack_slot_map,
+                        ptr_type,
+                    );
+
+                    let dest_backend_ty = BackendType::from_frontend(&to_type);
+                    let clif_target_ty = dest_backend_ty.to_clif_type(ptr_type);
+
+                    let casted_val = match cast_ty {
+                        CastType::BitCast => {
+                            // A bitcast reinterprets the bits without changing them
+                            builder.ins().bitcast(clif_target_ty, MemFlags::new(), source_val)
+                        }
+                        CastType::Extend => {
+                            // If signed use ireduce/sextend. For safety with generic ints, 
+                            // standard zero/sign extension depending on signedness layout:
+                            // Assuming unsigned/zero-extension default here:
+                            builder.ins().uextend(clif_target_ty, source_val)
+                        }
+                        CastType::Truncate => {
+                            // High bits are chopped off
+                            builder.ins().ireduce(clif_target_ty, source_val)
+                        }
+                    };
+
+                    // 4. Save the result back into your backend's storage tracking
+                    if let Some(&slot) = stack_slot_map.get(dest_name) {
+                        builder.ins().stack_store(casted_val, slot, 0);
+                    } else {
+                        let v_dest = get_or_create_var(
+                            &mut builder,
+                            &mut var_map,
+                            &mut var_idx,
+                            dest_name,
+                            dest_backend_ty,
+                            ptr_type,
+                        );
+                        builder.def_var(v_dest, casted_val);
+                    }
                 }
                 Instruction::Call {
                     name: callee_name,

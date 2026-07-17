@@ -417,7 +417,8 @@ impl Lexer {
         let tb_replace = nl_replace.replace("\\t", "\t");
         let rb_replace = tb_replace.replace("\\r", "\r");
         let c0_replace = rb_replace.replace("\\0", "\0");
-        return c0_replace;
+        let qt_replace = c0_replace.replace("\\\"", "\"");
+        return qt_replace;
     }
 
     fn lex_string(&mut self) -> Token {
@@ -427,8 +428,14 @@ impl Lexer {
 
         while let Some(ch) = self.get_char() {
             if ch != '"' {
-                string.push(ch);
-                self.advance();
+                if ch == '\\' && self.peek(1).is_some() && self.peek(1).unwrap() == '"' {
+                    string.push('\\');
+                    string.push('"');
+                    self.advance(); self.advance();
+                } else {
+                    string.push(ch);
+                    self.advance();
+                }
             } else {
                 self.advance();
                 break;
@@ -495,6 +502,7 @@ impl Lexer {
             "sizeof" => TokenType::SizeOfKeyword,
             "break" => TokenType::BreakKeyword,
             "const" => TokenType::ConstKeyword,
+            "as" => TokenType::AsKeyword,
             _ => TokenType::Identifier,
         };
 

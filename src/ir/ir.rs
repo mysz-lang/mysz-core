@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ir::tac::{Instruction, IrOp, ScopedMap, Value},
-    parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
-    utils::typesafe::type_to_string,
+    ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value}, parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp}, utils::typesafe::type_to_string,
 };
 
 pub struct TempGen {
@@ -378,6 +376,7 @@ impl IRGen {
 
     pub fn expr_type(&mut self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
+            ExprKind::Cast { left: _, right } => Some(right.clone()),
             ExprKind::Sizeof { .. } => Some(Type::Int),
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
@@ -594,6 +593,48 @@ impl IRGen {
                 let size = self.type_size(&resolved_ty);
                 Value::Const(size)
             }
+
+
+            ExprKind::Cast { left, right } => {
+                let val_to_cast = self.gen_expr(left, None);
+                
+                let from_type = self.expr_type(left).unwrap_or(Type::Int);
+                let to_type = self.resolve_type(right);
+
+                let cast_kind = match (&from_type, &to_type) {
+                    // Pointer to pointer
+                    (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
+                    
+                    // ptr<char> -> str (they're the exact same, just make sure the ptr<char> has a direct block of characters that end with \0 following it)
+                    (Type::Ptr(_), Type::Str) => CastType::BitCast,
+
+                    // Integer size transformations
+                    (Type::Int, Type::Int) => {
+                        let from_size = self.type_size(&from_type);
+                        let to_size = self.type_size(&to_type);
+                        if from_size < to_size { 
+                            CastType::Extend 
+                        } else { 
+                            CastType::Truncate 
+                        }
+                    }
+                    
+                    // Fallback
+                    _ => CastType::BitCast,
+                };
+
+                let result_temp = self.next_temp_with_type(to_type.clone());
+                
+                self.code.push(Instruction::Cast {
+                    dst: result_temp.clone(),
+                    cast_ty: cast_kind,
+                    value: val_to_cast,
+                    to_type,
+                });
+                
+                Value::Temp(result_temp)
+            }
+
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(v) => Value::Const(*v),
                 Literal::String(s) => Value::Str(s.clone()),
@@ -1692,6 +1733,7 @@ impl IRGen {
                 Instruction::Load { dst, ptr, ty } => {
                     println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr)
                 }
+                Instruction::Cast { dst, cast_ty, value, to_type } => println!("{dst} = {:?} as {:?} [casttype: {:?}]", value, to_type, cast_ty)
             }
         }
     }

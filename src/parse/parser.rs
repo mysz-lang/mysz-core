@@ -869,7 +869,7 @@ impl Parser {
     }
 
     fn parse_muldiv(&mut self) -> Option<Expr> {
-        let mut left = self.parse_unary()?;
+        let mut left = self.parse_cast()?;
 
         while matches!(
             self.get_token().map(|t| t.ttype.clone()),
@@ -885,7 +885,7 @@ impl Parser {
             };
 
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_cast()?;
             let span = left.span.clone();
 
             left = Expr {
@@ -896,6 +896,29 @@ impl Parser {
                 },
                 span,
             };
+        }
+
+        Some(left)
+    }
+
+    fn parse_cast(&mut self) -> Option<Expr> {
+        let mut left = self.parse_unary()?;
+
+        while matches!(
+            self.get_token().map(|t| t.ttype.clone()),
+            Some(TokenType::AsKeyword)
+        ) {
+            self.advance();
+            let right = self.parse_type()?;
+            let span = left.span.clone();
+
+            left = Expr {
+                kind: ExprKind::Cast {
+                    left: Box::new(left),
+                    right: right
+                },
+                span
+            }
         }
 
         Some(left)

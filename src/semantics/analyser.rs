@@ -291,6 +291,18 @@ impl Analyser {
     ) -> Result<Type, String> {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
+            ExprKind::Cast { left, right } => {
+                let leftty = self.check_expr(left.as_ref(), None)?;
+                if types_compatible(&leftty, right) {
+                    return Ok(right.clone());
+                }
+                return Err(format!(
+                    "Type Error [{}]: Cannot cast '{}' to '{}'",
+                    expr.span,
+                    type_to_string(&leftty),
+                    type_to_string(right)
+                ))
+            },
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => {
                     if let Some(Type::UInt) = expected_type {
