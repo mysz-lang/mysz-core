@@ -890,7 +890,7 @@ impl Analyser {
                         self.validate_type_exists(&instantiated, &ident.location)?;
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
-                        if !types_compatible(&instantiated, &expr_type) {
+                        if &instantiated != &expr_type {
                             return Err(format!(
                                 "Type Error [{}]: Variable '{}' declared as '{}' but assigned type '{}'",
                                 expr_node.span,
@@ -917,7 +917,7 @@ impl Analyser {
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                    if !types_compatible(&existing_symbol.ty, &variable_type) {
+                    if &existing_symbol.ty != &variable_type {
                         return Err(format!(
                             "Type Error [{}]: Cannot reassign type '{}' to variable '{}' of type '{}'",
                             ident.location,
@@ -937,7 +937,7 @@ impl Analyser {
                 let target_resolved_type = self.check_expr(target, None)?;
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                if !types_compatible(&target_resolved_type, &expr_type) {
+                if &target_resolved_type != &expr_type {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{}' to target location of type '{}'",
                         expr.span,
@@ -962,7 +962,7 @@ impl Analyser {
 
                 let expr_type = self.check_expr(expr, Some(&expected_ty))?;
 
-                if !types_compatible(&expected_ty, &expr_type) {
+                if &expected_ty != &expr_type {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{}' to variable '{}' of type '{}'",
                         expr.span,
@@ -1173,7 +1173,7 @@ impl Analyser {
                     None => Type::Void,
                 };
 
-                if !types_compatible(&expected, &actual_type) {
+                if &expected != &actual_type {
                     return Err(format!(
                         "Type Error [{}]: Function expects return type '{}', found '{}'",
                         span,
