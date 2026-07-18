@@ -44,9 +44,20 @@ fn json_error_from_string(file: &str, message: &str) -> JsonError {
     }
 }
 
-/// Maps a file's path (as it appears in `Location::file`) to its source
-/// text, so diagnostics can be reported against the file that actually
-/// produced them rather than always against the root file.
+fn json_error_from_analyser_error(err: &AnalyserError) -> JsonError {
+    let (location, message) = match err {
+        AnalyserError::TypeError { location, message } => (location, message),
+        AnalyserError::SemanticError { location, message } => (location, message),
+    };
+    JsonError {
+        file: location.file.to_string(),
+        line: location.line,
+        column: location.col,
+        message: message.clone(),
+        severity: "error".to_string(),
+    }
+}
+
 type SourceMap = HashMap<String, String>;
 
 fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
@@ -142,11 +153,96 @@ fn format_parser_errors(errors: &[crate::parse::parsing::ParserError], source: &
     error_messages.join("\n")
 }
 
-/// Parses the `file = .., li = .., co = ..` (or, for file-less synthetic
-/// locations, plain `li = .., co = ..`) fragment out of a semantic-error
-/// string, and formats it against the correct file's source - looked up
-/// from `sources` when the location carries a file, falling back to the
-/// root file otherwise.
+fn parse_and_flatten<P: AsRef<Path>>(
+    input_path: P,
+    custom_search_paths: &[PathBuf],
+    json_output: bool,
+) -> Result<(Program, SourceMap), String> {
+    let input_path = input_path.as_ref().canonicalize().map_err(|e| {
+        if json_output {
+            let json_err = json_error_from_string(
+                &input_path.as_ref().display().to_string(),
+                &format!("Failed to canonicalize path: {}", e),
+            );
+            serde_json::to_string(&json_err).unwrap()
+        } else {
+            format_simple_error(input_path.as_ref(), &format!("Failed to canonicalize path: {}", e))
+        }
+    })?;
+
+    let mut search_paths = Vec::new();
+    if let Some(parent) = input_path.parent() {
+        search_paths.push(parent.to_path_buf());
+    }
+    search_paths.extend_from_slice(custom_search_paths);
+
+    let (source, tokens) = read_and_lex_file(&input_path, json_output)?;
+
+    let mut parser = myszparser::new(tokens);
+    parser.parse();
+
+    if !parser.parser_errs.is_empty() {
+        if json_output {
+            let json_errors: Vec<JsonError> = parser.parser_errs
+                .iter()
+                .map(json_error_from_parser_error)
+                .collect();
+            return Err(serde_json::to_string(&json_errors).unwrap());
+        } else {
+            let error_report = format_parser_errors(&parser.parser_errs, &source);
+            return Err(format!("Parser errors:\n{}", error_report));
+        }
+    }
+
+    let mut visiting = HashSet::new();
+    let mut processed = HashSet::new();
+    visiting.insert(input_path.clone());
+
+    let mut sources: SourceMap = HashMap::new();
+    sources.insert(input_path.display().to_string(), source.clone());
+
+    let flattened_statements = flatten_program_statements(
+        parser.ast.statements,
+        &search_paths,
+        &mut visiting,
+        &mut processed,
+        &mut sources,
+        json_output,
+        &input_path,
+    )?;
+
+    let program = Program {
+        statements: flattened_statements,
+    };
+
+    Ok((program, sources))
+}
+
+pub fn check_root_file<P: AsRef<Path>>(
+    input_path: P,
+    custom_search_paths: &[PathBuf],
+    json_output: bool,
+) -> Result<(), String> {
+    let (program, sources) = parse_and_flatten(&input_path, custom_search_paths, json_output)?;
+    let file_path = input_path.as_ref().canonicalize().unwrap();
+    let root_source = sources
+        .get(&file_path.display().to_string())
+        .map(|s| s.as_str());
+
+    let mut analyser = Analyser::new();
+    if let Err(err) = analyser.analyse(&program) {
+        if json_output {
+            let json_err = json_error_from_analyser_error(&err);
+            return Err(serde_json::to_string(&json_err).unwrap());
+        } else {
+            let formatted = format_analyser_error(&err, &sources, root_source);
+            return Err(format!("Semantic error:\n{}", formatted));
+        }
+    }
+
+    Ok(())
+}
+
 fn format_analyser_error(
     err: &AnalyserError,
     sources: &SourceMap,
@@ -157,7 +253,6 @@ fn format_analyser_error(
         AnalyserError::SemanticError { location, message } => (location, message),
     };
     let file_path_str = location.file.as_ref();
-    // Look up the source text for that file; fallback to root if missing.
     let source = sources
         .get(file_path_str)
         .map(|s| s.as_str())
@@ -223,8 +318,8 @@ fn flatten_program_statements(
     visiting: &mut HashSet<PathBuf>,
     processed: &mut HashSet<PathBuf>,
     sources: &mut SourceMap,
-    json_output: bool, // new
-    root_file_path: &Path, // added to have a file for dummy errors
+    json_output: bool,
+    root_file_path: &Path,
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
@@ -328,10 +423,8 @@ pub fn compile_root_file<P: AsRef<Path>>(
     }
     search_paths.extend_from_slice(custom_search_paths);
 
-    // Read and lex the main file
     let (source, tokens) = read_and_lex_file(&input_path, json_output)?;
 
-    // Parse the main file
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -348,7 +441,6 @@ pub fn compile_root_file<P: AsRef<Path>>(
         }
     }
 
-    // Process imports
     let mut visiting = HashSet::new();
     let mut processed = HashSet::new();
     visiting.insert(input_path.clone());
@@ -392,11 +484,9 @@ pub fn compile_ast_program(
             .as_ref(),
     );
 
-    // Semantic analysis
     let mut analyser = Analyser::new();
     if let Err(err) = analyser.analyse(program) {
         if json_output {
-            // Serialize the error to JSON
             let location = match err.clone() {
                 AnalyserError::SemanticError { location, .. } | AnalyserError::TypeError { location, .. }=> location
             };
@@ -421,7 +511,6 @@ pub fn compile_ast_program(
             return Err(format!("Semantic error:\n{}", formatted));
         }
     }
-    // IR generation
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
     for (name, sig) in &analyser.structs {

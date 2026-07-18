@@ -55,10 +55,6 @@ pub struct Lexer {
     pub line: usize,
     pub col: usize,
     pub tokens: Vec<Token>,
-    /// Identifies which source file this lexer is reading from - stamped
-    /// onto every `Location` this lexer produces, so downstream diagnostics
-    /// (parser errors, semantic errors) can report the correct file even
-    /// after multiple modules' ASTs have been flattened together.
     pub file: std::rc::Rc<str>,
 }
 

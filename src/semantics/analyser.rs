@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 pub enum AnalyserError {
     TypeError { location: Location, message: String },
     SemanticError { location: Location, message: String },
-    // If there is ever an error without a location, add a variant here.
 }
 impl AnalyserError {
     pub fn type_error(location: Location, message: impl Into<String>) -> Self {
@@ -357,10 +356,6 @@ impl Analyser {
             ExprKind::Cast { left, right } => {
                 let leftty = self.check_expr(left.as_ref(), None)?;
                 if types_compatible(&leftty, right) {
-                    // Coercive: casting is explicitly the mechanism for the
-                    // language's defined implicit conversions (int widening,
-                    // str <-> ptr<char>), so this is the one place they
-                    // *should* be reachable through an explicit operation.
                     return Ok(right.clone());
                 }
                 return Err(AnalyserError::type_error(
