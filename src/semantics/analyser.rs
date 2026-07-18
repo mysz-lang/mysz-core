@@ -691,9 +691,11 @@ impl Analyser {
                     | BinaryOp::NEq
                     | BinaryOp::Gt
                     | BinaryOp::GtE
+                    | BinaryOp::And
+                    | BinaryOp::Or
                     | BinaryOp::Lt
                     | BinaryOp::LtE => {
-                        if types_compatible(&left_type, &right_type) {
+                        if &left_type == &right_type {
                             Ok(Type::Bool)
                         } else {
                             Err(format!(

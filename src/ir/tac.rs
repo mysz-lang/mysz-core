@@ -21,6 +21,8 @@ pub enum IrOp {
     GtE, // >=
     Lt,  // <
     LtE, // <=
+    And, // &&
+    Or,  // ||
 }
 
 #[derive(Debug, Clone)]

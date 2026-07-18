@@ -58,6 +58,8 @@ pub enum BinaryOp {
     GtE,
     Lt,
     LtE,
+    And,
+    Or,
 }
 #[derive(Debug, Clone)]
 pub enum UnaryOp {

@@ -612,7 +612,10 @@ impl IRGen {
                     (Type::Ptr(_), Type::Str) => CastType::BitCast,
 
                     // Integer size transformations
-                    (Type::Int | Type::UInt | Type::Int8 | Type::UInt8, Type::Int | Type::UInt | Type::Int8 | Type::UInt8) => {
+                    (
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                    ) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
                         if from_size < to_size {
@@ -1035,6 +1038,8 @@ impl IRGen {
                     BinaryOp::NEq => IrOp::NEq,
                     BinaryOp::Gt => IrOp::Gt,
                     BinaryOp::GtE => IrOp::GtE,
+                    BinaryOp::And => IrOp::And,
+                    BinaryOp::Or => IrOp::Or,
                     BinaryOp::Lt => IrOp::Lt,
                     BinaryOp::LtE => IrOp::LtE,
                     BinaryOp::Mod => IrOp::Mod,

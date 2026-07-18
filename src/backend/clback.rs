@@ -1417,6 +1417,50 @@ impl CraneliftBackend {
 
                         IrOp::Eq => builder.ins().icmp(IntCC::Equal, lhs_val, rhs_val),
                         IrOp::NEq => builder.ins().icmp(IntCC::NotEqual, lhs_val, rhs_val),
+
+                        IrOp::And => {
+                            // 1. Convert operands to boolean flags (i8)
+                            let lhs_bool = builder.ins().icmp_imm(IntCC::NotEqual, lhs_val, 0);
+                            let rhs_bool = builder.ins().icmp_imm(IntCC::NotEqual, rhs_val, 0);
+
+                            // 2. Perform the logical AND (yields an i8 flag)
+                            let res_bool = builder.ins().band(lhs_bool, rhs_bool);
+
+                            // 3. Match the destination type perfectly
+                            let cl_type = dest_ty.to_clif_type(ptr_type);
+                            let target_bits = cl_type.bits();
+
+                            // An icmp/band result has 8 bits in Cranelift scalar context
+                            if target_bits > 8 {
+                                builder.ins().uextend(cl_type, res_bool)
+                            } else if target_bits < 8 {
+                                builder.ins().ireduce(cl_type, res_bool)
+                            } else {
+                                res_bool // They are both exactly 8 bits (e.g. types::I8)
+                            }
+                        }
+
+                        IrOp::Or => {
+                            // 1. Convert operands to boolean flags (i8)
+                            let lhs_bool = builder.ins().icmp_imm(IntCC::NotEqual, lhs_val, 0);
+                            let rhs_bool = builder.ins().icmp_imm(IntCC::NotEqual, rhs_val, 0);
+
+                            // 2. Perform the logical OR (yields an i8 flag)
+                            let res_bool = builder.ins().bor(lhs_bool, rhs_bool);
+
+                            // 3. Match the destination type perfectly
+                            let cl_type = dest_ty.to_clif_type(ptr_type);
+                            let target_bits = cl_type.bits();
+
+                            if target_bits > 8 {
+                                builder.ins().uextend(cl_type, res_bool)
+                            } else if target_bits < 8 {
+                                builder.ins().ireduce(cl_type, res_bool)
+                            } else {
+                                res_bool // They are both exactly 8 bits (e.g. types::I8)
+                            }
+                        }
+
                         IrOp::Lt => {
                             let cond = if is_unsigned {
                                 IntCC::UnsignedLessThan

@@ -54,7 +54,7 @@ pub fn normalise_type(ty: &Type) -> Type {
 
 #[inline]
 pub fn is_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8 )
+    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8)
 }
 
 #[inline]
@@ -64,7 +64,10 @@ pub fn is_signed_integer(ty: &Type) -> bool {
 
 #[inline]
 pub fn is_truthy_type(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str)
+    matches!(
+        ty,
+        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str
+    )
 }
 
 pub fn types_compatible(expected: &Type, from: &Type) -> bool {

@@ -36,11 +36,10 @@ impl Parser {
     }
 
     fn throw(&mut self, etype: ParserErrorType, message: String, location: Location) -> Token {
-
         self.parser_errs.push(ParserError {
             etype,
             message,
-            location: location.clone()
+            location: location.clone(),
         });
 
         Token {
@@ -73,7 +72,7 @@ impl Parser {
                     "Expected {:?}, found {:?} '{:?}'",
                     ttype, tk.ttype, tk.value
                 ),
-                tk.location
+                tk.location,
             );
             None
         }
@@ -227,7 +226,7 @@ impl Parser {
                 self.throw(
                     ParserErrorType::UnexpectedTokenTypeError,
                     format!("Expected type metadata, found {:?}", tk.ttype),
-                    tk.location
+                    tk.location,
                 );
                 None
             }
@@ -277,7 +276,7 @@ impl Parser {
                 self.throw(
                     ParserErrorType::MalformedStatementError,
                     format!("Statement did not finish with semicolon ';'"),
-                    tk.location
+                    tk.location,
                 );
             }
         }
@@ -331,7 +330,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected identifier in use path, found {:?}", other),
-                        use_tok.location.clone()
+                        use_tok.location.clone(),
                     );
                     return None;
                 }
@@ -349,7 +348,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected '::' or ';', found {:?}", other),
-                        use_tok.location.clone()
+                        use_tok.location.clone(),
                     );
                     return None;
                 }
@@ -415,7 +414,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected parameter name, found {:?}", other),
-                        self.get_token().unwrap().location.clone()
+                        self.get_token().unwrap().location.clone(),
                     );
                     break;
                 }
@@ -442,7 +441,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected ',' or {:?}, found {:?}", ending, other),
-                        self.get_token().unwrap().location.clone()
+                        self.get_token().unwrap().location.clone(),
                     );
                     break;
                 }
@@ -478,7 +477,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected ',' or ')', found {:?}", other),
-                        self.get_token().unwrap().location.clone()
+                        self.get_token().unwrap().location.clone(),
                     );
                     break;
                 }
@@ -680,7 +679,7 @@ impl Parser {
                 self.throw(
                     ParserErrorType::UnexpectedTokenTypeError,
                     "Expected ',' or '}' after struct field".to_string(),
-                    self.get_token().unwrap().location.clone()
+                    self.get_token().unwrap().location.clone(),
                 );
                 return None;
             }
@@ -779,7 +778,7 @@ impl Parser {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,
                         format!("Expected ',' or ']', found {:?}", other),
-                        self.get_token().unwrap().location.clone()
+                        self.get_token().unwrap().location.clone(),
                     );
                     return None;
                 }
@@ -799,7 +798,37 @@ impl Parser {
             }
             _ => {}
         }
-        self.parse_equality()
+        self.parse_andor()
+    }
+
+    fn parse_andor(&mut self) -> Option<Expr> {
+        let mut left = self.parse_equality()?;
+
+        while matches!(
+            self.get_token().map(|t| t.ttype.clone()),
+            Some(TokenType::And | TokenType::Or)
+        ) {
+            let op_token = self.get_token()?.clone();
+            self.advance();
+
+            let op = match op_token.ttype {
+                TokenType::And => BinaryOp::And,
+                TokenType::Or => BinaryOp::Or,
+                _ => unreachable!(),
+            };
+
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                },
+                span: op_token.location,
+            };
+        }
+
+        Some(left)
     }
 
     fn parse_equality(&mut self) -> Option<Expr> {
@@ -815,6 +844,7 @@ impl Parser {
             let op = match op_token.ttype {
                 TokenType::Equals => BinaryOp::Eq,
                 TokenType::NotEquals => BinaryOp::NEq,
+
                 _ => unreachable!(),
             };
 
@@ -1071,7 +1101,7 @@ impl Parser {
                         self.throw(
                             ParserErrorType::UnexpectedTokenTypeError,
                             "Expected function name before parenthesis".to_string(),
-                            self.get_token().unwrap().location.clone()
+                            self.get_token().unwrap().location.clone(),
                         );
                         return None;
                     }
@@ -1192,7 +1222,7 @@ impl Parser {
                                     self.throw(
                                         ParserErrorType::UnexpectedTokenTypeError,
                                         "Expected ',' or '}' in struct initializer".to_string(),
-                                        self.get_token().unwrap().location.clone()
+                                        self.get_token().unwrap().location.clone(),
                                     );
                                     return None;
                                 }
@@ -1228,7 +1258,7 @@ impl Parser {
                 self.throw(
                     ParserErrorType::UnexpectedTokenTypeError,
                     format!("Unexpected token in expression: {:?}", tk.ttype),
-                    self.get_token().unwrap().location.clone()
+                    self.get_token().unwrap().location.clone(),
                 );
                 None
             }

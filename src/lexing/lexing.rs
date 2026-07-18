@@ -9,6 +9,8 @@ pub enum TokenType {
     GreaterThan,
     LessThanEquals,
     GreaterThanEquals,
+    Or,
+    And,
 
     // generic signs
     Assign,

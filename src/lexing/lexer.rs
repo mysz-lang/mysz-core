@@ -17,6 +17,9 @@ pub enum LexError {
     UnterminatedComment {
         location: Location,
     },
+    UnknownCharacter {
+        location: Location,
+    },
 }
 
 impl std::fmt::Display for LexError {
@@ -37,6 +40,9 @@ impl std::fmt::Display for LexError {
             }
             LexError::UnterminatedComment { location } => {
                 write!(f, "Unterminated multi-line comment at {:?}", location)
+            }
+            LexError::UnknownCharacter { location } => {
+                write!(f, "Unknown Character at {:?}", location)
             }
         }
     }
@@ -136,6 +142,10 @@ impl Lexer {
                         let t = self.lex_not()?;
                         self.add_token(t);
                     }
+                    '|' => {
+                        let t = self.lex_pipe()?;
+                        self.add_token(t);
+                    }
                     '>' => {
                         let t = self.lex_gt()?;
                         self.add_token(t);
@@ -145,7 +155,10 @@ impl Lexer {
                         self.add_token(t);
                     }
                     '.' => self.single_char(TokenType::Period)?,
-                    '&' => self.single_char(TokenType::Ampersand)?,
+                    '&' => {
+                        let t = self.lex_amp()?;
+                        self.add_token(t);
+                    }
                     '^' => self.single_char(TokenType::Star)?,
                     ':' => {
                         let t = self.lex_colon()?;
@@ -277,6 +290,50 @@ impl Lexer {
             location: loc,
             value: current.to_string(),
         })
+    }
+
+    fn lex_amp(&mut self) -> Result<Token, LexError> {
+        let loc = self.current_location();
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'&'",
+            location: loc.clone(),
+        })?;
+
+        if self.peek(1) == Some('&') {
+            let next = self.peek(1).unwrap();
+            self.advance();
+            self.advance();
+            return Ok(Token {
+                ttype: TokenType::And,
+                location: loc,
+                value: format!("{}{}", current, next),
+            });
+        }
+
+        self.advance();
+        Err(LexError::UnknownCharacter { location: loc })
+    }
+
+    fn lex_pipe(&mut self) -> Result<Token, LexError> {
+        let loc = self.current_location();
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'|'",
+            location: loc.clone(),
+        })?;
+
+        if self.peek(1) == Some('|') {
+            let next = self.peek(1).unwrap();
+            self.advance();
+            self.advance();
+            return Ok(Token {
+                ttype: TokenType::Or,
+                location: loc,
+                value: format!("{}{}", current, next),
+            });
+        }
+
+        self.advance();
+        Err(LexError::UnknownCharacter { location: loc })
     }
 
     fn lex_lt(&mut self) -> Result<Token, LexError> {
