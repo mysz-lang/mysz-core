@@ -4,6 +4,16 @@ use crate::utils::location::Location;
 use crate::utils::typesafe::*;
 use std::collections::{HashMap, HashSet};
 
+fn contains_generic_param(ty: &Type) -> bool {
+    match ty {
+        Type::GenericParam(_) => true,
+        Type::Ptr(inner) => contains_generic_param(inner),
+        Type::Array { element_type, .. } => contains_generic_param(element_type),
+        Type::GenericInstance { args, .. } => args.iter().any(contains_generic_param),
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 pub struct Analyser {
     pub scopes: Vec<Scope>,
@@ -77,6 +87,7 @@ impl Analyser {
             _ => ty.clone(),
         }
     }
+    
     fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
         match ty {
             Type::Ptr(inner) => {
@@ -94,6 +105,10 @@ impl Analyser {
                 let mut resolved_args = Vec::new();
                 for arg in args {
                     resolved_args.push(self.instantiate_generic_types(arg, span)?);
+                }
+
+                if resolved_args.iter().any(contains_generic_param) {
+                    return Ok(Type::GenericInstance { name: name.clone(), args: resolved_args });
                 }
 
                 let template = self
@@ -145,6 +160,7 @@ impl Analyser {
 
                 Ok(Type::Struct(mangled))
             }
+            Type::GenericParam(p) => Ok(Type::GenericParam(p.clone())),
             _ => Ok(ty.clone()),
         }
     }
@@ -294,6 +310,10 @@ impl Analyser {
             ExprKind::Cast { left, right } => {
                 let leftty = self.check_expr(left.as_ref(), None)?;
                 if types_compatible(&leftty, right) {
+                    // Coercive: casting is explicitly the mechanism for the
+                    // language's defined implicit conversions (int widening,
+                    // str <-> ptr<char>), so this is the one place they
+                    // *should* be reachable through an explicit operation.
                     return Ok(right.clone());
                 }
                 return Err(format!(
@@ -335,7 +355,7 @@ impl Analyser {
 
                     for el in elements {
                         let el_type = self.check_expr(el, Some(&element_type))?;
-                        if &element_type != &el_type {
+                        if !types_equal(&element_type, &el_type) {
                             return Err(format!(
                                 "Type Error [{}]: Heterogeneous array literals are not allowed. Expected elements of type '{}', found '{}'.",
                                 el.span,
@@ -438,7 +458,7 @@ impl Analyser {
                     })?;
 
                     let actual_type = self.check_expr(field_expr, Some(expected_field_ty))?;
-                    if expected_field_ty != &actual_type {
+                    if !types_equal(expected_field_ty, &actual_type) {
                         return Err(format!(
                             "Type Error [{}]: Field '{}' of struct '{}' expects type '{}', but found '{}'.",
                             field_expr.span,
@@ -533,12 +553,18 @@ impl Analyser {
                     resolved_func_name = mangle_name(&callee.value, &inst_args);
 
                     if !self.functions.contains_key(&resolved_func_name) {
-                        let mapping: HashMap<String, Type> = template
-                            .generic_params
-                            .iter()
-                            .cloned()
-                            .zip(inst_args.iter().cloned())
-                            .collect();
+                        let mut mapping: HashMap<String, Type> = HashMap::new();
+                        for (param_name, concrete_type) in
+                            template.generic_params.iter().zip(&inst_args)
+                        {
+                            // 1. Map the raw identifier (e.g., "T")
+                            mapping.insert(param_name.clone(), concrete_type.clone());
+
+                            // 2. CRITICAL: Map the mangled variant string (e.g., "gparam__T")
+                            // Check your type_to_mangled_string scheme to ensure this matches exactly!
+                            mapping
+                                .insert(format!("gparam__{}", param_name), concrete_type.clone());
+                        }
 
                         let substituted_return =
                             self.substitute_type(&template.return_type, &mapping);
@@ -594,7 +620,7 @@ impl Analyser {
                             },
                         ) => {
                             if **expected_elem != Type::Any
-                                && expected_elem != actual_elem
+                                && !types_equal(expected_elem, actual_elem)
                             {
                                 return Err(format!(
                                     "Type Error [{}]: Argument {} to '{}' expects array of '{}', found array of '{}'",
@@ -619,7 +645,7 @@ impl Analyser {
                         }
 
                         _ => {
-                            if expected != &arg_type {
+                            if !types_equal(expected, &arg_type) {
                                 return Err(format!(
                                     "Type Error [{}]: Argument {} to '{}' expects '{}', found '{}'",
                                     arg.span,
@@ -635,6 +661,7 @@ impl Analyser {
 
                 Ok(return_type)
             }
+
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;
@@ -652,9 +679,7 @@ impl Analyser {
                                     type_to_string(&right_type)
                                 ))
                             }
-                        } else if &Type::Str != &left_type
-                            && &Type::Str != &right_type
-                        {
+                        } else if &Type::Str != &left_type && &Type::Str != &right_type {
                             Ok(Type::Str)
                         } else {
                             Err(format!(
@@ -667,7 +692,7 @@ impl Analyser {
                     }
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                         if is_integer(&left_type) && is_integer(&right_type) {
-                            if &left_type != &right_type {
+                            if types_equal(&left_type, &right_type) {
                                 Ok(left_type)
                             } else {
                                 Err(format!(
@@ -695,7 +720,7 @@ impl Analyser {
                     | BinaryOp::Or
                     | BinaryOp::Lt
                     | BinaryOp::LtE => {
-                        if &left_type == &right_type {
+                        if types_equal(&left_type, &right_type) {
                             Ok(Type::Bool)
                         } else {
                             Err(format!(
@@ -857,7 +882,7 @@ impl Analyser {
                             self.instantiate_generic_types(explicit_type, &name.location)?;
                         self.validate_type_exists(&instantiated, &name.location)?;
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
-                        if &instantiated == &expr_type {
+                        if !types_equal(&instantiated, &expr_type) {
                             return Err(format!(
                                 "Type Error [{}]: Constant '{}' declared as '{}' but initializer has type '{}'",
                                 expr_node.span,
@@ -892,7 +917,7 @@ impl Analyser {
                         self.validate_type_exists(&instantiated, &ident.location)?;
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
-                        if &instantiated != &expr_type {
+                        if !types_equal(&instantiated, &expr_type) {
                             return Err(format!(
                                 "Type Error [{}]: Variable '{}' declared as '{}' but assigned type '{}'",
                                 expr_node.span,
@@ -919,7 +944,7 @@ impl Analyser {
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
-                    if &existing_symbol.ty != &variable_type {
+                    if !types_equal(&existing_symbol.ty, &variable_type) {
                         return Err(format!(
                             "Type Error [{}]: Cannot reassign type '{}' to variable '{}' of type '{}'",
                             ident.location,
@@ -939,7 +964,7 @@ impl Analyser {
                 let target_resolved_type = self.check_expr(target, None)?;
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
-                if &target_resolved_type != &expr_type {
+                if !types_equal(&target_resolved_type, &expr_type) {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{}' to target location of type '{}'",
                         expr.span,
@@ -964,7 +989,7 @@ impl Analyser {
 
                 let expr_type = self.check_expr(expr, Some(&expected_ty))?;
 
-                if &expected_ty != &expr_type {
+                if !types_equal(&expected_ty, &expr_type) {
                     return Err(format!(
                         "Type Error [{}]: Cannot assign type '{}' to variable '{}' of type '{}'",
                         expr.span,
@@ -1110,15 +1135,14 @@ impl Analyser {
                 for param in params {
                     let ptype = match &param.ptype {
                         Some(pt) => {
-                            let ty = if is_generic {
+                            if is_generic {
                                 pt.clone()
                             } else {
                                 let instantiated =
                                     self.instantiate_generic_types(pt, &param.name.location)?;
                                 self.validate_type_exists(&instantiated, &param.name.location)?;
                                 instantiated
-                            };
-                            ty
+                            }
                         }
                         None => Type::Any,
                     };
@@ -1175,7 +1199,7 @@ impl Analyser {
                     None => Type::Void,
                 };
 
-                if &expected != &actual_type {
+                if !types_equal(&expected, &actual_type) {
                     return Err(format!(
                         "Type Error [{}]: Function expects return type '{}', found '{}'",
                         span,

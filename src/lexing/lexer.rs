@@ -315,7 +315,7 @@ impl Lexer {
             ttype: TokenType::Ampersand,
             location: loc,
             value: current.to_string(),
-        })
+        });
     }
 
     fn lex_pipe(&mut self) -> Result<Token, LexError> {

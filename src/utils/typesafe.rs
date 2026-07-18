@@ -70,31 +70,35 @@ pub fn is_truthy_type(ty: &Type) -> bool {
     )
 }
 
+pub enum TypeCheckMode {
+    Strict,   // exact match only
+    Coercive, // allows implicit conversions
+}
+
+pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
+    if expected == &Type::Any || found == &Type::Any {
+        return true;
+    }
+    if expected == found {
+        return true;
+    }
+    match mode {
+        TypeCheckMode::Strict => false,
+        TypeCheckMode::Coercive => {
+            if is_integer(expected) && is_integer(found) { return true; }
+            if found == &Type::Ptr(Box::new(Type::Char)) && expected == &Type::Str { return true; }
+            if expected == &Type::Ptr(Box::new(Type::Char)) && found == &Type::Str { return true; }
+            false
+        }
+    }
+}
+
 pub fn types_compatible(expected: &Type, from: &Type) -> bool {
-    if expected == &Type::Any || from == &Type::Any {
-        return true;
-    }
+    types_match(expected, from, TypeCheckMode::Coercive)
+}
 
-    let norm_expected = normalise_type(expected);
-    let norm_from = normalise_type(from);
-
-    if norm_expected == norm_from {
-        return true;
-    }
-
-    if is_integer(&norm_from) && is_integer(&norm_expected) {
-        return true;
-    }
-
-    if norm_from == Type::Ptr(Box::new(Type::Char)) && norm_expected == Type::Str {
-        return true;
-    }
-
-    if norm_expected == Type::Ptr(Box::new(Type::Char)) && norm_from == Type::Str {
-        return true;
-    }
-
-    false
+pub fn types_equal(expected: &Type, from: &Type) -> bool {
+    types_match(expected, from, TypeCheckMode::Strict)
 }
 
 pub fn type_to_string(ty: &Type) -> String {

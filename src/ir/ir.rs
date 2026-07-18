@@ -620,8 +620,10 @@ impl IRGen {
                         let to_size = self.type_size(&to_type);
                         if from_size < to_size {
                             CastType::Extend
-                        } else {
+                        } else if from_size > to_size {
                             CastType::Truncate
+                        } else {
+                            CastType::BitCast
                         }
                     }
 
