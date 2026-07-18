@@ -1027,7 +1027,7 @@ impl CraneliftBackend {
                         if let Some(&id) = self.declared_funcs.get(stripped) {
                             id
                         } else {
-                            let linkage = if callee_name == "main" {
+                            let linkage = if public {
                                 Linkage::Export
                             } else {
                                 Linkage::Local
