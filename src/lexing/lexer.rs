@@ -311,7 +311,11 @@ impl Lexer {
         }
 
         self.advance();
-        Err(LexError::UnknownCharacter { location: loc })
+        return Ok(Token {
+            ttype: TokenType::Ampersand,
+            location: loc,
+            value: current.to_string(),
+        })
     }
 
     fn lex_pipe(&mut self) -> Result<Token, LexError> {
