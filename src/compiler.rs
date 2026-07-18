@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-
+use serde_derive::Serialize;
 use crate::backend::clback;
 use crate::ir::ir::IRGen;
 use crate::ir::tac::Instruction;
@@ -14,6 +14,35 @@ use crate::lexing::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
 use crate::parse::parsing::{Identifier, Parameter, Program, Stmt};
 use crate::semantics::analyser::{Analyser, AnalyserError};
+
+#[derive(Serialize)]
+struct JsonError {
+    file: String,
+    line: usize,
+    column: usize,
+    message: String,
+    severity: String,
+}
+
+fn json_error_from_parser_error(err: &crate::parse::parsing::ParserError) -> JsonError {
+    JsonError {
+        file: err.location.file.to_string(),
+        line: err.location.line,
+        column: err.location.col,
+        message: err.message.clone(),
+        severity: "error".to_string(),
+    }
+}
+
+fn json_error_from_string(file: &str, message: &str) -> JsonError {
+    JsonError {
+        file: file.to_string(),
+        line: 0,
+        column: 0,
+        message: message.to_string(),
+        severity: "error".to_string(),
+    }
+}
 
 /// Maps a file's path (as it appears in `Location::file`) to its source
 /// text, so diagnostics can be reported against the file that actually
@@ -138,22 +167,51 @@ fn format_analyser_error(
 
 fn read_and_lex_file(
     file_path: &Path,
+    json_output: bool,
 ) -> Result<(String, Vec<crate::lexing::lexing::Token>), String> {
     let mut file = File::open(file_path)
-        .map_err(|e| format_simple_error(file_path, &format!("Failed to open file: {}", e)))?;
+        .map_err(|e| {
+            if json_output {
+                let json_err = json_error_from_string(
+                    &file_path.display().to_string(),
+                    &format!("Failed to open file: {}", e),
+                );
+                serde_json::to_string(&json_err).unwrap()
+            } else {
+                format_simple_error(file_path, &format!("Failed to open file: {}", e))
+            }
+        })?;
     let mut source = String::new();
     file.read_to_string(&mut source)
-        .map_err(|e| format_simple_error(file_path, &format!("Failed to read file: {}", e)))?;
+        .map_err(|e| {
+            if json_output {
+                let json_err = json_error_from_string(
+                    &file_path.display().to_string(),
+                    &format!("Failed to read file: {}", e),
+                );
+                serde_json::to_string(&json_err).unwrap()
+            } else {
+                format_simple_error(file_path, &format!("Failed to read file: {}", e))
+            }
+        })?;
 
     let file_id: Rc<str> = Rc::from(file_path.display().to_string());
     let mut lexer = Lexer::new(source.clone(), file_id);
     let res = lexer.lex();
 
     if let Err(err) = res {
-        return Err(format_simple_error(
-            file_path,
-            &format!("Lexer error: {}", err),
-        ));
+        if json_output {
+            let json_err = json_error_from_string(
+                &file_path.display().to_string(),
+                &format!("Lexer error: {}", err),
+            );
+            return Err(serde_json::to_string(&json_err).unwrap());
+        } else {
+            return Err(format_simple_error(
+                file_path,
+                &format!("Lexer error: {}", err),
+            ));
+        }
     }
 
     Ok((source, lexer.tokens))
@@ -165,6 +223,8 @@ fn flatten_program_statements(
     visiting: &mut HashSet<PathBuf>,
     processed: &mut HashSet<PathBuf>,
     sources: &mut SourceMap,
+    json_output: bool, // new
+    root_file_path: &Path, // added to have a file for dummy errors
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
@@ -172,20 +232,32 @@ fn flatten_program_statements(
         if let Stmt::Use { path } = stmt {
             let module_path_str = path.join("::");
             let resolved_path = find_module_file(&path, search_paths).ok_or_else(|| {
-                format_module_error(
-                    &module_path_str,
-                    &format!(
-                        "Could not find module '{}' in search paths or CWD.",
-                        module_path_str
-                    ),
-                )
+                let msg = format!(
+                    "Could not find module '{}' in search paths or CWD.",
+                    module_path_str
+                );
+                if json_output {
+                    let json_err = json_error_from_string(
+                        &root_file_path.display().to_string(),
+                        &msg,
+                    );
+                    serde_json::to_string(&json_err).unwrap()
+                } else {
+                    format_module_error(&module_path_str, &msg)
+                }
             })?;
 
             if visiting.contains(&resolved_path) {
-                return Err(format_module_error(
-                    &module_path_str,
-                    &format!("Cyclic dependency detected! Module imports itself."),
-                ));
+                let msg = format!("Cyclic dependency detected! Module imports itself.");
+                if json_output {
+                    let json_err = json_error_from_string(
+                        &root_file_path.display().to_string(),
+                        &msg,
+                    );
+                    return Err(serde_json::to_string(&json_err).unwrap());
+                } else {
+                    return Err(format_module_error(&module_path_str, &msg));
+                }
             }
 
             if processed.contains(&resolved_path) {
@@ -194,18 +266,26 @@ fn flatten_program_statements(
 
             visiting.insert(resolved_path.clone());
 
-            let (source, tokens) = read_and_lex_file(&resolved_path)?;
+            let (source, tokens) = read_and_lex_file(&resolved_path, json_output)?;
             sources.insert(resolved_path.display().to_string(), source.clone());
 
             let mut parser = myszparser::new(tokens);
             parser.parse();
 
             if !parser.parser_errs.is_empty() {
-                let error_report = format_parser_errors(&parser.parser_errs, &source);
-                return Err(format!(
-                    "Parser errors in module '{}':\n{}",
-                    module_path_str, error_report
-                ));
+                if json_output {
+                    let json_errors: Vec<JsonError> = parser.parser_errs
+                        .iter()
+                        .map(json_error_from_parser_error)
+                        .collect();
+                    return Err(serde_json::to_string(&json_errors).unwrap());
+                } else {
+                    let error_report = format_parser_errors(&parser.parser_errs, &source);
+                    return Err(format!(
+                        "Parser errors in module '{}':\n{}",
+                        module_path_str, error_report
+                    ));
+                }
             }
 
             let module_stmts = flatten_program_statements(
@@ -214,6 +294,8 @@ fn flatten_program_statements(
                 visiting,
                 processed,
                 sources,
+                json_output,
+                root_file_path,
             )?;
 
             flattened.extend(module_stmts);
@@ -231,6 +313,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
     input_path: P,
     output_filename: &str,
     custom_search_paths: &[PathBuf],
+    json_output: bool,
 ) -> Result<(), String> {
     let input_path = input_path.as_ref().canonicalize().map_err(|e| {
         format_simple_error(
@@ -246,15 +329,23 @@ pub fn compile_root_file<P: AsRef<Path>>(
     search_paths.extend_from_slice(custom_search_paths);
 
     // Read and lex the main file
-    let (source, tokens) = read_and_lex_file(&input_path)?;
+    let (source, tokens) = read_and_lex_file(&input_path, json_output)?;
 
     // Parse the main file
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
     if !parser.parser_errs.is_empty() {
-        let error_report = format_parser_errors(&parser.parser_errs, &source);
-        return Err(format!("Parser errors:\n{}", error_report));
+        if json_output {
+            let json_errors: Vec<JsonError> = parser.parser_errs
+                .iter()
+                .map(json_error_from_parser_error)
+                .collect();
+            return Err(serde_json::to_string(&json_errors).unwrap());
+        } else {
+            let error_report = format_parser_errors(&parser.parser_errs, &source);
+            return Err(format!("Parser errors:\n{}", error_report));
+        }
     }
 
     // Process imports
@@ -271,13 +362,15 @@ pub fn compile_root_file<P: AsRef<Path>>(
         &mut visiting,
         &mut processed,
         &mut sources,
+        json_output,
+        input_path.as_path()
     )?;
 
     let program = Program {
         statements: flattened_statements,
     };
 
-    compile_ast_program(&program, output_filename, &sources, &input_path)
+    compile_ast_program(&program, output_filename, &sources, &input_path, json_output)
 }
 
 pub fn compile_ast_program(
@@ -285,6 +378,7 @@ pub fn compile_ast_program(
     output_filename: &str,
     sources: &SourceMap,
     file_path: &Path,
+    json_output: bool,
 ) -> Result<(), String> {
     let root_source = sources
         .get(&file_path.display().to_string())
@@ -301,10 +395,32 @@ pub fn compile_ast_program(
     // Semantic analysis
     let mut analyser = Analyser::new();
     if let Err(err) = analyser.analyse(program) {
-        let formatted = format_analyser_error(&err, sources, root_source);
-        return Err(format!("Semantic error:\n{}", formatted));
+        if json_output {
+            // Serialize the error to JSON
+            let location = match err.clone() {
+                AnalyserError::SemanticError { location, .. } | AnalyserError::TypeError { location, .. }=> location
+            };
+            let message = match err.clone() {
+                AnalyserError::SemanticError { message, .. } | AnalyserError::TypeError { message, .. }=> message
+            };
+            let json_err = JsonError {
+                file: location.file.to_string(),
+                line: location.line,
+                column: location.col,
+                message: message.to_string(),
+                severity: match err {
+                    AnalyserError::TypeError { .. } => "error".to_string(),
+                    AnalyserError::SemanticError { .. } => "error".to_string(),
+                },
+            };
+            let json_str = serde_json::to_string(&json_err)
+                .map_err(|e| format!("Failed to serialize error: {}", e))?;
+            return Err(json_str);
+        } else {
+            let formatted = format_analyser_error(&err, sources, root_source);
+            return Err(format!("Semantic error:\n{}", formatted));
+        }
     }
-
     // IR generation
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();

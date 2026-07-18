@@ -12,6 +12,7 @@ pub fn compile_file<P: AsRef<Path>>(
     input_path: P,
     output_filename: &str,
     search_paths: &[PathBuf],
+    output_json: bool,
 ) -> Result<(), String> {
-    compiler::compile_root_file(input_path, output_filename, search_paths)
+    compiler::compile_root_file(input_path, output_filename, search_paths, output_json)
 }
