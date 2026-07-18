@@ -128,6 +128,7 @@ impl Lexer {
                 self.add_token(t);
             } else {
                 match ch {
+                    ' ' | '\n' | '\r' | '\t' => self.advance(),
                     '=' => {
                         let t = self.lex_assign()?;
                         self.add_token(t);
@@ -183,7 +184,11 @@ impl Lexer {
                         }
                     }
                     '%' => self.single_char(TokenType::Modulo)?,
-                    _ => self.advance(),
+                    _ => {
+                        return Err(LexError::UnknownCharacter {
+                            location: self.current_location(),
+                        });
+                    }
                 }
             }
         }

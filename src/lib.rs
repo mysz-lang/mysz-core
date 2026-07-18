@@ -20,7 +20,7 @@ pub fn compile_file<P: AsRef<Path>>(
 pub fn check_file<P: AsRef<Path>>(
     input_path: P,
     search_paths: &[PathBuf],
-    output_json: bool
+    output_json: bool,
 ) -> Result<(), String> {
     compiler::check_root_file(input_path, search_paths, output_json)
 }

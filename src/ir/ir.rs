@@ -782,19 +782,35 @@ impl IRGen {
 
             ExprKind::StructLiteral {
                 struct_name,
+                generic_args,
                 fields,
             } => {
+                let concrete_type = if generic_args.is_empty() {
+                    Type::Struct(struct_name.clone())
+                } else {
+                    let generic_ty = Type::GenericInstance {
+                        name: struct_name.clone(),
+                        args: generic_args.clone(),
+                    };
+                    self.resolve_type(&generic_ty)
+                };
+
+                let concrete_struct_name = match &concrete_type {
+                    Type::Struct(name) => name.clone(),
+                    _ => panic!("Expected concrete struct type after resolution"),
+                };
+
                 let target_val = match target_dest {
                     Some(dest) => dest,
                     None => {
-                        let temp_name = self.next_temp_with_type(Type::Struct(struct_name.clone()));
+                        let temp_name = self.next_temp_with_type(concrete_type.clone());
                         Value::Temp(temp_name)
                     }
                 };
 
                 let layout_fields = self
                     .struct_defs
-                    .get(struct_name)
+                    .get(&concrete_struct_name)
                     .expect("ICE: Structural initialization on untracked layout.")
                     .field_offsets
                     .clone();
@@ -805,9 +821,8 @@ impl IRGen {
                         .get(field_name)
                         .expect("ICE: Field initialization lookup failure.");
 
-                    let base_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(
-                        Type::Struct(struct_name.clone()),
-                    )));
+                    let base_addr_temp =
+                        self.next_temp_with_type(Type::Ptr(Box::new(concrete_type.clone())));
                     self.code.push(Instruction::Unary {
                         dst: base_addr_temp.clone(),
                         op: IrOp::Ref,

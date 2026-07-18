@@ -94,6 +94,7 @@ pub enum ExprKind {
     },
     StructLiteral {
         struct_name: String,
+        generic_args: Vec<Type>,
         fields: Vec<(String, Expr)>,
     },
 

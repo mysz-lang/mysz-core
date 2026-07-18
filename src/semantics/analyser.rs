@@ -312,10 +312,6 @@ impl Analyser {
         location: Location,
     ) -> Result<(), AnalyserError> {
         if let Some(existing) = self.functions.get(name) {
-            println!(
-                "file={} line={} col={}",
-                location.file, location.line, location.col
-            );
             return Err(AnalyserError::SemanticError {
                 location,
                 message: format!(
@@ -478,79 +474,101 @@ impl Analyser {
                     )),
                 }
             }
-
             ExprKind::StructLiteral {
                 struct_name,
+                generic_args,
                 fields,
             } => {
-                let signature = self
+                let concrete_ty = if generic_args.is_empty() {
+                    let template = self.structs.get(struct_name).ok_or_else(|| {
+                        AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!("Undefined struct '{}'.", struct_name),
+                        )
+                    })?;
+                    if !template.generic_params.is_empty() {
+                        return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!("Struct '{}' requires generic arguments.", struct_name),
+                        ));
+                    }
+                    Type::Struct(struct_name.clone())
+                } else {
+                    let generic_ty = Type::GenericInstance {
+                        name: struct_name.clone(),
+                        args: generic_args.clone(),
+                    };
+                    self.validate_type_exists(&generic_ty, &expr.span)?;
+                    self.instantiate_generic_types(&generic_ty, &expr.span)?
+                };
+
+                let concrete_name = match &concrete_ty {
+                    Type::Struct(name) => name.clone(),
+                    _ => {
+                        return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!("Expected concrete struct type, got {:?}", concrete_ty),
+                        ));
+                    }
+                };
+                let struct_def = self
                     .structs
-                    .get(struct_name)
+                    .get(&concrete_name)
                     .ok_or_else(|| {
                         AnalyserError::semantic_error(
                             expr.span.clone(),
-                            format!(
-                                "Attempted to initialize undefined struct '{}'.",
-                                struct_name
-                            ),
+                            format!("Instantiated struct '{}' not found.", concrete_name),
                         )
                     })?
                     .clone();
 
-                if fields.len() != signature.fields.len() {
+                if fields.len() != struct_def.fields.len() {
                     return Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
-                            "Struct '{}' expects {} fields to be initialized, found {}.",
-                            struct_name,
-                            signature.fields.len(),
+                            "Struct '{}' expects {} fields, found {}.",
+                            concrete_name,
+                            struct_def.fields.len(),
                             fields.len()
                         ),
                     ));
                 }
 
+                let mut seen_fields = HashSet::new();
                 for (field_name, field_expr) in fields {
-                    let expected_field_ty = signature.fields.get(field_name).ok_or_else(|| {
+                    if !seen_fields.insert(field_name) {
+                        return Err(AnalyserError::semantic_error(
+                            field_expr.span.clone(),
+                            format!("Duplicate field '{}' in struct literal.", field_name),
+                        ));
+                    }
+
+                    let expected_ty = struct_def.fields.get(field_name).ok_or_else(|| {
                         AnalyserError::semantic_error(
                             field_expr.span.clone(),
                             format!(
                                 "Field '{}' does not exist in struct '{}'.",
-                                field_name, struct_name
+                                field_name, concrete_name
                             ),
                         )
                     })?;
 
-                    let actual_type = self.check_expr(field_expr, Some(expected_field_ty))?;
-                    if !types_equal(expected_field_ty, &actual_type) {
+                    let actual_ty = self.check_expr(field_expr, Some(expected_ty))?;
+                    if !types_equal(expected_ty, &actual_ty) {
                         return Err(AnalyserError::type_error(
                             field_expr.span.clone(),
                             format!(
-                                "Field '{}' of struct '{}' expects type '{}', but found '{}'.",
+                                "Field '{}' expects type '{}', but found '{}'.",
                                 field_name,
-                                struct_name,
-                                type_to_string(expected_field_ty),
-                                type_to_string(&actual_type)
+                                type_to_string(expected_ty),
+                                type_to_string(&actual_ty)
                             ),
                         ));
                     }
                 }
 
-                let mut tracking_set = HashSet::new();
-                for (name, _) in fields {
-                    if !tracking_set.insert(name) {
-                        return Err(AnalyserError::semantic_error(
-                            expr.span.clone(),
-                            format!(
-                                "Duplicate initialization of field '{}' in struct literal.",
-                                name
-                            ),
-                        ));
-                    }
-                }
-
-                Ok(Type::Struct(struct_name.clone()))
+                Ok(concrete_ty)
             }
-
             ExprKind::Index { base, index } => {
                 let base_type = self.check_expr(base, None)?;
                 let index_type = self.check_expr(index, Some(&Type::Int))?;
@@ -1317,7 +1335,10 @@ impl Analyser {
 
             Stmt::Return { value, span } => {
                 let expected = self.current_return_type.clone().ok_or_else(|| {
-                    AnalyserError::SemanticError { location: span.clone(), message: "Semantic Error: 'return' used outside of a function".to_string() }
+                    AnalyserError::SemanticError {
+                        location: span.clone(),
+                        message: "Semantic Error: 'return' used outside of a function".to_string(),
+                    }
                 })?;
 
                 let actual_type = match value {
@@ -1326,8 +1347,14 @@ impl Analyser {
                 };
 
                 if !types_equal(&expected, &actual_type) {
-                    return Err(AnalyserError::TypeError { location: span.clone(), message: format!("Function expects return type '{}', found '{}'",
-                type_to_string(&expected), type_to_string(&actual_type)) })
+                    return Err(AnalyserError::TypeError {
+                        location: span.clone(),
+                        message: format!(
+                            "Function expects return type '{}', found '{}'",
+                            type_to_string(&expected),
+                            type_to_string(&actual_type)
+                        ),
+                    });
                 }
 
                 Ok(())

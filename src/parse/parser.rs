@@ -1106,34 +1106,142 @@ impl Parser {
                         return None;
                     }
                 }
-                Some(TokenType::DoubleColon) => {
-                    let next_tk = self.tokens.get(self.token_idx + 1);
-                    if matches!(next_tk.map(|t| &t.ttype), Some(TokenType::LessThan)) {
-                        self.advance(); // consume '::'
-                        let generic_args = self.parse_generic_args();
-
-                        self.expect(TokenType::LParen)?;
-                        if let ExprKind::Identifier(name) = &expr.kind {
-                            let callee_loc = expr.span.clone();
-                            let args = self.parse_args();
-                            expr = Expr {
-                                kind: ExprKind::Call {
-                                    callee: Identifier {
-                                        value: name.clone(),
-                                        location: callee_loc.clone(),
-                                    },
-                                    generic_args,
-                                    args,
-                                },
-                                span: callee_loc,
-                            };
-                        } else {
-                            return None;
+                Some(TokenType::LBrace) => {
+                    if let ExprKind::Identifier(name) = &expr.kind {
+                        self.advance();
+                        let mut fields = Vec::new();
+                        if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+                            loop {
+                                let field_name = self.expect(TokenType::Identifier)?.value;
+                                self.expect(TokenType::Colon)?;
+                                let value_expr = self.parse_expr()?;
+                                fields.push((field_name, value_expr));
+                                match self.get_token().map(|t| &t.ttype) {
+                                    Some(TokenType::Comma) => self.advance(),
+                                    Some(TokenType::RBrace) => break,
+                                    _ => {
+                                        self.throw(
+                                            ParserErrorType::UnexpectedTokenTypeError,
+                                            "Expected ',' or '}' in struct initializer".to_string(),
+                                            self.get_token().unwrap().location.clone(),
+                                        );
+                                        return None;
+                                    }
+                                }
+                            }
                         }
+                        self.expect(TokenType::RBrace)?;
+                        expr = Expr {
+                            kind: ExprKind::StructLiteral {
+                                struct_name: name.clone(),
+                                generic_args: Vec::new(),
+                                fields,
+                            },
+                            span: expr.span.clone(),
+                        };
                     } else {
-                        break;
+                        self.throw(
+                            ParserErrorType::UnexpectedTokenTypeError,
+                            "Expected struct name before '{'".to_string(),
+                            self.get_token().unwrap().location.clone(),
+                        );
+                        return None;
                     }
                 }
+                Some(TokenType::DoubleColon) => {
+                    self.advance(); // consume '::'
+                    let generic_args = self.parse_generic_args();
+
+                    // Determine what follows: '(' or '{'
+                    match self.get_token().map(|t| &t.ttype) {
+                        Some(TokenType::LParen) => {
+                            // Generic function call
+                            self.advance(); // consume '('
+                            let args = self.parse_args();
+                            if let ExprKind::Identifier(name) = &expr.kind {
+                                let callee_loc = expr.span.clone();
+                                expr = Expr {
+                                    kind: ExprKind::Call {
+                                        callee: Identifier {
+                                            value: name.clone(),
+                                            location: callee_loc.clone(),
+                                        },
+                                        generic_args,
+                                        args,
+                                    },
+                                    span: callee_loc,
+                                };
+                            } else {
+                                self.throw(
+                                    ParserErrorType::UnexpectedTokenTypeError,
+                                    "Cannot apply generic arguments to non-identifier expression"
+                                        .to_string(),
+                                    expr.span.clone(),
+                                );
+                                return None;
+                            }
+                        }
+                        Some(TokenType::LBrace) => {
+                            // Generic struct literal
+                            self.advance(); // consume '{'
+                            let mut fields = Vec::new();
+                            if !matches!(
+                                self.get_token().map(|t| &t.ttype),
+                                Some(TokenType::RBrace)
+                            ) {
+                                loop {
+                                    let field_name = self.expect(TokenType::Identifier)?.value;
+                                    self.expect(TokenType::Colon)?;
+                                    let value_expr = self.parse_expr()?;
+                                    fields.push((field_name, value_expr));
+                                    match self.get_token().map(|t| &t.ttype) {
+                                        Some(TokenType::Comma) => self.advance(),
+                                        Some(TokenType::RBrace) => break,
+                                        _ => {
+                                            self.throw(
+                                                ParserErrorType::UnexpectedTokenTypeError,
+                                                "Expected ',' or '}' in struct initializer"
+                                                    .to_string(),
+                                                self.get_token().unwrap().location.clone(),
+                                            );
+                                            return None;
+                                        }
+                                    }
+                                }
+                            }
+                            self.expect(TokenType::RBrace)?;
+                            if let ExprKind::Identifier(name) = &expr.kind {
+                                expr = Expr {
+                                    kind: ExprKind::StructLiteral {
+                                        struct_name: name.clone(),
+                                        generic_args,
+                                        fields,
+                                    },
+                                    span: expr.span.clone(),
+                                };
+                            } else {
+                                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    "Cannot apply generic arguments to non-identifier for struct literal".to_string(),
+                    expr.span.clone(),
+                );
+                                return None;
+                            }
+                        }
+                        _ => {
+                            self.throw(
+                                ParserErrorType::UnexpectedTokenTypeError,
+                                format!(
+                                    "Expected '(' or '{{' after generic arguments, found {:?}",
+                                    self.get_token()
+                                ),
+                                self.get_token().unwrap().location.clone(),
+                            );
+                            return None;
+                        }
+                    }
+                }
+
                 _ => break,
             }
         }
@@ -1201,49 +1309,10 @@ impl Parser {
             TokenType::Identifier => {
                 let id_tk = self.get_token()?.clone();
                 self.advance();
-
-                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LBrace)) {
-                    self.advance(); // consume '{'
-                    let mut fields = Vec::new();
-
-                    if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
-                        loop {
-                            let field_name = self.expect(TokenType::Identifier)?.value;
-                            self.expect(TokenType::Colon)?;
-                            let value_expr = self.parse_expr()?;
-                            fields.push((field_name, value_expr));
-
-                            match self.get_token().map(|t| &t.ttype) {
-                                Some(TokenType::Comma) => {
-                                    self.advance();
-                                }
-                                Some(TokenType::RBrace) => break,
-                                _ => {
-                                    self.throw(
-                                        ParserErrorType::UnexpectedTokenTypeError,
-                                        "Expected ',' or '}' in struct initializer".to_string(),
-                                        self.get_token().unwrap().location.clone(),
-                                    );
-                                    return None;
-                                }
-                            }
-                        }
-                    }
-
-                    let end_tk = self.expect(TokenType::RBrace)?;
-                    Some(Expr {
-                        kind: ExprKind::StructLiteral {
-                            struct_name: id_tk.value,
-                            fields,
-                        },
-                        span: end_tk.location,
-                    })
-                } else {
-                    Some(Expr {
-                        kind: ExprKind::Identifier(id_tk.value),
-                        span: id_tk.location,
-                    })
-                }
+                Some(Expr {
+                    kind: ExprKind::Identifier(id_tk.value),
+                    span: id_tk.location,
+                })
             }
             TokenType::LBracket => self.parse_array_literal(),
 
