@@ -1,4 +1,4 @@
-use crate::lexing::lexing::{Token, TokenType};
+use crate::lex::lexing::{Token, TokenType};
 use crate::utils::location::Location;
 
 #[derive(Debug, Clone)]
@@ -318,11 +318,11 @@ impl Lexer {
         }
 
         self.advance();
-        return Ok(Token {
+        Ok(Token {
             ttype: TokenType::Ampersand,
             location: loc,
             value: current.to_string(),
-        });
+        })
     }
 
     fn lex_pipe(&mut self) -> Result<Token, LexError> {
@@ -485,8 +485,7 @@ impl Lexer {
         let tb_replace = nl_replace.replace("\\t", "\t");
         let rb_replace = tb_replace.replace("\\r", "\r");
         let c0_replace = rb_replace.replace("\\0", "\0");
-        let qt_replace = c0_replace.replace("\\\"", "\"");
-        return qt_replace;
+        c0_replace.replace("\\\"", "\"")
     }
 
     fn lex_string(&mut self) -> Token {

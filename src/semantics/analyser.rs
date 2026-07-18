@@ -354,14 +354,14 @@ impl Analyser {
                 if types_compatible(&leftty, right) {
                     return Ok(right.clone());
                 }
-                return Err(AnalyserError::type_error(
+                Err(AnalyserError::type_error(
                     expr.span.clone(),
                     format!(
                         "Cannot cast '{}' to '{}'",
                         type_to_string(&leftty),
                         type_to_string(right)
                     ),
-                ));
+                ))
             }
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => {
@@ -777,7 +777,7 @@ impl Analyser {
                                     ),
                                 ))
                             }
-                        } else if &Type::Str != &left_type && &Type::Str != &right_type {
+                        } else if Type::Str != left_type && Type::Str != right_type {
                             Ok(Type::Str)
                         } else {
                             Err(AnalyserError::type_error(
@@ -1303,7 +1303,7 @@ impl Analyser {
                 )?;
 
                 self.enter_scope();
-                for (param, ptype) in params.iter().zip(param_types.into_iter()) {
+                for (param, ptype) in params.iter().zip(param_types) {
                     self.declare_variable(&param.name.value, ptype, param.name.location.clone())?;
                 }
 
@@ -1367,5 +1367,10 @@ impl Analyser {
             self.check_stmt(stmt)?;
         }
         Ok(())
+    }
+}
+impl Default for Analyser {
+    fn default() -> Self {
+        Self::new()
     }
 }

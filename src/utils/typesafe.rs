@@ -124,7 +124,7 @@ pub fn type_to_string(ty: &Type) -> String {
             format!("[{}; {}]", type_to_string(element_type), size)
         }
         Type::GenericInstance { name, args } => {
-            let args_str: Vec<String> = args.iter().map(|arg| type_to_string(arg)).collect();
+            let args_str: Vec<String> = args.iter().map(type_to_string).collect();
             format!("{}<{}>", name, args_str.join(", "))
         }
         Type::GenericParam(s) => format!("<{}>", s),

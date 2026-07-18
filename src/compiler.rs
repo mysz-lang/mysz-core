@@ -1,7 +1,7 @@
 use crate::backend::clback;
-use crate::ir::ir::IRGen;
+use crate::ir::irgen::IRGen;
 use crate::ir::tac::Instruction;
-use crate::lexing::lexer::Lexer;
+use crate::lex::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
 use crate::parse::parsing::{Identifier, Parameter, Program, Stmt};
 use crate::semantics::analyser::{Analyser, AnalyserError};
@@ -106,7 +106,7 @@ fn format_error_with_location(
         column,
         source_line,
         " ".repeat(column_offset),
-        "^".repeat(1),
+        "^",
         message
     )
 }
@@ -145,7 +145,7 @@ fn format_parser_errors(errors: &[crate::parse::parsing::ParserError], source: &
             column,
             source_line,
             " ".repeat(column_offset),
-            "^".repeat(1),
+            "^",
             message
         ));
     }
@@ -267,7 +267,7 @@ fn format_analyser_error(
 fn read_and_lex_file(
     file_path: &Path,
     json_output: bool,
-) -> Result<(String, Vec<crate::lexing::lexing::Token>), String> {
+) -> Result<(String, Vec<crate::lex::lexing::Token>), String> {
     let mut file = File::open(file_path).map_err(|e| {
         if json_output {
             let json_err = json_error_from_string(
@@ -343,7 +343,7 @@ fn flatten_program_statements(
             })?;
 
             if visiting.contains(&resolved_path) {
-                let msg = format!("Cyclic dependency detected! Module imports itself.");
+                let msg = "Cyclic dependency detected! Module imports itself.".to_string();
                 if json_output {
                     let json_err =
                         json_error_from_string(&root_file_path.display().to_string(), &msg);
@@ -574,10 +574,10 @@ pub fn compile_ast_program(
 
     let mut public_functions = HashSet::new();
     for stmt in &program.statements {
-        if let Stmt::Function { name, public, .. } = stmt {
-            if *public {
-                public_functions.insert(name.value.clone());
-            }
+        if let Stmt::Function { name, public, .. } = stmt
+            && *public
+        {
+            public_functions.insert(name.value.clone());
         }
     }
 

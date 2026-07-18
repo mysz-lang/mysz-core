@@ -13,9 +13,14 @@ impl TempGen {
     pub fn new() -> Self {
         Self { counter: 0 }
     }
-    pub fn next(&mut self) -> String {
+    pub fn next_temp(&mut self) -> String {
         self.counter += 1;
         format!("t{}", self.counter)
+    }
+}
+impl Default for TempGen {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -26,12 +31,16 @@ impl LabelGen {
     pub fn new() -> Self {
         Self { counter: 0 }
     }
-    pub fn next(&mut self) -> String {
+    pub fn next_label(&mut self) -> String {
         self.counter += 1;
         format!("L{}", self.counter)
     }
 }
-
+impl Default for LabelGen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct FunctionGen {
     counter: usize,
 }
@@ -44,7 +53,11 @@ impl FunctionGen {
         name
     }
 }
-
+impl Default for FunctionGen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[derive(Debug)]
 pub struct StructLayout {
     pub total_size: i64,
@@ -94,7 +107,7 @@ impl IRGen {
     }
 
     pub fn next_temp_with_type(&mut self, ty: Type) -> String {
-        let base_name = self.temps.next();
+        let base_name = self.temps.next_temp();
         let qualified_name = if self.current_function.is_empty() {
             base_name
         } else {
@@ -168,17 +181,13 @@ impl IRGen {
                     mangled_name.push_str(&self.mangle_type(arg));
                 }
 
-                if !self.struct_defs.contains_key(&mangled_name) {
-                    if let Some((params, fields)) = self.struct_blueprints.get(&name).cloned() {
-                        let substitutions: HashMap<String, Type> =
-                            params.into_iter().zip(resolved_args.into_iter()).collect();
+                if !self.struct_defs.contains_key(&mangled_name)
+                    && let Some((params, fields)) = self.struct_blueprints.get(&name).cloned()
+                {
+                    let substitutions: HashMap<String, Type> =
+                        params.into_iter().zip(resolved_args).collect();
 
-                        self.instantiate_struct_layout(
-                            mangled_name.clone(),
-                            &fields,
-                            &substitutions,
-                        );
-                    }
+                    self.instantiate_struct_layout(mangled_name.clone(), &fields, &substitutions);
                 }
                 Type::Struct(mangled_name)
             }
@@ -247,8 +256,7 @@ impl IRGen {
     fn get_value_type(&self, value: &Value) -> Type {
         match value {
             Value::Temp(name) | Value::Var(name) => {
-                let ty = self.var_types.get(name).cloned().unwrap_or(Type::Int);
-                ty
+                self.var_types.get(name).cloned().unwrap_or(Type::Int)
             }
             Value::Const(_) => Type::Int,
             Value::Bool(_) => Type::Bool,
@@ -659,7 +667,7 @@ impl IRGen {
                     let base_val = match target_dest {
                         Some(dest) => dest,
                         None => {
-                            let raw_temp = self.temps.next();
+                            let raw_temp = self.temps.next_temp();
                             let anon_name = format!("_anon_{}", raw_temp);
                             self.var_types.insert(
                                 anon_name.clone(),
@@ -985,7 +993,7 @@ impl IRGen {
                         };
 
                         let lit_ty = self.expr_type(expr).unwrap_or(Type::Int);
-                        let raw_temp = self.temps.next();
+                        let raw_temp = self.temps.next_temp();
                         let anon_var_name = format!("_anon_lit_{}", raw_temp);
 
                         self.var_types.insert(anon_var_name.clone(), lit_ty.clone());
@@ -1172,10 +1180,7 @@ impl IRGen {
                     .or_else(|| self.var_types.get(&mangled_name).cloned())
                     .map(|ty| self.resolve_type(&ty));
 
-                let is_array = match current_ty {
-                    Some(Type::Array { .. }) => true,
-                    _ => false,
-                };
+                let is_array = matches!(current_ty, Some(Type::Array { .. }));
 
                 let target_var = Value::Var(mangled_name.clone());
 
@@ -1325,15 +1330,9 @@ impl IRGen {
                 else_if_branches,
                 else_branch,
             } => {
-                let true_end = self.labels.next();
+                let true_end = self.labels.next_label();
 
-                let mut next_target = if !else_if_branches.is_empty() {
-                    self.labels.next()
-                } else if else_branch.is_some() {
-                    self.labels.next()
-                } else {
-                    true_end.clone()
-                };
+                let mut next_target = self.labels.next_label();
 
                 let cond_val = self.gen_expr(cond, None);
                 self.code.push(Instruction::JumpIfFalse {
@@ -1347,16 +1346,10 @@ impl IRGen {
 
                 self.code.push(Instruction::Jump(true_end.clone()));
 
-                for (i, (ei_cond, ei_body)) in else_if_branches.iter().enumerate() {
+                for (ei_cond, ei_body) in else_if_branches.iter() {
                     self.code.push(Instruction::Label(next_target));
 
-                    next_target = if i + 1 < else_if_branches.len() {
-                        self.labels.next()
-                    } else if else_branch.is_some() {
-                        self.labels.next()
-                    } else {
-                        true_end.clone()
-                    };
+                    next_target = self.labels.next_label();
 
                     let ei_cond_val = self.gen_expr(ei_cond, None);
                     self.code.push(Instruction::JumpIfFalse {
@@ -1385,8 +1378,8 @@ impl IRGen {
                 self.code.push(Instruction::Label(true_end));
             }
             Stmt::While { cond, body } => {
-                let start = self.labels.next();
-                let end = self.labels.next();
+                let start = self.labels.next_label();
+                let end = self.labels.next_label();
 
                 self.loop_exits.push(end.clone());
 
@@ -1420,8 +1413,8 @@ impl IRGen {
                 step,
                 body,
             } => {
-                let start = self.labels.next();
-                let end = self.labels.next();
+                let start = self.labels.next_label();
+                let end = self.labels.next_label();
 
                 self.gen_stmt(init);
                 self.code.push(Instruction::Label(start.clone()));
@@ -1690,8 +1683,8 @@ impl IRGen {
         }
 
         while let Some((callee_name, args)) = self.deferred_instantiations.pop() {
-            if let Some(blueprint) = self.fn_blueprints.get(&callee_name).cloned() {
-                if let Stmt::Function {
+            if let Some(blueprint) = self.fn_blueprints.get(&callee_name).cloned()
+                && let Stmt::Function {
                     name,
                     generic_params,
                     params,
@@ -1699,70 +1692,69 @@ impl IRGen {
                     rttype,
                     ..
                 } = blueprint
-                {
-                    let mut resolved_func_name = name.value.clone();
-                    for arg_type in &args {
-                        resolved_func_name.push_str("__");
-                        resolved_func_name.push_str(&self.mangle_type(arg_type));
-                    }
-
-                    let substitutions: HashMap<String, Type> = generic_params
-                        .iter()
-                        .cloned()
-                        .zip(args.iter().cloned())
-                        .collect();
-
-                    let old_subs = self.current_substitutions.clone();
-                    self.current_substitutions = substitutions;
-
-                    let old_func = self.current_function.clone();
-                    self.current_function = resolved_func_name.clone();
-
-                    self.code
-                        .push(Instruction::FunctionLabel(resolved_func_name.clone()));
-
-                    for param in params {
-                        if let Some(param_ty) = &param.ptype {
-                            let resolved_param_ty = self.resolve_type(param_ty);
-
-                            let unique_param_name =
-                                format!("{}::{}", resolved_func_name, param.name.value);
-                            self.var_types.insert(unique_param_name, resolved_param_ty);
-                        }
-
-                        self.code.push(Instruction::Param {
-                            p: format!("{}::{}", resolved_func_name, param.name.value),
-                        });
-                    }
-
-                    for stmt in body {
-                        self.gen_stmt(&stmt);
-                    }
-
-                    let base_return_ty = rttype.unwrap_or(Type::Void);
-                    let resolved_return_ty = self.resolve_type(&base_return_ty);
-
-                    if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
-                        let fallback_val = if resolved_return_ty == Type::Void {
-                            Value::Void
-                        } else if matches!(
-                            resolved_return_ty,
-                            Type::Struct(_) | Type::GenericInstance { .. }
-                        ) {
-                            let dummy_dst = self.next_temp_with_type(resolved_return_ty.clone());
-                            Value::Temp(dummy_dst)
-                        } else {
-                            Value::Const(0)
-                        };
-
-                        self.code.push(Instruction::Return {
-                            value: fallback_val,
-                        });
-                    }
-
-                    self.current_function = old_func;
-                    self.current_substitutions = old_subs;
+            {
+                let mut resolved_func_name = name.value.clone();
+                for arg_type in &args {
+                    resolved_func_name.push_str("__");
+                    resolved_func_name.push_str(&self.mangle_type(arg_type));
                 }
+
+                let substitutions: HashMap<String, Type> = generic_params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect();
+
+                let old_subs = self.current_substitutions.clone();
+                self.current_substitutions = substitutions;
+
+                let old_func = self.current_function.clone();
+                self.current_function = resolved_func_name.clone();
+
+                self.code
+                    .push(Instruction::FunctionLabel(resolved_func_name.clone()));
+
+                for param in params {
+                    if let Some(param_ty) = &param.ptype {
+                        let resolved_param_ty = self.resolve_type(param_ty);
+
+                        let unique_param_name =
+                            format!("{}::{}", resolved_func_name, param.name.value);
+                        self.var_types.insert(unique_param_name, resolved_param_ty);
+                    }
+
+                    self.code.push(Instruction::Param {
+                        p: format!("{}::{}", resolved_func_name, param.name.value),
+                    });
+                }
+
+                for stmt in body {
+                    self.gen_stmt(&stmt);
+                }
+
+                let base_return_ty = rttype.unwrap_or(Type::Void);
+                let resolved_return_ty = self.resolve_type(&base_return_ty);
+
+                if !matches!(self.code.last(), Some(Instruction::Return { .. })) {
+                    let fallback_val = if resolved_return_ty == Type::Void {
+                        Value::Void
+                    } else if matches!(
+                        resolved_return_ty,
+                        Type::Struct(_) | Type::GenericInstance { .. }
+                    ) {
+                        let dummy_dst = self.next_temp_with_type(resolved_return_ty.clone());
+                        Value::Temp(dummy_dst)
+                    } else {
+                        Value::Const(0)
+                    };
+
+                    self.code.push(Instruction::Return {
+                        value: fallback_val,
+                    });
+                }
+
+                self.current_function = old_func;
+                self.current_substitutions = old_subs;
             }
         }
     }
@@ -1806,5 +1798,10 @@ impl IRGen {
                 ),
             }
         }
+    }
+}
+impl Default for IRGen {
+    fn default() -> Self {
+        Self::new()
     }
 }

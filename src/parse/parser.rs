@@ -1,4 +1,4 @@
-use crate::lexing::lexing::{Token, TokenType};
+use crate::lex::lexing::{Token, TokenType};
 use crate::parse::parsing::{
     BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType,
     Program, Stmt, Type, UnaryOp,
@@ -44,7 +44,7 @@ impl Parser {
 
         Token {
             ttype: TokenType::Niltoken,
-            location: location,
+            location,
             value: "ERROR".to_string(),
         }
     }
@@ -99,13 +99,8 @@ impl Parser {
             Some(TokenType::LessThan)
         ) {
             self.advance(); // consume '<'
-            loop {
-                if let Some(tk) = self.expect(TokenType::Identifier) {
-                    params.push(tk.value);
-                } else {
-                    break;
-                }
-
+            while let Some(tk) = self.expect(TokenType::Identifier) {
+                params.push(tk.value);
                 if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                     self.advance();
                 } else {
@@ -124,12 +119,8 @@ impl Parser {
             Some(TokenType::LessThan)
         ) {
             self.advance(); // consume '<'
-            loop {
-                if let Some(ty) = self.parse_type() {
-                    args.push(ty);
-                } else {
-                    break;
-                }
+            while let Some(ty) = self.parse_type() {
+                args.push(ty);
 
                 if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                     self.advance();
@@ -271,14 +262,12 @@ impl Parser {
             _ => self.parse_expr().map(Stmt::Expr),
         };
 
-        if semi_colon {
-            if self.expect(TokenType::SemiColon).is_none() {
-                self.throw(
-                    ParserErrorType::MalformedStatementError,
-                    format!("Statement did not finish with semicolon ';'"),
-                    tk.location,
-                );
-            }
+        if semi_colon && self.expect(TokenType::SemiColon).is_none() {
+            self.throw(
+                ParserErrorType::MalformedStatementError,
+                "Statement did not finish with semicolon ';'".to_string(),
+                tk.location,
+            );
         }
         stmt
     }
@@ -459,11 +448,8 @@ impl Parser {
             return args;
         }
 
-        loop {
-            match self.parse_expr() {
-                Some(expr) => args.push(expr),
-                None => break,
-            }
+        while let Some(expr) = self.parse_expr() {
+            args.push(expr);
 
             match self.get_token().map(|t| &t.ttype) {
                 Some(TokenType::Comma) => {
@@ -792,11 +778,8 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
-        match self.get_token().map(|t| &t.ttype) {
-            Some(TokenType::RParen | TokenType::RBrace | TokenType::SemiColon) => {
-                return None;
-            }
-            _ => {}
+        if let Some(TokenType::RParen | TokenType::RBrace | TokenType::SemiColon) = self.get_token().map(|t| &t.ttype) {
+            return None;
         }
         self.parse_andor()
     }
@@ -980,7 +963,7 @@ impl Parser {
             left = Expr {
                 kind: ExprKind::Cast {
                     left: Box::new(left),
-                    right: right,
+                    right,
                 },
                 span,
             }

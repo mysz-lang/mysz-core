@@ -1,4 +1,4 @@
-use crate::{lexing::lexing::Token, parse::parsing::Identifier};
+use crate::{lex::lexing::Token, parse::parsing::Identifier};
 
 pub fn to_ident(token: Option<Token>) -> Option<Identifier> {
     if let Some(tk) = token {

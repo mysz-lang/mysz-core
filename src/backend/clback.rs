@@ -5,7 +5,7 @@ use cranelift::{codegen::ir::StackSlot, prelude::*};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
-use crate::ir::ir::StructLayout;
+use crate::ir::irgen::StructLayout;
 use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
 use crate::parse::parsing::Type;
 use crate::semantics::analysis::FunctionSignature;
@@ -281,21 +281,20 @@ impl CraneliftBackend {
             if let Instruction::Arg {
                 value: Value::Str(text),
             } = inst
+                && !self.string_literals.contains_key(text)
             {
-                if !self.string_literals.contains_key(text) {
-                    let name = format!("_str_lit_{}", idx);
-                    idx += 1;
-                    let data_id = self
-                        .module
-                        .declare_data(&name, Linkage::Local, false, false)
-                        .unwrap();
-                    let mut desc = DataDescription::new();
-                    let mut bytes = text.as_bytes().to_vec();
-                    bytes.push(0);
-                    desc.define(bytes.into_boxed_slice());
-                    self.module.define_data(data_id, &desc).unwrap();
-                    self.string_literals.insert(text.clone(), data_id);
-                }
+                let name = format!("_str_lit_{}", idx);
+                idx += 1;
+                let data_id = self
+                    .module
+                    .declare_data(&name, Linkage::Local, false, false)
+                    .unwrap();
+                let mut desc = DataDescription::new();
+                let mut bytes = text.as_bytes().to_vec();
+                bytes.push(0);
+                desc.define(bytes.into_boxed_slice());
+                self.module.define_data(data_id, &desc).unwrap();
+                self.string_literals.insert(text.clone(), data_id);
             }
         }
     }
@@ -365,6 +364,7 @@ impl CraneliftBackend {
     /// This is the single place that knows how to turn a `Value` into a
     /// `cranelift::prelude::Value`; every instruction handler below that
     /// needs to read an operand goes through here.
+    #[allow(clippy::too_many_arguments)]
     fn lower_value(
         &mut self,
         builder: &mut FunctionBuilder,
@@ -388,7 +388,7 @@ impl CraneliftBackend {
             }
             Value::Str(text) => {
                 let data_id = self.declare_string_literal(text);
-                let local_ref = self.module.declare_data_in_func(data_id, &mut builder.func);
+                let local_ref = self.module.declare_data_in_func(data_id, builder.func);
                 builder.ins().global_value(ty, local_ref)
             }
             Value::Var(name) | Value::Temp(name) => {
@@ -520,14 +520,14 @@ impl CraneliftBackend {
 
                 if let Some(frontend_type) = frontend_type {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
-                        if !stack_slot_map.contains_key(p) {
-                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                total_size,
-                            ));
-                            stack_slot_map.insert(p.clone(), slot);
-                        }
+                    if let AbiType::Aggregate { total_size, .. } = abi
+                        && !stack_slot_map.contains_key(p)
+                    {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            total_size,
+                        ));
+                        stack_slot_map.insert(p.clone(), slot);
                     }
                 }
             }
@@ -550,14 +550,14 @@ impl CraneliftBackend {
                         if let Some(frontend_type) = frontend_type {
                             let abi =
                                 AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                            if let AbiType::Aggregate { total_size, .. } = abi {
-                                if !stack_slot_map.contains_key(var_name) {
-                                    let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                        StackSlotKind::ExplicitSlot,
-                                        total_size,
-                                    ));
-                                    stack_slot_map.insert(var_name.clone(), slot);
-                                }
+                            if let AbiType::Aggregate { total_size, .. } = abi
+                                && !stack_slot_map.contains_key(var_name)
+                            {
+                                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    total_size,
+                                ));
+                                stack_slot_map.insert(var_name.clone(), slot);
                             }
                         }
                     }
@@ -583,14 +583,14 @@ impl CraneliftBackend {
 
                 if let Some(frontend_type) = frontend_type {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
-                        if !stack_slot_map.contains_key(dest_name) {
-                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                total_size,
-                            ));
-                            stack_slot_map.insert(dest_name.clone(), slot);
-                        }
+                    if let AbiType::Aggregate { total_size, .. } = abi
+                        && !stack_slot_map.contains_key(dest_name)
+                    {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            total_size,
+                        ));
+                        stack_slot_map.insert(dest_name.clone(), slot);
                     }
                 }
             }
@@ -615,48 +615,47 @@ impl CraneliftBackend {
 
                 if let Some(frontend_type) = f_ty {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
-                        if !stack_slot_map.contains_key(dest_name) {
-                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                total_size,
-                            ));
-                            stack_slot_map.insert(dest_name.clone(), slot);
-                        }
+                    if let AbiType::Aggregate { total_size, .. } = abi
+                        && !stack_slot_map.contains_key(dest_name)
+                    {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            total_size,
+                        ));
+                        stack_slot_map.insert(dest_name.clone(), slot);
                     }
                 }
 
-                if *op == IrOp::Ref {
-                    if let Value::Var(src_name) | Value::Temp(src_name) = src {
-                        let src_front_ty = var_types
-                            .get(src_name)
-                            .or_else(|| {
-                                let combined = format!("{}::{}", name, src_name);
-                                var_types.get(&combined)
-                            })
-                            .or_else(|| {
-                                src_name
-                                    .split("::")
-                                    .last()
-                                    .and_then(|suffix| var_types.get(suffix))
-                            });
+                if *op == IrOp::Ref
+                    && let Value::Var(src_name) | Value::Temp(src_name) = src
+                {
+                    let src_front_ty = var_types
+                        .get(src_name)
+                        .or_else(|| {
+                            let combined = format!("{}::{}", name, src_name);
+                            var_types.get(&combined)
+                        })
+                        .or_else(|| {
+                            src_name
+                                .split("::")
+                                .last()
+                                .and_then(|suffix| var_types.get(suffix))
+                        });
 
-                        if let Some(src_front_ty) = src_front_ty {
-                            let abi =
-                                AbiType::from_frontend(src_front_ty, &self.struct_defs, ptr_type);
+                    if let Some(src_front_ty) = src_front_ty {
+                        let abi = AbiType::from_frontend(src_front_ty, &self.struct_defs, ptr_type);
 
-                            let size = match abi {
-                                AbiType::Aggregate { total_size, .. } => total_size,
-                                _ => BackendType::from_frontend(src_front_ty).byte_size(),
-                            };
+                        let size = match abi {
+                            AbiType::Aggregate { total_size, .. } => total_size,
+                            _ => BackendType::from_frontend(src_front_ty).byte_size(),
+                        };
 
-                            if !stack_slot_map.contains_key(src_name) {
-                                let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                    StackSlotKind::ExplicitSlot,
-                                    size,
-                                ));
-                                stack_slot_map.insert(src_name.clone(), slot);
-                            }
+                        if !stack_slot_map.contains_key(src_name) {
+                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                StackSlotKind::ExplicitSlot,
+                                size,
+                            ));
+                            stack_slot_map.insert(src_name.clone(), slot);
                         }
                     }
                 }
@@ -681,14 +680,14 @@ impl CraneliftBackend {
 
                 if let Some(frontend_type) = f_ty {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
-                        if !stack_slot_map.contains_key(dest_name) {
-                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                total_size,
-                            ));
-                            stack_slot_map.insert(dest_name.clone(), slot);
-                        }
+                    if let AbiType::Aggregate { total_size, .. } = abi
+                        && !stack_slot_map.contains_key(dest_name)
+                    {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            total_size,
+                        ));
+                        stack_slot_map.insert(dest_name.clone(), slot);
                     }
                 }
             }
@@ -712,14 +711,14 @@ impl CraneliftBackend {
 
                 if let Some(frontend_type) = frontend_type {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                    if let AbiType::Aggregate { total_size, .. } = abi {
-                        if !stack_slot_map.contains_key(dest_name) {
-                            let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                total_size,
-                            ));
-                            stack_slot_map.insert(dest_name.clone(), slot);
-                        }
+                    if let AbiType::Aggregate { total_size, .. } = abi
+                        && let Some(&_dest_slot) = stack_slot_map.get(dest_name)
+                    {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            total_size,
+                        ));
+                        stack_slot_map.insert(dest_name.clone(), slot);
                     }
                 }
             }
@@ -951,7 +950,7 @@ impl CraneliftBackend {
                         ptr_type,
                     );
 
-                    let dest_backend_ty = BackendType::from_frontend(&to_type);
+                    let dest_backend_ty = BackendType::from_frontend(to_type);
                     let clif_target_ty = dest_backend_ty.to_clif_type(ptr_type);
 
                     let casted_val = match cast_ty {
@@ -1043,7 +1042,7 @@ impl CraneliftBackend {
                         }
                     };
 
-                    let local_func = self.module.declare_func_in_func(fn_id, &mut builder.func);
+                    let local_func = self.module.declare_func_in_func(fn_id, builder.func);
 
                     let inst_call = builder.ins().call(local_func, &call_args);
                     let call_results = builder.inst_results(inst_call).to_vec();
@@ -1078,7 +1077,7 @@ impl CraneliftBackend {
                                 stack_slot_map.insert(dest_name.clone(), slot);
                             }
                             let slot = *stack_slot_map.get(dest_name).unwrap();
-                            for i in 0..chunk_count {
+                            for (i, _item) in call_results.iter().enumerate().take(chunk_count) {
                                 let val_part = call_results[i];
                                 builder.ins().stack_store(val_part, slot, (i * 8) as i32);
                             }
@@ -1238,19 +1237,19 @@ impl CraneliftBackend {
                     if let Some(frontend_type) = dest_f_ty {
                         let abi =
                             AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                        if let AbiType::Aggregate { total_size, .. } = abi {
-                            if let Some(&dest_slot) = stack_slot_map.get(dest_name) {
-                                let dest_addr = builder.ins().stack_addr(ptr_type, dest_slot, 0);
-                                let size_val = builder.ins().iconst(ptr_type, total_size as i64);
+                        if let AbiType::Aggregate { total_size, .. } = abi
+                            && let Some(&dest_slot) = stack_slot_map.get(dest_name)
+                        {
+                            let dest_addr = builder.ins().stack_addr(ptr_type, dest_slot, 0);
+                            let size_val = builder.ins().iconst(ptr_type, total_size as i64);
 
-                                builder.call_memcpy(
-                                    self.module.target_config(),
-                                    dest_addr,
-                                    ptr_val,
-                                    size_val,
-                                );
-                                handled_as_aggregate = true;
-                            }
+                            builder.call_memcpy(
+                                self.module.target_config(),
+                                dest_addr,
+                                ptr_val,
+                                size_val,
+                            );
+                            handled_as_aggregate = true;
                         }
                     }
 
@@ -1285,48 +1284,48 @@ impl CraneliftBackend {
                     );
 
                     let mut handled_as_aggregate = false;
-                    if let Value::Var(src_name) | Value::Temp(src_name) = value {
-                        if let Some(frontend_type) = var_types.get(src_name) {
-                            let abi =
-                                AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
-                            if let AbiType::Aggregate { total_size, .. } = abi {
-                                let slot = stack_slot_map
-                                    .get(src_name)
-                                    .copied()
-                                    .or_else(|| {
-                                        let combined = format!("{}::{}", src_name, src_name);
-                                        stack_slot_map.get(&combined).copied()
-                                    })
-                                    .or_else(|| {
-                                        src_name
-                                            .split("::")
-                                            .last()
-                                            .and_then(|suffix| stack_slot_map.get(suffix).copied())
-                                    });
+                    if let Value::Var(src_name) | Value::Temp(src_name) = value
+                        && let Some(frontend_type) = var_types.get(src_name)
+                    {
+                        let abi =
+                            AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
+                        if let AbiType::Aggregate { total_size, .. } = abi {
+                            let slot = stack_slot_map
+                                .get(src_name)
+                                .copied()
+                                .or_else(|| {
+                                    let combined = format!("{}::{}", src_name, src_name);
+                                    stack_slot_map.get(&combined).copied()
+                                })
+                                .or_else(|| {
+                                    src_name
+                                        .split("::")
+                                        .last()
+                                        .and_then(|suffix| stack_slot_map.get(suffix).copied())
+                                });
 
-                                let src_addr = if let Some(s) = slot {
-                                    builder.ins().stack_addr(ptr_type, s, 0)
-                                } else {
-                                    self.lower_value(
-                                        &mut builder,
-                                        value,
-                                        &var_types,
-                                        &mut var_map,
-                                        &mut var_idx,
-                                        &stack_slot_map,
-                                        ptr_type,
-                                    )
-                                };
+                            let src_addr = if let Some(s) = slot {
+                                builder.ins().stack_addr(ptr_type, s, 0)
+                            } else {
+                                self.lower_value(
+                                    &mut builder,
+                                    value,
+                                    &var_types,
+                                    &mut var_map,
+                                    &mut var_idx,
+                                    &stack_slot_map,
+                                    ptr_type,
+                                )
+                            };
 
-                                let size_val = builder.ins().iconst(ptr_type, total_size as i64);
-                                builder.call_memcpy(
-                                    self.module.target_config(),
-                                    ptr_val,
-                                    src_addr,
-                                    size_val,
-                                );
-                                handled_as_aggregate = true;
-                            }
+                            let size_val = builder.ins().iconst(ptr_type, total_size as i64);
+                            builder.call_memcpy(
+                                self.module.target_config(),
+                                ptr_val,
+                                src_addr,
+                                size_val,
+                            );
+                            handled_as_aggregate = true;
                         }
                     }
 
@@ -1572,7 +1571,7 @@ impl CraneliftBackend {
 
                                     let slot = builder.create_sized_stack_slot(StackSlotData::new(
                                         StackSlotKind::ExplicitSlot,
-                                        size as u32,
+                                        size,
                                     ));
 
                                     let var_ty = value_backend_type(src, &var_types);
