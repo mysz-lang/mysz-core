@@ -2,6 +2,12 @@
 name = "mysz-core"
 version = "0.2.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "The main compiler for the Mysz language project"
+repository = "https://github.com/mysz-lang/mysz-core"
+readme = "README.md"
+keywords = ["language", "compiler", "mysz"]
+categories = ["compilers", "parser-implementations"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
