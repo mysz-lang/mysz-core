@@ -1,9 +1,11 @@
+use clap::builder::OsStr;
 use cranelift::codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::backend::clback;
 use crate::ir::ir::IRGen;
@@ -11,7 +13,12 @@ use crate::ir::tac::Instruction;
 use crate::lexing::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
 use crate::parse::parsing::{Identifier, Parameter, Program, Stmt};
-use crate::semantics::analyser::Analyser;
+use crate::semantics::analyser::{Analyser, AnalyserError};
+
+/// Maps a file's path (as it appears in `Location::file`) to its source
+/// text, so diagnostics can be reported against the file that actually
+/// produced them rather than always against the root file.
+type SourceMap = HashMap<String, String>;
 
 fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<PathBuf> {
     let mut relative_path = PathBuf::new();
@@ -37,7 +44,7 @@ fn find_module_file(module_path: &[String], search_paths: &[PathBuf]) -> Option<
 }
 
 fn format_error_with_location(
-    file_path: &Path,
+    file_path: &str,
     line_num: usize,
     column: usize,
     message: &str,
@@ -54,7 +61,7 @@ fn format_error_with_location(
 
     format!(
         "  --> {}:{}:{}\n      {}\n      {}{}\n      {}",
-        file_path.display(),
+        file_path,
         line_num,
         column,
         source_line,
@@ -72,11 +79,7 @@ fn format_module_error(module_path: &str, message: &str) -> String {
     format!("  --> module '{}'\n      {}", module_path, message)
 }
 
-fn format_parser_errors(
-    errors: &[crate::parse::parsing::ParserError],
-    source: &str,
-    file_path: &Path,
-) -> String {
+fn format_parser_errors(errors: &[crate::parse::parsing::ParserError], source: &str) -> String {
     let source_lines: Vec<&str> = source.lines().collect();
     let mut error_messages = Vec::new();
 
@@ -84,6 +87,7 @@ fn format_parser_errors(
         let location = &err.location;
         let line_num = location.line;
         let column = location.col;
+        let file = location.file.clone();
         let message = &err.message;
 
         let source_line = if line_num > 0 && line_num <= source_lines.len() {
@@ -96,7 +100,7 @@ fn format_parser_errors(
 
         error_messages.push(format!(
             "  --> {}:{}:{}\n      {}\n      {}{}\n      {}",
-            file_path.display(),
+            file,
             line_num,
             column,
             source_line,
@@ -109,31 +113,27 @@ fn format_parser_errors(
     error_messages.join("\n")
 }
 
-fn format_semantic_error(err: &str, source: Option<&str>, file_path: &Path) -> String {
-    let mut line_num = 0;
-    let mut column = 0;
-    let mut message = err;
-
-    if let Some(start) = err.find("[li = ") {
-        if let Some(end) = err[start..].find(']') {
-            let loc_part = &err[start..start + end + 1];
-            for part in loc_part.split(',').collect::<Vec<_>>() {
-                let trimmed = part.trim();
-                if trimmed.starts_with("li = ") {
-                    line_num = trimmed[5..].trim().parse().unwrap_or(0);
-                } else if trimmed.starts_with("co = ") {
-                    column = trimmed[5..].trim().parse().unwrap_or(0);
-                }
-            }
-            message = err[start + end + 1..].trim();
-        }
-    }
-
-    if line_num > 0 && column > 0 {
-        format_error_with_location(file_path, line_num, column, message, source)
-    } else {
-        format_simple_error(file_path, err)
-    }
+/// Parses the `file = .., li = .., co = ..` (or, for file-less synthetic
+/// locations, plain `li = .., co = ..`) fragment out of a semantic-error
+/// string, and formats it against the correct file's source - looked up
+/// from `sources` when the location carries a file, falling back to the
+/// root file otherwise.
+fn format_analyser_error(
+    err: &AnalyserError,
+    sources: &SourceMap,
+    root_source: Option<&str>,
+) -> String {
+    let (location, message) = match err {
+        AnalyserError::TypeError { location, message } => (location, message),
+        AnalyserError::SemanticError { location, message } => (location, message),
+    };
+    let file_path_str = location.file.as_ref();
+    // Look up the source text for that file; fallback to root if missing.
+    let source = sources
+        .get(file_path_str)
+        .map(|s| s.as_str())
+        .or(root_source);
+    format_error_with_location(file_path_str, location.line, location.col, message, source)
 }
 
 fn read_and_lex_file(
@@ -145,7 +145,8 @@ fn read_and_lex_file(
     file.read_to_string(&mut source)
         .map_err(|e| format_simple_error(file_path, &format!("Failed to read file: {}", e)))?;
 
-    let mut lexer = Lexer::new(source.clone());
+    let file_id: Rc<str> = Rc::from(file_path.display().to_string());
+    let mut lexer = Lexer::new(source.clone(), file_id);
     let res = lexer.lex();
 
     if let Err(err) = res {
@@ -163,8 +164,7 @@ fn flatten_program_statements(
     search_paths: &[PathBuf],
     visiting: &mut HashSet<PathBuf>,
     processed: &mut HashSet<PathBuf>,
-    root_path: &Path,
-    root_source: &str,
+    sources: &mut SourceMap,
 ) -> Result<Vec<Stmt>, String> {
     let mut flattened = Vec::new();
 
@@ -195,12 +195,13 @@ fn flatten_program_statements(
             visiting.insert(resolved_path.clone());
 
             let (source, tokens) = read_and_lex_file(&resolved_path)?;
+            sources.insert(resolved_path.display().to_string(), source.clone());
+
             let mut parser = myszparser::new(tokens);
             parser.parse();
 
             if !parser.parser_errs.is_empty() {
-                let error_report =
-                    format_parser_errors(&parser.parser_errs, &source, &resolved_path);
+                let error_report = format_parser_errors(&parser.parser_errs, &source);
                 return Err(format!(
                     "Parser errors in module '{}':\n{}",
                     module_path_str, error_report
@@ -212,8 +213,7 @@ fn flatten_program_statements(
                 search_paths,
                 visiting,
                 processed,
-                root_path,
-                root_source,
+                sources,
             )?;
 
             flattened.extend(module_stmts);
@@ -253,7 +253,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
     parser.parse();
 
     if !parser.parser_errs.is_empty() {
-        let error_report = format_parser_errors(&parser.parser_errs, &source, &input_path);
+        let error_report = format_parser_errors(&parser.parser_errs, &source);
         return Err(format!("Parser errors:\n{}", error_report));
     }
 
@@ -262,32 +262,46 @@ pub fn compile_root_file<P: AsRef<Path>>(
     let mut processed = HashSet::new();
     visiting.insert(input_path.clone());
 
+    let mut sources: SourceMap = HashMap::new();
+    sources.insert(input_path.display().to_string(), source.clone());
+
     let flattened_statements = flatten_program_statements(
         parser.ast.statements,
         &search_paths,
         &mut visiting,
         &mut processed,
-        &input_path,
-        &source,
+        &mut sources,
     )?;
 
     let program = Program {
         statements: flattened_statements,
     };
 
-    compile_ast_program(&program, output_filename, Some(&source), &input_path)
+    compile_ast_program(&program, output_filename, &sources, &input_path)
 }
 
 pub fn compile_ast_program(
     program: &Program,
     output_filename: &str,
-    source: Option<&str>,
+    sources: &SourceMap,
     file_path: &Path,
 ) -> Result<(), String> {
+    let root_source = sources
+        .get(&file_path.display().to_string())
+        .map(|s| s.as_str());
+
+    let filename: Rc<str> = Rc::from(
+        file_path
+            .file_name()
+            .unwrap_or(&OsStr::default())
+            .to_string_lossy()
+            .as_ref(),
+    );
+
     // Semantic analysis
     let mut analyser = Analyser::new();
     if let Err(err) = analyser.analyse(program) {
-        let formatted = format_semantic_error(&err, source, file_path);
+        let formatted = format_analyser_error(&err, sources, root_source);
         return Err(format!("Semantic error:\n{}", formatted));
     }
 
@@ -302,7 +316,11 @@ pub fn compile_ast_program(
                 .map(|(fname, ftype)| Parameter {
                     name: Identifier {
                         value: fname.clone(),
-                        location: crate::utils::location::Location { line: 0, col: 0 },
+                        location: crate::utils::location::Location::new_with_file(
+                            0,
+                            0,
+                            filename.clone(),
+                        ),
                     },
                     ptype: Some(ftype.clone()),
                 })

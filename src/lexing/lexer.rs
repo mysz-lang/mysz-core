@@ -55,21 +55,27 @@ pub struct Lexer {
     pub line: usize,
     pub col: usize,
     pub tokens: Vec<Token>,
+    /// Identifies which source file this lexer is reading from - stamped
+    /// onto every `Location` this lexer produces, so downstream diagnostics
+    /// (parser errors, semantic errors) can report the correct file even
+    /// after multiple modules' ASTs have been flattened together.
+    pub file: std::rc::Rc<str>,
 }
 
 impl Lexer {
-    pub fn new(source: String) -> Self {
+    pub fn new(source: String, file: impl Into<std::rc::Rc<str>>) -> Self {
         Self {
             source,
             token_idx: 0,
             tokens: Vec::new(),
             line: 0,
             col: 0,
+            file: file.into(),
         }
     }
 
     fn current_location(&self) -> Location {
-        Location::new(self.line, self.col)
+        Location::new_with_file(self.line, self.col, self.file.clone())
     }
 
     fn advance(&mut self) {

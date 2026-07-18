@@ -85,9 +85,15 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
     match mode {
         TypeCheckMode::Strict => false,
         TypeCheckMode::Coercive => {
-            if is_integer(expected) && is_integer(found) { return true; }
-            if found == &Type::Ptr(Box::new(Type::Char)) && expected == &Type::Str { return true; }
-            if expected == &Type::Ptr(Box::new(Type::Char)) && found == &Type::Str { return true; }
+            if is_integer(expected) && is_integer(found) {
+                return true;
+            }
+            if found == &Type::Ptr(Box::new(Type::Char)) && expected == &Type::Str {
+                return true;
+            }
+            if expected == &Type::Ptr(Box::new(Type::Char)) && found == &Type::Str {
+                return true;
+            }
             false
         }
     }

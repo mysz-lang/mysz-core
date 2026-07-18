@@ -4,6 +4,27 @@ use crate::utils::location::Location;
 use crate::utils::typesafe::*;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, Clone)]
+pub enum AnalyserError {
+    TypeError { location: Location, message: String },
+    SemanticError { location: Location, message: String },
+    // If there is ever an error without a location, add a variant here.
+}
+impl AnalyserError {
+    pub fn type_error(location: Location, message: impl Into<String>) -> Self {
+        AnalyserError::TypeError {
+            location,
+            message: message.into(),
+        }
+    }
+    pub fn semantic_error(location: Location, message: impl Into<String>) -> Self {
+        AnalyserError::SemanticError {
+            location,
+            message: message.into(),
+        }
+    }
+}
+
 fn contains_generic_param(ty: &Type) -> bool {
     match ty {
         Type::GenericParam(_) => true,
@@ -87,8 +108,12 @@ impl Analyser {
             _ => ty.clone(),
         }
     }
-    
-    fn instantiate_generic_types(&mut self, ty: &Type, span: &Location) -> Result<Type, String> {
+
+    fn instantiate_generic_types(
+        &mut self,
+        ty: &Type,
+        span: &Location,
+    ) -> Result<Type, AnalyserError> {
         match ty {
             Type::Ptr(inner) => {
                 let inst = self.instantiate_generic_types(inner, span)?;
@@ -108,28 +133,31 @@ impl Analyser {
                 }
 
                 if resolved_args.iter().any(contains_generic_param) {
-                    return Ok(Type::GenericInstance { name: name.clone(), args: resolved_args });
+                    return Ok(Type::GenericInstance {
+                        name: name.clone(),
+                        args: resolved_args,
+                    });
                 }
 
                 let template = self
                     .structs
                     .get(name)
-                    .ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Generic struct '{}' not found.",
-                            span, name
-                        )
+                    .ok_or_else(|| AnalyserError::SemanticError {
+                        location: span.clone(),
+                        message: format!("Semantic Error: Generic struct '{}' not found.", name),
                     })?
                     .clone();
 
                 if template.generic_params.len() != resolved_args.len() {
-                    return Err(format!(
-                        "Type Error [{}]: Struct '{}' expects {} type parameters, found {}",
-                        span,
-                        name,
-                        template.generic_params.len(),
-                        resolved_args.len()
-                    ));
+                    return Err(AnalyserError::TypeError {
+                        location: span.clone(),
+                        message: format!(
+                            "Type Error: Struct '{}' expects {} type parameters, found {}",
+                            name,
+                            template.generic_params.len(),
+                            resolved_args.len()
+                        ),
+                    });
                 }
 
                 let mangled = mangle_name(name, &resolved_args);
@@ -170,13 +198,16 @@ impl Analyser {
         name: &str,
         data_type: Type,
         span: Location,
-    ) -> Result<(), String> {
+    ) -> Result<(), AnalyserError> {
         let scope = &mut self.scopes[self.current_scope];
         if scope.symbols.contains_key(name) {
-            return Err(format!(
-                "Semantic Error [{}]: Variable '{}' already declared in this scope.",
-                span, name
-            ));
+            return Err(AnalyserError::SemanticError {
+                location: span,
+                message: format!(
+                    "Semantic Error: Variable '{}' already declared in this scope.",
+                    name
+                ),
+            });
         }
         scope.symbols.insert(
             name.to_string(),
@@ -202,7 +233,7 @@ impl Analyser {
         None
     }
 
-    fn validate_type_exists(&self, ty: &Type, span: &Location) -> Result<(), String> {
+    fn validate_type_exists(&self, ty: &Type, span: &Location) -> Result<(), AnalyserError> {
         match ty {
             Type::Struct(name) => {
                 if self.current_generic_params.contains(name) {
@@ -210,18 +241,24 @@ impl Analyser {
                 }
 
                 if !self.structs.contains_key(name) {
-                    return Err(format!(
-                        "Semantic Error [{}]: Type '{}' is used here but never defined.",
-                        span, name
-                    ));
+                    return Err(AnalyserError::SemanticError {
+                        location: span.clone(),
+                        message: format!(
+                            "Semantic Error: Type '{}' is used here but never defined.",
+                            name
+                        ),
+                    });
                 }
             }
             Type::GenericInstance { name, args } => {
                 if !self.structs.contains_key(name) {
-                    return Err(format!(
-                        "Semantic Error [{}]: Generic struct '{}' is used here but never defined.",
-                        span, name
-                    ));
+                    return Err(AnalyserError::SemanticError {
+                        location: span.clone(),
+                        message: format!(
+                            "Semantic Error: Generic Struct '{}' is used here but never defined.",
+                            name
+                        ),
+                    });
                 }
                 for arg in args {
                     self.validate_type_exists(arg, span)?;
@@ -244,12 +281,15 @@ impl Analyser {
         generic_params: Vec<String>,
         fields: HashMap<String, Type>,
         location: Location,
-    ) -> Result<(), String> {
+    ) -> Result<(), AnalyserError> {
         if let Some(existing) = self.structs.get(name) {
-            return Err(format!(
-                "Semantic Error [{}]: Struct '{}' is already defined at [{}]",
-                location, name, existing.location
-            ));
+            return Err(AnalyserError::SemanticError {
+                location,
+                message: format!(
+                    "Semantic Error: Struct '{}' is already defined at [{}]",
+                    name, existing.location
+                ),
+            });
         }
 
         self.structs.insert(
@@ -271,12 +311,19 @@ impl Analyser {
         param_types: Vec<Type>,
         return_type: Type,
         location: Location,
-    ) -> Result<(), String> {
+    ) -> Result<(), AnalyserError> {
         if let Some(existing) = self.functions.get(name) {
-            return Err(format!(
-                "Semantic Error [{}]: Function '{}' is already defined at [{}]",
-                location, name, existing.location
-            ));
+            println!(
+                "file={} line={} col={}",
+                location.file, location.line, location.col
+            );
+            return Err(AnalyserError::SemanticError {
+                location,
+                message: format!(
+                    "Semantic Error: Function '{}' is already defined at [{}]",
+                    name, existing.location
+                ),
+            });
         }
 
         self.functions.insert(
@@ -304,7 +351,7 @@ impl Analyser {
         &mut self,
         expr: &Expr,
         expected_type: Option<&Type>,
-    ) -> Result<Type, String> {
+    ) -> Result<Type, AnalyserError> {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
             ExprKind::Cast { left, right } => {
@@ -316,11 +363,13 @@ impl Analyser {
                     // *should* be reachable through an explicit operation.
                     return Ok(right.clone());
                 }
-                return Err(format!(
-                    "Type Error [{}]: Cannot cast '{}' to '{}'",
-                    expr.span,
-                    type_to_string(&leftty),
-                    type_to_string(right)
+                return Err(AnalyserError::type_error(
+                    expr.span.clone(),
+                    format!(
+                        "Cannot cast '{}' to '{}'",
+                        type_to_string(&leftty),
+                        type_to_string(right)
+                    ),
                 ));
             }
             ExprKind::Literal(lit) => match lit {
@@ -344,10 +393,11 @@ impl Analyser {
                         if let Some(elem_ty) = expected_elem_ty {
                             elem_ty.clone()
                         } else {
-                            return Err(format!(
-                                "Type Error [{}]: Cannot infer the type of an empty array literal without explicit type context.",
-                                expr.span
-                            ));
+                            return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            "Cannot infer the type of an empty array literal without explicit type context."
+                                .to_string(),
+                        ));
                         }
                     } else {
                         self.check_expr(&elements[0], expected_elem_ty)?
@@ -356,11 +406,13 @@ impl Analyser {
                     for el in elements {
                         let el_type = self.check_expr(el, Some(&element_type))?;
                         if !types_equal(&element_type, &el_type) {
-                            return Err(format!(
-                                "Type Error [{}]: Heterogeneous array literals are not allowed. Expected elements of type '{}', found '{}'.",
-                                el.span,
-                                type_to_string(&element_type),
-                                type_to_string(&el_type)
+                            return Err(AnalyserError::type_error(
+                                el.span.clone(),
+                                format!(
+                                    "Heterogeneous array literals are not allowed. Expected elements of type '{}', found '{}'.",
+                                    type_to_string(&element_type),
+                                    type_to_string(&el_type)
+                                ),
                             ));
                         }
                     }
@@ -377,16 +429,19 @@ impl Analyser {
                 match base_type {
                     Type::Struct(struct_name) => {
                         let signature = self.structs.get(&struct_name).ok_or_else(|| {
-                            format!(
-                                "Semantic Error [{}]: Attempted to access field '{}' on undefined struct '{}'.",
-                                expr.span, field, struct_name
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Attempted to access field '{}' on undefined struct '{}'.",
+                                    field, struct_name
+                                ),
                             )
                         })?;
 
                         let field_type = signature.fields.get(field).ok_or_else(|| {
-                            format!(
-                                "Semantic Error [{}]: Struct '{}' has no field named '{}'.",
-                                expr.span, struct_name, field
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!("Struct '{}' has no field named '{}'.", struct_name, field),
                             )
                         })?;
 
@@ -394,16 +449,19 @@ impl Analyser {
                     }
                     Type::GenericInstance { name, args } => {
                         let signature = self.structs.get(&name).ok_or_else(|| {
-                            format!(
-                                "Semantic Error [{}]: Attempted to access field '{}' on undefined struct '{}'.",
-                                expr.span, field, name
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Attempted to access field '{}' on undefined struct '{}'.",
+                                    field, name
+                                ),
                             )
                         })?;
 
                         let raw_field_type = signature.fields.get(field).ok_or_else(|| {
-                            format!(
-                                "Semantic Error [{}]: Struct '{}' has no field named '{}'.",
-                                expr.span, name, field
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!("Struct '{}' has no field named '{}'.", name, field),
                             )
                         })?;
 
@@ -416,10 +474,12 @@ impl Analyser {
 
                         Ok(self.substitute_type(raw_field_type, &mapping))
                     }
-                    _ => Err(format!(
-                        "Type Error [{}]: Cannot access a field on non-struct type '{}'.",
-                        expr.span,
-                        type_to_string(&base_type)
+                    _ => Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Cannot access a field on non-struct type '{}'.",
+                            type_to_string(&base_type)
+                        ),
                     )),
                 }
             }
@@ -432,40 +492,50 @@ impl Analyser {
                     .structs
                     .get(struct_name)
                     .ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Attempted to initialize undefined struct '{}'.",
-                            expr.span, struct_name
+                        AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!(
+                                "Attempted to initialize undefined struct '{}'.",
+                                struct_name
+                            ),
                         )
                     })?
                     .clone();
 
                 if fields.len() != signature.fields.len() {
-                    return Err(format!(
-                        "Type Error [{}]: Struct '{}' expects {} fields to be initialized, found {}.",
-                        expr.span,
-                        struct_name,
-                        signature.fields.len(),
-                        fields.len()
+                    return Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Struct '{}' expects {} fields to be initialized, found {}.",
+                            struct_name,
+                            signature.fields.len(),
+                            fields.len()
+                        ),
                     ));
                 }
 
                 for (field_name, field_expr) in fields {
                     let expected_field_ty = signature.fields.get(field_name).ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Field '{}' does not exist in struct '{}'.",
-                            field_expr.span, field_name, struct_name
+                        AnalyserError::semantic_error(
+                            field_expr.span.clone(),
+                            format!(
+                                "Field '{}' does not exist in struct '{}'.",
+                                field_name, struct_name
+                            ),
                         )
                     })?;
 
                     let actual_type = self.check_expr(field_expr, Some(expected_field_ty))?;
                     if !types_equal(expected_field_ty, &actual_type) {
-                        return Err(format!(
-                            "Type Error [{}]: Field '{}' of struct '{}' expects type '{}', but found '{}'.",
-                            field_expr.span,
-                            field_name,
-                            struct_name,
-                            type_to_string(expected_field_ty),
-                            type_to_string(&actual_type)
+                        return Err(AnalyserError::type_error(
+                            field_expr.span.clone(),
+                            format!(
+                                "Field '{}' of struct '{}' expects type '{}', but found '{}'.",
+                                field_name,
+                                struct_name,
+                                type_to_string(expected_field_ty),
+                                type_to_string(&actual_type)
+                            ),
                         ));
                     }
                 }
@@ -473,9 +543,12 @@ impl Analyser {
                 let mut tracking_set = HashSet::new();
                 for (name, _) in fields {
                     if !tracking_set.insert(name) {
-                        return Err(format!(
-                            "Semantic Error [{}]: Duplicate initialization of field '{}' in struct literal.",
-                            expr.span, name
+                        return Err(AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!(
+                                "Duplicate initialization of field '{}' in struct literal.",
+                                name
+                            ),
                         ));
                     }
                 }
@@ -488,20 +561,24 @@ impl Analyser {
                 let index_type = self.check_expr(index, Some(&Type::Int))?;
 
                 if !is_integer(&index_type) {
-                    return Err(format!(
-                        "Type Error [{}]: Array index must be an integer, found '{}'.",
-                        index.span,
-                        type_to_string(&index_type)
+                    return Err(AnalyserError::type_error(
+                        index.span.clone(),
+                        format!(
+                            "Array index must be an integer, found '{}'.",
+                            type_to_string(&index_type)
+                        ),
                     ));
                 }
 
                 match base_type {
                     Type::Array { element_type, .. } => Ok(*element_type),
                     Type::Ptr(inner_type) => Ok(*inner_type),
-                    _ => Err(format!(
-                        "Type Error [{}]: Cannot index into non-indexable type '{}'.",
-                        expr.span,
-                        type_to_string(&base_type)
+                    _ => Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Cannot index into non-indexable type '{}'.",
+                            type_to_string(&base_type)
+                        ),
                     )),
                 }
             }
@@ -511,9 +588,9 @@ impl Analyser {
                 } else if let Some((const_type, _)) = self.constants.get(name) {
                     Ok(const_type.clone())
                 } else {
-                    Err(format!(
-                        "Semantic Error [{}]: Symbol '{}' is used before definition.",
-                        expr.span, name
+                    Err(AnalyserError::semantic_error(
+                        expr.span.clone(),
+                        format!("Symbol '{}' is used before definition.", name),
                     ))
                 }
             }
@@ -525,9 +602,9 @@ impl Analyser {
                 let template = self
                     .resolve_function(&callee.value)
                     .ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Call to undefined function '{}'",
-                            callee.location, callee.value
+                        AnalyserError::semantic_error(
+                            callee.location.clone(),
+                            format!("Call to undefined function '{}'", callee.value),
                         )
                     })?
                     .clone();
@@ -536,12 +613,14 @@ impl Analyser {
 
                 if !template.generic_params.is_empty() || !generic_args.is_empty() {
                     if template.generic_params.len() != generic_args.len() {
-                        return Err(format!(
-                            "Type Error [{}]: Function '{}' expects {} type parameters, found {}",
-                            expr.span,
-                            callee.value,
-                            template.generic_params.len(),
-                            generic_args.len()
+                        return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!(
+                                "Function '{}' expects {} type parameters, found {}",
+                                callee.value,
+                                template.generic_params.len(),
+                                generic_args.len()
+                            ),
                         ));
                     }
 
@@ -557,11 +636,7 @@ impl Analyser {
                         for (param_name, concrete_type) in
                             template.generic_params.iter().zip(&inst_args)
                         {
-                            // 1. Map the raw identifier (e.g., "T")
                             mapping.insert(param_name.clone(), concrete_type.clone());
-
-                            // 2. CRITICAL: Map the mangled variant string (e.g., "gparam__T")
-                            // Check your type_to_mangled_string scheme to ensure this matches exactly!
                             mapping
                                 .insert(format!("gparam__{}", param_name), concrete_type.clone());
                         }
@@ -594,12 +669,14 @@ impl Analyser {
                 let sig = self.functions.get(&resolved_func_name).unwrap();
 
                 if args.len() != sig.param_types.len() {
-                    return Err(format!(
-                        "Type Error [{}]: Function '{}' expects {} argument(s), found {}",
-                        expr.span,
-                        callee.value,
-                        sig.param_types.len(),
-                        args.len()
+                    return Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Function '{}' expects {} argument(s), found {}",
+                            callee.value,
+                            sig.param_types.len(),
+                            args.len()
+                        ),
                     ));
                 }
 
@@ -622,37 +699,43 @@ impl Analyser {
                             if **expected_elem != Type::Any
                                 && !types_equal(expected_elem, actual_elem)
                             {
-                                return Err(format!(
-                                    "Type Error [{}]: Argument {} to '{}' expects array of '{}', found array of '{}'",
-                                    arg.span,
-                                    i + 1,
-                                    callee.value,
-                                    type_to_string(expected_elem),
-                                    type_to_string(actual_elem),
+                                return Err(AnalyserError::type_error(
+                                    arg.span.clone(),
+                                    format!(
+                                        "Argument {} to '{}' expects array of '{}', found array of '{}'",
+                                        i + 1,
+                                        callee.value,
+                                        type_to_string(expected_elem),
+                                        type_to_string(actual_elem),
+                                    ),
                                 ));
                             }
                         }
 
                         (Type::Array { .. }, _) => {
-                            return Err(format!(
-                                "Type Error [{}]: Argument {} to '{}' expects '{}', found '{}'",
-                                arg.span,
-                                i + 1,
-                                callee.value,
-                                type_to_string(expected),
-                                type_to_string(&arg_type),
+                            return Err(AnalyserError::type_error(
+                                arg.span.clone(),
+                                format!(
+                                    "Argument {} to '{}' expects '{}', found '{}'",
+                                    i + 1,
+                                    callee.value,
+                                    type_to_string(expected),
+                                    type_to_string(&arg_type),
+                                ),
                             ));
                         }
 
                         _ => {
                             if !types_equal(expected, &arg_type) {
-                                return Err(format!(
-                                    "Type Error [{}]: Argument {} to '{}' expects '{}', found '{}'",
-                                    arg.span,
-                                    i + 1,
-                                    callee.value,
-                                    type_to_string(expected),
-                                    type_to_string(&arg_type),
+                                return Err(AnalyserError::type_error(
+                                    arg.span.clone(),
+                                    format!(
+                                        "Argument {} to '{}' expects '{}', found '{}'",
+                                        i + 1,
+                                        callee.value,
+                                        type_to_string(expected),
+                                        type_to_string(&arg_type),
+                                    ),
                                 ));
                             }
                         }
@@ -672,21 +755,25 @@ impl Analyser {
                             if left_type == right_type {
                                 Ok(left_type)
                             } else {
-                                Err(format!(
-                                    "Type Error [{}]: Cannot add mismatched integer types '{}' and '{}'",
-                                    expr.span,
-                                    type_to_string(&left_type),
-                                    type_to_string(&right_type)
+                                Err(AnalyserError::type_error(
+                                    expr.span.clone(),
+                                    format!(
+                                        "Cannot add mismatched integer types '{}' and '{}'",
+                                        type_to_string(&left_type),
+                                        type_to_string(&right_type)
+                                    ),
                                 ))
                             }
                         } else if &Type::Str != &left_type && &Type::Str != &right_type {
                             Ok(Type::Str)
                         } else {
-                            Err(format!(
-                                "Type Error [{}]: Cannot add type '{}' and '{}'",
-                                expr.span,
-                                type_to_string(&left_type),
-                                type_to_string(&right_type)
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot add type '{}' and '{}'",
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
                             ))
                         }
                     }
@@ -695,20 +782,24 @@ impl Analyser {
                             if types_equal(&left_type, &right_type) {
                                 Ok(left_type)
                             } else {
-                                Err(format!(
-                                    "Type Error [{}]: Mixed-type integer arithmetic ('{}' and '{}') is not allowed",
-                                    expr.span,
-                                    type_to_string(&left_type),
-                                    type_to_string(&right_type)
+                                Err(AnalyserError::type_error(
+                                    expr.span.clone(),
+                                    format!(
+                                        "Mixed-type integer arithmetic ('{}' and '{}') is not allowed",
+                                        type_to_string(&left_type),
+                                        type_to_string(&right_type)
+                                    ),
                                 ))
                             }
                         } else {
-                            Err(format!(
-                                "Type Error [{}]: Operator '{:?}' expects integers, but found '{}' and '{}'",
-                                expr.span,
-                                op,
-                                type_to_string(&left_type),
-                                type_to_string(&right_type)
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Operator '{:?}' expects integers, but found '{}' and '{}'",
+                                    op,
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
                             ))
                         }
                     }
@@ -723,11 +814,13 @@ impl Analyser {
                         if types_equal(&left_type, &right_type) {
                             Ok(Type::Bool)
                         } else {
-                            Err(format!(
-                                "Type Error [{}]: Cannot compare incompatible types '{}' and '{}'",
-                                expr.span,
-                                type_to_string(&left_type),
-                                type_to_string(&right_type)
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot compare incompatible types '{}' and '{}'",
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
                             ))
                         }
                     }
@@ -740,10 +833,12 @@ impl Analyser {
                         if is_signed_integer(&expr_type) {
                             Ok(expr_type)
                         } else {
-                            Err(format!(
-                                "Type Error [{}]: Unary sign operators are only supported on signed integers, found '{}'",
-                                expr.span,
-                                type_to_string(&expr_type)
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Unary sign operators are only supported on signed integers, found '{}'",
+                                    type_to_string(&expr_type)
+                                ),
                             ))
                         }
                     }
@@ -751,20 +846,24 @@ impl Analyser {
                         if expr_type == Type::Bool {
                             Ok(Type::Bool)
                         } else {
-                            Err(format!(
-                                "Type Error [{}]: Unary boolean operator expects 'bool', found '{}'",
-                                expr.span,
-                                type_to_string(&expr_type)
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Unary boolean operator expects 'bool', found '{}'",
+                                    type_to_string(&expr_type)
+                                ),
                             ))
                         }
                     }
                     UnaryOp::AddressOf => Ok(Type::Ptr(Box::new(expr_type))),
                     UnaryOp::Deref => match expr_type {
                         Type::Ptr(inner_type) => Ok(*inner_type),
-                        _ => Err(format!(
-                            "Type Error [{}]: Cannot dereference non-pointer type '{}'",
-                            expr.span,
-                            type_to_string(&expr_type)
+                        _ => Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!(
+                                "Cannot dereference non-pointer type '{}'",
+                                type_to_string(&expr_type)
+                            ),
                         )),
                     },
                 }
@@ -772,7 +871,7 @@ impl Analyser {
         }
     }
 
-    pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+    pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), AnalyserError> {
         match stmt {
             Stmt::Use { .. } => unreachable!(),
 
@@ -793,10 +892,13 @@ impl Analyser {
                     };
 
                     if struct_fields.contains_key(&field.name.value) {
-                        return Err(format!(
-                            "Semantic Error [{}]: Struct '{}' contains duplicate field '{}'",
-                            field.name.location, name.value, field.name.value
-                        ));
+                        return Err(AnalyserError::SemanticError {
+                            location: field.name.location.clone(),
+                            message: format!(
+                                "Semantic Error: Struct '{}' contains duplicate field '{}'",
+                                name.value, field.name.value
+                            ),
+                        });
                     }
 
                     struct_fields.insert(field.name.value.clone(), field_type);
@@ -816,10 +918,12 @@ impl Analyser {
 
             Stmt::Break { location } => {
                 if self.loop_depth == 0 {
-                    return Err(format!(
-                        "Semantic Error [{}]: Break statement must be in a while loop statement",
-                        location
-                    ));
+                    return Err(AnalyserError::SemanticError {
+                        location: location.clone(),
+                        message:
+                            "Semantic Error: Break statement must be in a while loop statement"
+                                .to_string(),
+                    });
                 }
                 Ok(())
             }
@@ -870,10 +974,13 @@ impl Analyser {
 
             Stmt::Constant { name, vtype, expr } => {
                 if self.current_return_type.is_some() {
-                    return Err(format!(
-                        "Semantic Error [{}]: Constant '{}' cannot be defined inside a function.",
-                        name.location, name.value
-                    ));
+                    return Err(AnalyserError::SemanticError {
+                        location: name.location.clone(),
+                        message: format!(
+                            "Semantic Error: Constant '{}' cannot be defined inside a function.",
+                            name.value
+                        ),
+                    });
                 }
 
                 let const_type = match (vtype, expr) {
@@ -883,13 +990,15 @@ impl Analyser {
                         self.validate_type_exists(&instantiated, &name.location)?;
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
                         if !types_equal(&instantiated, &expr_type) {
-                            return Err(format!(
-                                "Type Error [{}]: Constant '{}' declared as '{}' but initializer has type '{}'",
-                                expr_node.span,
-                                name.value,
-                                type_to_string(&instantiated),
-                                type_to_string(&expr_type)
-                            ));
+                            return Err(AnalyserError::TypeError {
+                                location: expr_node.span.clone(),
+                                message: format!(
+                                    "Type Error: Constant '{}' declared as '{}' but initialiser has type '{}'",
+                                    name.value,
+                                    type_to_string(&instantiated),
+                                    type_to_string(&expr_type)
+                                ),
+                            });
                         }
                         instantiated
                     }
@@ -897,10 +1006,13 @@ impl Analyser {
                 };
 
                 if self.constants.contains_key(&name.value) {
-                    return Err(format!(
-                        "Semantic Error [{}]: Constant '{}' already defined.",
-                        name.location, name.value
-                    ));
+                    return Err(AnalyserError::SemanticError {
+                        location: name.location.clone(),
+                        message: format!(
+                            "Semantic Error: Constant '{}' already defined.",
+                            name.value
+                        ),
+                    });
                 }
 
                 self.constants
@@ -918,12 +1030,14 @@ impl Analyser {
                         let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
                         if !types_equal(&instantiated, &expr_type) {
-                            return Err(format!(
-                                "Type Error [{}]: Variable '{}' declared as '{}' but assigned type '{}'",
-                                expr_node.span,
-                                ident.value,
-                                type_to_string(&instantiated),
-                                type_to_string(&expr_type)
+                            return Err(AnalyserError::type_error(
+                                expr_node.span.clone(),
+                                format!(
+                                    "Variable '{}' declared as '{}' but assigned type '{}'",
+                                    ident.value,
+                                    type_to_string(&instantiated),
+                                    type_to_string(&expr_type)
+                                ),
                             ));
                         }
                         instantiated
@@ -936,21 +1050,26 @@ impl Analyser {
                     }
                     (None, Some(expr_node)) => self.check_expr(expr_node, None)?,
                     (None, None) => {
-                        return Err(format!(
-                            "Semantic Error [{}]: Variable '{}' declared without an explicit type or initializer expression.",
-                            ident.location, ident.value
+                        return Err(AnalyserError::semantic_error(
+                            ident.location.clone(),
+                            format!(
+                                "Variable '{}' declared without an explicit type or initializer expression.",
+                                ident.value
+                            ),
                         ));
                     }
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
                     if !types_equal(&existing_symbol.ty, &variable_type) {
-                        return Err(format!(
-                            "Type Error [{}]: Cannot reassign type '{}' to variable '{}' of type '{}'",
-                            ident.location,
-                            type_to_string(&variable_type),
-                            ident.value,
-                            type_to_string(&existing_symbol.ty)
+                        return Err(AnalyserError::type_error(
+                            ident.location.clone(),
+                            format!(
+                                "Cannot reassign type '{}' to variable '{}' of type '{}'",
+                                type_to_string(&variable_type),
+                                ident.value,
+                                type_to_string(&existing_symbol.ty)
+                            ),
                         ));
                     }
                 } else {
@@ -965,11 +1084,13 @@ impl Analyser {
                 let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
 
                 if !types_equal(&target_resolved_type, &expr_type) {
-                    return Err(format!(
-                        "Type Error [{}]: Cannot assign type '{}' to target location of type '{}'",
-                        expr.span,
-                        type_to_string(&expr_type),
-                        type_to_string(&target_resolved_type)
+                    return Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Cannot assign type '{}' to target location of type '{}'",
+                            type_to_string(&expr_type),
+                            type_to_string(&target_resolved_type)
+                        ),
                     ));
                 }
 
@@ -981,26 +1102,29 @@ impl Analyser {
                     .resolve_variable(&ident.value)
                     .map(|symbol| symbol.ty.clone())
                     .ok_or_else(|| {
-                        format!(
-                            "Semantic Error [{}]: Cannot reassign to undefined variable '{}'",
-                            ident.location, ident.value
+                        AnalyserError::semantic_error(
+                            ident.location.clone(),
+                            format!("Cannot reassign to undefined variable '{}'", ident.value),
                         )
                     })?;
 
                 let expr_type = self.check_expr(expr, Some(&expected_ty))?;
 
                 if !types_equal(&expected_ty, &expr_type) {
-                    return Err(format!(
-                        "Type Error [{}]: Cannot assign type '{}' to variable '{}' of type '{}'",
-                        expr.span,
-                        type_to_string(&expr_type),
-                        ident.value,
-                        type_to_string(&expected_ty)
+                    return Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Cannot assign type '{}' to variable '{}' of type '{}'",
+                            type_to_string(&expr_type),
+                            ident.value,
+                            type_to_string(&expected_ty)
+                        ),
                     ));
                 }
 
                 Ok(())
             }
+
             Stmt::Expr(expr) => {
                 self.check_expr(expr, None)?;
                 Ok(())
@@ -1009,10 +1133,12 @@ impl Analyser {
             Stmt::While { cond, body } => {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
-                    return Err(format!(
-                        "Type Error [{}]: 'while' condition is not truthy, found '{}'",
-                        cond.span,
-                        type_to_string(&cond_type)
+                    return Err(AnalyserError::type_error(
+                        cond.span.clone(),
+                        format!(
+                            "'while' condition is not truthy, found '{}'",
+                            type_to_string(&cond_type)
+                        ),
                     ));
                 }
                 self.enter_scope();
@@ -1038,10 +1164,12 @@ impl Analyser {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
                     self.leave_scope();
-                    return Err(format!(
-                        "Type Error [{}]: 'for' condition is not truthy, found '{}'",
-                        cond.span,
-                        type_to_string(&cond_type)
+                    return Err(AnalyserError::type_error(
+                        cond.span.clone(),
+                        format!(
+                            "'for' condition is not truthy, found '{}'",
+                            type_to_string(&cond_type)
+                        ),
                     ));
                 }
 
@@ -1064,10 +1192,12 @@ impl Analyser {
             } => {
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
-                    return Err(format!(
-                        "Type Error [{}]: 'if' condition is not truthy, found '{}'",
-                        cond.span,
-                        type_to_string(&cond_type)
+                    return Err(AnalyserError::type_error(
+                        cond.span.clone(),
+                        format!(
+                            "'if' condition is not truthy, found '{}'",
+                            type_to_string(&cond_type)
+                        ),
                     ));
                 }
 
@@ -1080,10 +1210,12 @@ impl Analyser {
                 for (cond, body) in else_if_branches {
                     let cond_type = self.check_expr(cond, None)?;
                     if !self.check_truthiness(&cond_type) {
-                        return Err(format!(
-                            "Type Error [{}]: 'elseif' condition is not truthy, found '{}'",
-                            cond.span,
-                            type_to_string(&cond_type)
+                        return Err(AnalyserError::type_error(
+                            cond.span.clone(),
+                            format!(
+                                "'elseif' condition is not truthy, found '{}'",
+                                type_to_string(&cond_type)
+                            ),
                         ));
                     }
 
@@ -1173,12 +1305,14 @@ impl Analyser {
                 self.current_return_type = prev_return_type;
 
                 if return_type != Type::Void && !returns {
-                    return Err(format!(
-                        "Type Error [{}]: Function '{}' must return a value of type '{}'",
-                        name.location,
-                        name.value,
-                        type_to_string(&return_type)
-                    ));
+                    return Err(AnalyserError::TypeError {
+                        location: name.location.clone(),
+                        message: format!(
+                            "Type Error: Function '{}' must return a value of type '{}'",
+                            name.value,
+                            type_to_string(&return_type)
+                        ),
+                    });
                 }
 
                 self.current_generic_params = prev_generic_params;
@@ -1188,10 +1322,7 @@ impl Analyser {
 
             Stmt::Return { value, span } => {
                 let expected = self.current_return_type.clone().ok_or_else(|| {
-                    format!(
-                        "Semantic Error [{}]: 'return' used outside of a function",
-                        span
-                    )
+                    AnalyserError::SemanticError { location: span.clone(), message: "Semantic Error: 'return' used outside of a function".to_string() }
                 })?;
 
                 let actual_type = match value {
@@ -1200,12 +1331,8 @@ impl Analyser {
                 };
 
                 if !types_equal(&expected, &actual_type) {
-                    return Err(format!(
-                        "Type Error [{}]: Function expects return type '{}', found '{}'",
-                        span,
-                        type_to_string(&expected),
-                        type_to_string(&actual_type)
-                    ));
+                    return Err(AnalyserError::TypeError { location: span.clone(), message: format!("Function expects return type '{}', found '{}'",
+                type_to_string(&expected), type_to_string(&actual_type)) })
                 }
 
                 Ok(())
@@ -1213,7 +1340,7 @@ impl Analyser {
         }
     }
 
-    pub fn analyse(&mut self, program: &Program) -> Result<(), String> {
+    pub fn analyse(&mut self, program: &Program) -> Result<(), AnalyserError> {
         for stmt in &program.statements {
             self.check_stmt(stmt)?;
         }
