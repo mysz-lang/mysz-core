@@ -22,6 +22,15 @@ This is the core repository, which holds the rust source code for the Lexer, Par
 mysz-core = { git = "https://github.com/mysz-lang/mysz-core.git", branch = "main" }
 ```
 
+### Using crates.io
+
+`mysz-core` is now on [crates.io](https://crates.io/crates/mysz-core), making adding it to your project's `Cargo.toml` is easy:
+
+```toml
+[dependencies]
+mysz-core = "0.2.0"
+```
+
 `mysz-core` will output object files, it is the responsibility of the embedding environment, or developer to link it and output a binary or library.
 
 ### Basic Compilation Example
