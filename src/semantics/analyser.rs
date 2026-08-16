@@ -482,6 +482,9 @@ impl Analyser {
                         }
                         Ok(Type::Any)
                     }
+                    Type::Any => {
+                        Ok(Type::Any)
+                    }
                     _ => Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
@@ -823,6 +826,9 @@ impl Analyser {
 
                 match op {
                     BinaryOp::Add => {
+                        if left_type == Type::Any || right_type == Type::Any {
+                            return Ok(Type::Any);
+                        }
                         if is_integer(&left_type) && is_integer(&right_type) {
                             if left_type == right_type {
                                 Ok(left_type)

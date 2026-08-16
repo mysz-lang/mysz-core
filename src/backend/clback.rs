@@ -862,25 +862,49 @@ impl CraneliftBackend {
                 Instruction::Param { p } => {
                     let arg_val = builder.block_params(entry_block)[param_index];
 
-                    let slot = stack_slot_map.get(p).or_else(|| {
-                        let local_name = p.split("::").last().unwrap_or(p);
-                        stack_slot_map.get(local_name)
-                    });
+                    let frontend_type = var_types
+                        .get(p)
+                        .or_else(|| {
+                            let combined = format!("{}::{}", name, p);
+                            var_types.get(&combined)
+                        })
+                        .or_else(|| {
+                            p.split("::")
+                                .last()
+                                .and_then(|suffix| var_types.get(suffix))
+                        })
+                        .unwrap_or(&Type::Int);
 
-                    if let Some(&s) = slot {
-                        builder.ins().stack_store(arg_val, s, 0);
-                    } else {
-                        let dest_ty =
-                            BackendType::from_frontend(var_types.get(p).unwrap_or(&Type::Int));
-                        let var_id = get_or_create_var(
-                            &mut builder,
-                            &mut var_map,
-                            &mut var_idx,
-                            p,
-                            dest_ty,
-                            ptr_type,
-                        );
-                        builder.def_var(var_id, arg_val);
+                    let abi = AbiType::from_frontend(
+                        frontend_type,
+                        &self.struct_defs,
+                        ptr_type,
+                    );
+
+                    match abi {
+                        AbiType::Aggregate { .. } => {
+                            // Aggregate parameters have already been copied from the ABI
+                            // pointer into their local stack slot by the parameter
+                            // initialisation pass above.
+                            //
+                            // Do NOT stack_store(arg_val) here: arg_val is the pointer
+                            // to the caller's aggregate, not the aggregate's contents.
+                        }
+
+                        _ => {
+                            let dest_ty = BackendType::from_frontend(frontend_type);
+
+                            let var_id = get_or_create_var(
+                                &mut builder,
+                                &mut var_map,
+                                &mut var_idx,
+                                p,
+                                dest_ty,
+                                ptr_type,
+                            );
+
+                            builder.def_var(var_id, arg_val);
+                        }
                     }
 
                     param_index += 1;

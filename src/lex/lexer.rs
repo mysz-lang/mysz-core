@@ -82,15 +82,20 @@ impl Lexer {
             } else {
                 self.col += 1;
             }
+
+            self.token_idx += ch.len_utf8();
         }
-        self.token_idx += 1;
     }
 
     fn peek(&self, offset: i32) -> Option<char> {
-        let true_offset = self.token_idx + offset as usize;
+        if offset < 0 {
+            return None;
+        }
+
         self.source
-            .get(true_offset..)
-            .and_then(|s| s.chars().next())
+            .get(self.token_idx..)?
+            .chars()
+            .nth(offset as usize)
     }
 
     pub fn get_char(&self) -> Option<char> {
@@ -120,6 +125,10 @@ impl Lexer {
 
     pub fn lex(&mut self) -> Result<(), LexError> {
         while let Some(ch) = self.get_char() {
+            println!(
+                "LEX: idx={}, line={}, col={}, char={:?}",
+                self.token_idx, self.line, self.col, ch
+            );
             if char::is_numeric(ch) {
                 let t = self.lex_numeric();
                 self.add_token(t);
@@ -195,6 +204,14 @@ impl Lexer {
                 }
             }
         }
+
+        println!(
+            "LEX EOF: idx={}, source bytes={}, source chars={}",
+            self.token_idx,
+            self.source.len(),
+            self.source.chars().count()
+        );
+
         Ok(())
     }
 
@@ -370,6 +387,8 @@ impl Lexer {
                 value: format!("{}{}{}", current, next, nextnext),
             });
         }
+
+        self.advance();
 
         return Ok(Token {
             ttype: TokenType::Period,

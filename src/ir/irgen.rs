@@ -1555,6 +1555,7 @@ impl IRGen {
             } => {
                 let has_variadic = params.iter().any(|p| p.is_variadic);
                 if !generic_params.is_empty() || has_variadic {
+                    println!("IRGen: deferring function '{}'", name.value);
                     self.fn_blueprints.insert(name.value.clone(), stmt.clone());
                     return;
                 }
@@ -1784,7 +1785,9 @@ impl IRGen {
     }
 
     pub fn gen_program(&mut self, program: &Program) {
+        println!("IRGen: {} top-level statements", program.statements.len());
         for stmt in &program.statements {
+            println!("IRGen: {:?}", stmt);
             if !matches!(stmt, Stmt::Function { .. })
                 && !matches!(stmt, Stmt::Extern { .. })
                 && !matches!(stmt, Stmt::Struct { .. })
