@@ -883,12 +883,6 @@ impl CraneliftBackend {
 
                     match abi {
                         AbiType::Aggregate { .. } => {
-                            // Aggregate parameters have already been copied from the ABI
-                            // pointer into their local stack slot by the parameter
-                            // initialisation pass above.
-                            //
-                            // Do NOT stack_store(arg_val) here: arg_val is the pointer
-                            // to the caller's aggregate, not the aggregate's contents.
                         }
 
                         _ => {

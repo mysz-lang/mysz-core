@@ -125,10 +125,6 @@ impl Lexer {
 
     pub fn lex(&mut self) -> Result<(), LexError> {
         while let Some(ch) = self.get_char() {
-            println!(
-                "LEX: idx={}, line={}, col={}, char={:?}",
-                self.token_idx, self.line, self.col, ch
-            );
             if char::is_numeric(ch) {
                 let t = self.lex_numeric();
                 self.add_token(t);
@@ -204,13 +200,6 @@ impl Lexer {
                 }
             }
         }
-
-        println!(
-            "LEX EOF: idx={}, source bytes={}, source chars={}",
-            self.token_idx,
-            self.source.len(),
-            self.source.chars().count()
-        );
 
         Ok(())
     }

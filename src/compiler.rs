@@ -424,10 +424,6 @@ pub fn compile_root_file<P: AsRef<Path>>(
 
     let (source, tokens) = read_and_lex_file(&input_path, json_output)?;
 
-    println!("LEXER: tokens: {:#?}", tokens);
-
-    println!("#finished: lexer");
-
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
@@ -462,13 +458,9 @@ pub fn compile_root_file<P: AsRef<Path>>(
         input_path.as_path(),
     )?;
 
-    println!("{:#?}", flattened_statements);
-
     let program = Program {
         statements: flattened_statements,
     };
-
-    println!("#finished: parser");
 
     compile_ast_program(
         &program,
@@ -527,10 +519,6 @@ pub fn compile_ast_program(
             return Err(format!("Semantic error:\n{}", formatted));
         }
     }
-
-    println!("ANALYSER: functions & structs: {:#?} \n {:#?}", analyser.functions, analyser.structs);
-    println!("ANALYSER: scopes: {:#?}", analyser.scopes);
-    println!("#finished: analyser");
     // IR generation
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
@@ -549,7 +537,7 @@ pub fn compile_ast_program(
                         ),
                     },
                     ptype: Some(ftype.clone()),
-                    is_variadic: false, // struct fields are never variadic
+                    is_variadic: false,
                 })
                 .collect();
             irgen
@@ -558,8 +546,7 @@ pub fn compile_ast_program(
         }
     }
     irgen.gen_program(program);
-    irgen.dump();
-    println!("#finished: IR-gen");
+    // irgen.dump();
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
     let mut skip_current_duplicate = false;
@@ -637,8 +624,6 @@ pub fn compile_ast_program(
         format_simple_error(file_path, &format!("Failed to emit object code: {}", e))
     })?;
 
-    println!("#finished: backend");
-
     let mut file = File::create(output_filename).map_err(|e| {
         format_simple_error(
             file_path,
@@ -655,8 +640,6 @@ pub fn compile_ast_program(
             ),
         )
     })?;
-
-    println!("#finished: file_out");
 
     Ok(())
 }
