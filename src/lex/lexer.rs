@@ -157,7 +157,10 @@ impl Lexer {
                         let t = self.lex_lt()?;
                         self.add_token(t);
                     }
-                    '.' => self.single_char(TokenType::Period)?,
+                    '.' => {
+                        let t = self.lex_period()?;
+                        self.add_token(t);
+                    }
                     '&' => {
                         let t = self.lex_amp()?;
                         self.add_token(t);
@@ -345,6 +348,34 @@ impl Lexer {
 
         self.advance();
         Err(LexError::UnknownCharacter { location: loc })
+    }
+
+    fn lex_period(&mut self) -> Result<Token, LexError> {
+        let loc = self.current_location();
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'.'",
+            location: loc.clone(),
+        })?;
+
+        if self.peek(1) == Some('.') && self.peek(2) == Some('.') {
+            let next = self.peek(1).unwrap();
+            let nextnext = self.peek(2).unwrap();
+
+            self.advance();
+            self.advance();
+            self.advance();
+            return Ok(Token {
+                ttype: TokenType::PeriodTriple,
+                location: loc,
+                value: format!("{}{}{}", current, next, nextnext),
+            })
+        }
+
+        return Ok(Token {
+            ttype: TokenType::Period,
+            location: loc,
+            value: current.to_string()
+        });
     }
 
     fn lex_lt(&mut self) -> Result<Token, LexError> {

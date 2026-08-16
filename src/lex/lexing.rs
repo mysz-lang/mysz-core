@@ -22,6 +22,7 @@ pub enum TokenType {
     Colon,
     DoubleColon,
     Period,
+    PeriodTriple,
     Comma,
     LBracket,
     RBracket,
