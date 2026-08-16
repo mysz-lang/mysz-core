@@ -41,6 +41,8 @@ pub enum Type {
     },
     GenericParam(String),
 
+    VariadicPack,
+
     Any,
 }
 
@@ -135,6 +137,7 @@ pub struct Expr {
 pub struct Parameter {
     pub name: Identifier,
     pub ptype: Option<Type>,
+    pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone)]

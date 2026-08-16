@@ -308,6 +308,7 @@ impl Analyser {
         name: &str,
         generic_params: Vec<String>,
         param_types: Vec<Type>,
+        is_variadic: bool,
         return_type: Type,
         location: Location,
     ) -> Result<(), AnalyserError> {
@@ -326,6 +327,7 @@ impl Analyser {
             FunctionSignature {
                 generic_params,
                 param_types,
+                is_variadic,
                 return_type,
                 location,
             },
@@ -464,6 +466,21 @@ impl Analyser {
                             .collect();
 
                         Ok(self.substitute_type(raw_field_type, &mapping))
+                    }
+                    Type::VariadicPack => {
+                        let valid = field.starts_with('i')
+                            && field.len() > 1
+                            && field[1..].chars().all(|c| c.is_ascii_digit());
+                        if !valid {
+                            return Err(AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Invalid variadic access '{}': expected 'iN' (e.g. 'i0', 'i1').",
+                                    field
+                                ),
+                            ));
+                        }
+                        Ok(Type::Any)
                     }
                     _ => Err(AnalyserError::type_error(
                         expr.span.clone(),
@@ -673,6 +690,7 @@ impl Analyser {
                             FunctionSignature {
                                 generic_params: Vec::new(),
                                 param_types: fresh_params,
+                                is_variadic: template.is_variadic,
                                 return_type: fresh_return,
                                 location: template.location.clone(),
                             },
@@ -680,9 +698,21 @@ impl Analyser {
                     }
                 }
 
-                let sig = self.functions.get(&resolved_func_name).unwrap();
+                let sig = self.functions.get(&resolved_func_name).unwrap().clone();
 
-                if args.len() != sig.param_types.len() {
+                if sig.is_variadic {
+                    if args.len() < sig.param_types.len() {
+                        return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!(
+                                "Function '{}' expects at least {} argument(s), found {}",
+                                callee.value,
+                                sig.param_types.len(),
+                                args.len()
+                            ),
+                        ));
+                    }
+                } else if args.len() != sig.param_types.len() {
                     return Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
@@ -697,7 +727,12 @@ impl Analyser {
                 let param_types = sig.param_types.clone();
                 let return_type = sig.return_type.clone();
 
-                for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
+                let fixed_arg_count = param_types.len();
+                for (i, (arg, expected)) in args[..fixed_arg_count]
+                    .iter()
+                    .zip(param_types.iter())
+                    .enumerate()
+                {
                     let arg_type = self.check_expr(arg, Some(expected))?;
                     match (expected, &arg_type) {
                         (
@@ -756,9 +791,32 @@ impl Analyser {
                     }
                 }
 
+                if sig.is_variadic {
+                    let variadic_args = &args[fixed_arg_count..];
+                    let mut variadic_types = Vec::new();
+                    for arg in variadic_args {
+                        variadic_types.push(self.check_expr(arg, None)?);
+                    }
+
+                    let variadic_mangled_name =
+                        mangle_variadic(&resolved_func_name, &variadic_types);
+
+                    if !self.functions.contains_key(&variadic_mangled_name) {
+                        self.functions.insert(
+                            variadic_mangled_name.clone(),
+                            FunctionSignature {
+                                generic_params: Vec::new(),
+                                param_types: param_types.clone(),
+                                is_variadic: true,
+                                return_type: return_type.clone(),
+                                location: sig.location.clone(),
+                            },
+                        );
+                    }
+                }
+
                 Ok(return_type)
             }
-
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;
@@ -961,7 +1019,12 @@ impl Analyser {
                     std::mem::replace(&mut self.current_generic_params, generic_params.clone());
 
                 let mut param_types = Vec::new();
+                let mut is_variadic = false;
                 for param in params {
+                    if param.is_variadic {
+                        is_variadic = true;
+                        continue;
+                    }
                     let ptype = match &param.ptype {
                         Some(pt) => {
                             let instantiated =
@@ -980,6 +1043,7 @@ impl Analyser {
                     &name.value,
                     generic_params.clone(),
                     param_types,
+                    is_variadic,
                     return_type,
                     name.location.clone(),
                 )?;
@@ -1278,7 +1342,12 @@ impl Analyser {
                     std::mem::replace(&mut self.current_generic_params, generic_params.clone());
 
                 let mut param_types = Vec::new();
+                let mut is_variadic = false;
                 for param in params {
+                    if param.is_variadic {
+                        is_variadic = true;
+                        continue;
+                    }
                     let ptype = match &param.ptype {
                         Some(pt) => {
                             if is_generic {
@@ -1299,6 +1368,7 @@ impl Analyser {
                     &name.value,
                     generic_params.clone(),
                     param_types.clone(),
+                    is_variadic,
                     return_type.clone(),
                     name.location.clone(),
                 )?;
@@ -1306,6 +1376,13 @@ impl Analyser {
                 self.enter_scope();
                 for (param, ptype) in params.iter().zip(param_types) {
                     self.declare_variable(&param.name.value, ptype, param.name.location.clone())?;
+                }
+                if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
+                    self.declare_variable(
+                        &variadic_param.name.value,
+                        Type::VariadicPack,
+                        variadic_param.name.location.clone(),
+                    )?;
                 }
 
                 let prev_return_type = self.current_return_type.replace(return_type.clone());

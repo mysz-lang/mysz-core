@@ -34,6 +34,25 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
             base
         }
         Type::GenericParam(s) => format!("gparam__{}", s),
+        Type::VariadicPack => {
+            unreachable!(
+                "VariadicPack is a symbolic placeholder and should never be mangled directly \
+                 — a concrete arg type was expected here. This indicates a compiler bug."
+            )
+        }
+    }
+}
+
+pub fn mangle_variadic(base_mangled_name: &str, variadic_types: &[Type]) -> String {
+    if variadic_types.is_empty() {
+        format!("{}.", base_mangled_name)
+    } else {
+        let joined = variadic_types
+            .iter()
+            .map(type_to_mangled_string)
+            .collect::<Vec<_>>()
+            .join("__");
+        format!("{}.{}", base_mangled_name, joined)
     }
 }
 
@@ -128,5 +147,6 @@ pub fn type_to_string(ty: &Type) -> String {
             format!("{}<{}>", name, args_str.join(", "))
         }
         Type::GenericParam(s) => format!("<{}>", s),
+        Type::VariadicPack => "variadic".to_string(),
     }
 }

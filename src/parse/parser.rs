@@ -383,6 +383,7 @@ impl Parser {
 
     fn parse_params(&mut self, ending: TokenType) -> Vec<Parameter> {
         let mut params = Vec::new();
+        let mut seen_variadic = false;
 
         if self.get_token().map(|t| &t.ttype) == Some(&ending) {
             self.advance();
@@ -390,6 +391,15 @@ impl Parser {
         }
 
         loop {
+            if seen_variadic {
+                self.throw(
+                    ParserErrorType::MalformedStatementError,
+                    "variadic parameter must be the last parameter".to_string(),
+                    self.get_token().unwrap().location.clone(),
+                );
+                break;
+            }
+
             let name = match self
                 .get_token()
                 .cloned()
@@ -409,14 +419,28 @@ impl Parser {
                 }
             };
 
-            let ptype = if self.get_token().map(|t| &t.ttype) == Some(&TokenType::Colon) {
-                self.advance();
-                self.parse_type()
-            } else {
-                None
-            };
+            let (ptype, is_variadic) =
+                if self.get_token().map(|t| &t.ttype) == Some(&TokenType::Colon) {
+                    self.advance();
+                    if matches!(
+                        self.get_token().map(|t| &t.ttype),
+                        Some(TokenType::PeriodTriple)
+                    ) {
+                        self.advance(); // consume '...'
+                        (None, true)
+                    } else {
+                        (self.parse_type(), false)
+                    }
+                } else {
+                    (None, false)
+                };
 
-            params.push(Parameter { name, ptype });
+            seen_variadic = is_variadic;
+            params.push(Parameter {
+                name,
+                ptype,
+                is_variadic,
+            });
 
             match self.get_token().map(|t| &t.ttype) {
                 Some(TokenType::Comma) => {
@@ -657,7 +681,11 @@ impl Parser {
             self.expect(TokenType::Colon)?;
 
             let ptype = self.parse_type();
-            fields.push(Parameter { name, ptype });
+            fields.push(Parameter {
+                name,
+                ptype,
+                is_variadic: false,
+            });
 
             if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                 self.advance();
@@ -778,7 +806,9 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
-        if let Some(TokenType::RParen | TokenType::RBrace | TokenType::SemiColon) = self.get_token().map(|t| &t.ttype) {
+        if let Some(TokenType::RParen | TokenType::RBrace | TokenType::SemiColon) =
+            self.get_token().map(|t| &t.ttype)
+        {
             return None;
         }
         self.parse_andor()
@@ -1132,14 +1162,12 @@ impl Parser {
                     }
                 }
                 Some(TokenType::DoubleColon) => {
-                    self.advance(); // consume '::'
+                    self.advance();
                     let generic_args = self.parse_generic_args();
 
-                    // Determine what follows: '(' or '{'
                     match self.get_token().map(|t| &t.ttype) {
                         Some(TokenType::LParen) => {
-                            // Generic function call
-                            self.advance(); // consume '('
+                            self.advance();
                             let args = self.parse_args();
                             if let ExprKind::Identifier(name) = &expr.kind {
                                 let callee_loc = expr.span.clone();
@@ -1165,8 +1193,7 @@ impl Parser {
                             }
                         }
                         Some(TokenType::LBrace) => {
-                            // Generic struct literal
-                            self.advance(); // consume '{'
+                            self.advance();
                             let mut fields = Vec::new();
                             if !matches!(
                                 self.get_token().map(|t| &t.ttype),

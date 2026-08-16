@@ -368,13 +368,13 @@ impl Lexer {
                 ttype: TokenType::PeriodTriple,
                 location: loc,
                 value: format!("{}{}{}", current, next, nextnext),
-            })
+            });
         }
 
         return Ok(Token {
             ttype: TokenType::Period,
             location: loc,
-            value: current.to_string()
+            value: current.to_string(),
         });
     }
 

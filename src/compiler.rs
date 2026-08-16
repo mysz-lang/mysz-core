@@ -539,6 +539,7 @@ pub fn compile_ast_program(
                         ),
                     },
                     ptype: Some(ftype.clone()),
+                    is_variadic: false, // struct fields are never variadic
                 })
                 .collect();
             irgen

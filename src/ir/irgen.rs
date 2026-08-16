@@ -61,6 +61,7 @@ impl Default for FunctionGen {
 #[derive(Debug)]
 pub struct StructLayout {
     pub total_size: i64,
+    pub alignment: i64,
     pub field_offsets: HashMap<String, (i64, Type)>,
 }
 
@@ -79,7 +80,7 @@ pub struct IRGen {
 
     pub fn_blueprints: HashMap<String, Stmt>,
     pub instantiated_fns: std::collections::HashSet<String>,
-    pub deferred_instantiations: Vec<(String, Vec<Type>)>,
+    pub deferred_instantiations: Vec<(String, Vec<Type>, Vec<Type>)>, // (callee_name, generic_args, variadic_arg_types)
     pub current_substitutions: HashMap<String, Type>,
 }
 
@@ -143,6 +144,12 @@ impl IRGen {
                 .cloned()
                 .unwrap_or_else(|| panic!("Unresolved generic parameter: {}", name)),
 
+            Type::VariadicPack => {
+                panic!(
+                    "ICE: VariadicPack reached substitute_type: it should have been resolved to a concrete __variadic__ struct before codegen substitution."
+                )
+            }
+
             Type::Int
             | Type::UInt
             | Type::Int8
@@ -157,6 +164,68 @@ impl IRGen {
 
     fn mangle_type(&self, ty: &Type) -> String {
         crate::utils::typesafe::type_to_mangled_string(ty)
+    }
+
+    fn mangle_call_name(
+        &self,
+        base: &str,
+        generic_args: &[Type],
+        variadic_args: &[Type],
+        is_variadic_capable: bool,
+    ) -> String {
+        let mut name = base.to_string();
+        for arg in generic_args {
+            name.push_str("__");
+            name.push_str(&self.mangle_type(arg));
+        }
+        if is_variadic_capable {
+            name.push('.');
+            name.push_str(
+                &variadic_args
+                    .iter()
+                    .map(|t| self.mangle_type(t))
+                    .collect::<Vec<_>>()
+                    .join("__"),
+            );
+        }
+        name
+    }
+
+    fn instantiate_variadic_struct(&mut self, struct_name: &str, arg_types: &[Type]) {
+        if self.struct_defs.contains_key(struct_name) {
+            return;
+        }
+
+        let mut offset: i64 = 0;
+        let mut max_align: i64 = 1;
+        let mut field_offsets = HashMap::new();
+
+        for (i, ty) in arg_types.iter().enumerate() {
+            let field_name = format!("i{}", i);
+            let size = self.type_size(ty);
+            let align = self.type_alignment(ty);
+            if align > max_align {
+                max_align = align;
+            }
+            offset = (offset + align - 1) & !(align - 1);
+            field_offsets.insert(field_name, (offset, ty.clone()));
+            offset += size;
+        }
+
+        let total_size = if arg_types.is_empty() {
+            0
+        } else {
+            (offset + max_align - 1) & !(max_align - 1)
+        };
+
+        self.struct_defs.insert(
+            struct_name.to_string(),
+            StructLayout {
+                total_size,
+                alignment: max_align,
+                field_offsets,
+            },
+        );
     }
 
     pub fn resolve_type(&mut self, ty: &Type) -> Type {
@@ -234,6 +303,7 @@ impl IRGen {
             mangled_name.clone(),
             StructLayout {
                 total_size,
+                alignment: max_alignment,
                 field_offsets,
             },
         );
@@ -294,6 +364,11 @@ impl IRGen {
                         panic!("Failed to find layout for generic instance: {mangled_name}")
                     })
             }
+            Type::VariadicPack => {
+                panic!(
+                    "ICE: VariadicPack reached type_size: it should have been resolved to a concrete __variadic__ struct before size queries."
+                )
+            }
 
             Type::Void => 0,
             Type::Any => 8, // default value, since any is unsafe anyway
@@ -317,7 +392,7 @@ impl IRGen {
             Type::Array { element_type, .. } => self.type_alignment(element_type),
             Type::Struct(name) => self
                 .get_struct_layout(name)
-                .map(|l| l.total_size)
+                .map(|l| l.alignment)
                 .unwrap_or_else(|| panic!("Failed to find layout for struct: {name}")),
             Type::GenericInstance { name, args } => {
                 let mut mangled_name = name.clone();
@@ -326,13 +401,18 @@ impl IRGen {
                     mangled_name.push_str(&self.mangle_type(arg));
                 }
                 self.get_struct_layout(&mangled_name)
-                    .map(|l| l.total_size)
+                    .map(|l| l.alignment)
                     .unwrap_or_else(|| {
                         panic!("Failed to find layout for generic instance: {mangled_name}")
                     })
             }
+            Type::VariadicPack => {
+                panic!(
+                    "ICE: VariadicPack reached type_alignment: it should have been resolved to a concrete __variadic__ struct before alignment queries."
+                )
+            }
             Type::Void => 0,
-            Type::Any => 8, // default value, since any is unsafe anyway
+            Type::Any => 8,
         }
     }
 
@@ -489,6 +569,156 @@ impl IRGen {
                 None
             }
             ExprKind::StructLiteral { struct_name, .. } => Some(Type::Struct(struct_name.clone())),
+        }
+    }
+
+    fn gen_call(
+        &mut self,
+        callee: &crate::parse::parsing::Identifier,
+        generic_args: &[Type],
+        args: &[Expr],
+        want_result: bool,
+    ) -> Option<Value> {
+        let blueprint = self.fn_blueprints.get(&callee.value).cloned();
+
+        let (generic_params, fixed_param_count, is_variadic_capable) =
+            if let Some(Stmt::Function {
+                generic_params,
+                params,
+                ..
+            }) = &blueprint
+            {
+                let fixed = params.iter().filter(|p| !p.is_variadic).count();
+                let variadic = params.iter().any(|p| p.is_variadic);
+                (generic_params.clone(), fixed, variadic)
+            } else {
+                (Vec::new(), args.len(), false)
+            };
+
+        let substituted_generic_args: Vec<Type> = generic_args
+            .iter()
+            .map(|t| self.substitute_type(t, &self.current_substitutions))
+            .collect();
+
+        let split_at = fixed_param_count.min(args.len());
+        let (fixed_arg_exprs, variadic_arg_exprs) = if is_variadic_capable {
+            args.split_at(split_at)
+        } else {
+            (args, &args[args.len()..])
+        };
+
+        let mut arg_values: Vec<Value> = fixed_arg_exprs
+            .iter()
+            .map(|a| self.gen_expr(a, None))
+            .collect();
+
+        let mut variadic_types = Vec::new();
+        let mut variadic_values = Vec::new();
+        for a in variadic_arg_exprs {
+            let v = self.gen_expr(a, None);
+            let t = self.expr_type(a).unwrap_or(Type::Int);
+            variadic_types.push(t);
+            variadic_values.push(v);
+        }
+
+        let resolved_func_name = self.mangle_call_name(
+            &callee.value,
+            &substituted_generic_args,
+            &variadic_types,
+            is_variadic_capable,
+        );
+
+        if is_variadic_capable {
+            let struct_name = format!("__variadic__{}", resolved_func_name);
+            self.instantiate_variadic_struct(&struct_name, &variadic_types);
+
+            let raw = self.temps.next_temp();
+            let pack_var = format!("_variadic_pack_{}", raw);
+            self.var_types
+                .insert(pack_var.clone(), Type::Struct(struct_name.clone()));
+
+            for (i, val) in variadic_values.into_iter().enumerate() {
+                let field_name = format!("i{}", i);
+                let (offset, field_ty) =
+                    self.struct_defs[&struct_name].field_offsets[&field_name].clone();
+
+                let base_addr_temp = self
+                    .next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name.clone()))));
+                self.code.push(Instruction::Unary {
+                    dst: base_addr_temp.clone(),
+                    op: IrOp::Ref,
+                    value: Value::Var(pack_var.clone()),
+                });
+
+                let slot_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_ty)));
+                self.code.push(Instruction::Binary {
+                    dst: slot_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: Value::Temp(base_addr_temp),
+                    rhs: Value::Const(offset),
+                });
+
+                self.code.push(Instruction::Store {
+                    ptr: Value::Temp(slot_addr_temp),
+                    source: val,
+                });
+            }
+
+            arg_values.push(Value::Var(pack_var));
+        }
+
+        for v in &arg_values {
+            self.code.push(Instruction::Arg { value: v.clone() });
+        }
+
+        if blueprint.is_some() && !self.instantiated_fns.contains(&resolved_func_name) {
+            self.instantiated_fns.insert(resolved_func_name.clone());
+            self.deferred_instantiations.push((
+                callee.value.clone(),
+                substituted_generic_args.clone(),
+                variadic_types.clone(),
+            ));
+
+            if let Some(Stmt::Function { rttype, .. }) = &blueprint {
+                let substitutions: HashMap<String, Type> = generic_params
+                    .iter()
+                    .cloned()
+                    .zip(substituted_generic_args.iter().cloned())
+                    .collect();
+                let unres_ty = rttype.clone().unwrap_or(Type::Void);
+                let sub_ty = self.substitute_type(&unres_ty, &substitutions);
+
+                let old_subs = self.current_substitutions.clone();
+                self.current_substitutions = substitutions;
+                let resolved_rttype = self.resolve_type(&sub_ty);
+                self.current_substitutions = old_subs;
+
+                self.var_types
+                    .insert(resolved_func_name.clone(), resolved_rttype);
+            }
+        }
+
+        let return_ty = self
+            .var_types
+            .get(&resolved_func_name)
+            .cloned()
+            .unwrap_or(Type::Int);
+
+        if want_result {
+            let dst = self.next_temp_with_type(return_ty);
+            self.code.push(Instruction::Call {
+                dest: Some(dst.clone()),
+                name: resolved_func_name,
+                argc: arg_values.len(),
+            });
+            Some(Value::Temp(dst))
+        } else {
+            self.code.push(Instruction::Call {
+                dest: None,
+                name: resolved_func_name,
+                argc: arg_values.len(),
+            });
+            None
         }
     }
 
@@ -1080,74 +1310,9 @@ impl IRGen {
                 callee,
                 generic_args,
                 args,
-            } => {
-                let arg_values: Vec<Value> =
-                    args.iter().map(|arg| self.gen_expr(arg, None)).collect();
-
-                for val in arg_values.iter() {
-                    self.code.push(Instruction::Arg { value: val.clone() });
-                }
-
-                let mut resolved_func_name = callee.value.clone();
-                let substituted_generic_args: Vec<Type> = generic_args
-                    .iter()
-                    .map(|arg_type| self.substitute_type(arg_type, &self.current_substitutions))
-                    .collect();
-
-                if !substituted_generic_args.is_empty() {
-                    for arg_type in &substituted_generic_args {
-                        resolved_func_name.push_str("__");
-                        resolved_func_name.push_str(&self.mangle_type(arg_type));
-                    }
-                }
-
-                if !substituted_generic_args.is_empty()
-                    && !self.instantiated_fns.contains(&resolved_func_name)
-                {
-                    self.instantiated_fns.insert(resolved_func_name.clone());
-
-                    self.deferred_instantiations
-                        .push((callee.value.clone(), substituted_generic_args.clone()));
-
-                    if let Some(Stmt::Function {
-                        generic_params,
-                        rttype,
-                        ..
-                    }) = self.fn_blueprints.get(&callee.value).cloned()
-                    {
-                        let substitutions: HashMap<String, Type> = generic_params
-                            .iter()
-                            .cloned()
-                            .zip(substituted_generic_args.iter().cloned())
-                            .collect();
-                        let unres_ty = rttype.unwrap_or(Type::Void);
-                        let sub_ty = self.substitute_type(&unres_ty, &substitutions);
-
-                        let old_subs = self.current_substitutions.clone();
-                        self.current_substitutions = substitutions;
-                        let resolved_rttype = self.resolve_type(&sub_ty);
-                        self.current_substitutions = old_subs;
-
-                        self.var_types
-                            .insert(resolved_func_name.clone(), resolved_rttype);
-                    }
-                }
-
-                let return_ty = self
-                    .var_types
-                    .get(&resolved_func_name)
-                    .cloned()
-                    .unwrap_or(Type::Int);
-
-                let dst = self.next_temp_with_type(return_ty);
-                self.code.push(Instruction::Call {
-                    dest: Some(dst.clone()),
-                    name: resolved_func_name,
-                    argc: arg_values.len(),
-                });
-
-                Value::Temp(dst)
-            }
+            } => self
+                .gen_call(callee, generic_args, args, true)
+                .unwrap_or(Value::Void),
         }
     }
 
@@ -1267,66 +1432,12 @@ impl IRGen {
                     args,
                 } = &expr.kind
                 {
-                    let arg_values: Vec<Value> =
-                        args.iter().map(|arg| self.gen_expr(arg, None)).collect();
-
-                    for val in arg_values.iter() {
-                        self.code.push(Instruction::Arg { value: val.clone() });
-                    }
-
-                    let mut resolved_func_name = callee.value.clone();
-                    let substituted_generic_args: Vec<Type> = generic_args
-                        .iter()
-                        .map(|arg_type| self.substitute_type(arg_type, &self.current_substitutions))
-                        .collect();
-
-                    if !substituted_generic_args.is_empty() {
-                        for arg_type in &substituted_generic_args {
-                            resolved_func_name.push_str("__");
-                            resolved_func_name.push_str(&self.mangle_type(arg_type));
-                        }
-                    }
-
-                    if !substituted_generic_args.is_empty()
-                        && !self.instantiated_fns.contains(&resolved_func_name)
-                    {
-                        self.instantiated_fns.insert(resolved_func_name.clone());
-                        self.deferred_instantiations
-                            .push((callee.value.clone(), substituted_generic_args.clone()));
-
-                        if let Some(Stmt::Function {
-                            generic_params,
-                            rttype,
-                            ..
-                        }) = self.fn_blueprints.get(&callee.value).cloned()
-                        {
-                            let substitutions: HashMap<String, Type> = generic_params
-                                .iter()
-                                .cloned()
-                                .zip(substituted_generic_args.iter().cloned())
-                                .collect();
-                            let unres_ty = rttype.unwrap_or(Type::Void);
-                            let sub_ty = self.substitute_type(&unres_ty, &substitutions);
-
-                            let old_subs = self.current_substitutions.clone();
-                            self.current_substitutions = substitutions;
-                            let resolved_rttype = self.resolve_type(&sub_ty);
-                            self.current_substitutions = old_subs;
-
-                            self.var_types
-                                .insert(resolved_func_name.clone(), resolved_rttype);
-                        }
-                    }
-
-                    self.code.push(Instruction::Call {
-                        dest: None,
-                        name: resolved_func_name,
-                        argc: arg_values.len(),
-                    });
+                    self.gen_call(callee, generic_args, args, false);
                 } else {
                     self.gen_expr(expr, None);
                 }
             }
+
             Stmt::If {
                 cond,
                 then_branch,
@@ -1442,7 +1553,8 @@ impl IRGen {
                 rttype,
                 ..
             } => {
-                if !generic_params.is_empty() {
+                let has_variadic = params.iter().any(|p| p.is_variadic);
+                if !generic_params.is_empty() || has_variadic {
                     self.fn_blueprints.insert(name.value.clone(), stmt.clone());
                     return;
                 }
@@ -1686,7 +1798,9 @@ impl IRGen {
             self.gen_stmt(stmt);
         }
 
-        while let Some((callee_name, args)) = self.deferred_instantiations.pop() {
+        while let Some((callee_name, generic_args, variadic_types)) =
+            self.deferred_instantiations.pop()
+        {
             if let Some(blueprint) = self.fn_blueprints.get(&callee_name).cloned()
                 && let Stmt::Function {
                     name,
@@ -1697,16 +1811,18 @@ impl IRGen {
                     ..
                 } = blueprint
             {
-                let mut resolved_func_name = name.value.clone();
-                for arg_type in &args {
-                    resolved_func_name.push_str("__");
-                    resolved_func_name.push_str(&self.mangle_type(arg_type));
-                }
+                let has_variadic = params.iter().any(|p| p.is_variadic);
+                let resolved_func_name = self.mangle_call_name(
+                    &name.value,
+                    &generic_args,
+                    &variadic_types,
+                    has_variadic,
+                );
 
                 let substitutions: HashMap<String, Type> = generic_params
                     .iter()
                     .cloned()
-                    .zip(args.iter().cloned())
+                    .zip(generic_args.iter().cloned())
                     .collect();
 
                 let old_subs = self.current_substitutions.clone();
@@ -1718,22 +1834,32 @@ impl IRGen {
                 self.code
                     .push(Instruction::FunctionLabel(resolved_func_name.clone()));
 
-                for param in params {
+                for param in params.iter().filter(|p| !p.is_variadic) {
                     if let Some(param_ty) = &param.ptype {
                         let resolved_param_ty = self.resolve_type(param_ty);
-
                         let unique_param_name =
                             format!("{}::{}", resolved_func_name, param.name.value);
                         self.var_types.insert(unique_param_name, resolved_param_ty);
                     }
-
                     self.code.push(Instruction::Param {
                         p: format!("{}::{}", resolved_func_name, param.name.value),
                     });
                 }
 
-                for stmt in body {
-                    self.gen_stmt(&stmt);
+                if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
+                    let struct_name = format!("__variadic__{}", resolved_func_name);
+                    self.instantiate_variadic_struct(&struct_name, &variadic_types); // no-op if call site already built it
+                    let unique_param_name =
+                        format!("{}::{}", resolved_func_name, variadic_param.name.value);
+                    self.var_types
+                        .insert(unique_param_name.clone(), Type::Struct(struct_name));
+                    self.code.push(Instruction::Param {
+                        p: unique_param_name,
+                    });
+                }
+
+                for stmt in &body {
+                    self.gen_stmt(stmt);
                 }
 
                 let base_return_ty = rttype.unwrap_or(Type::Void);

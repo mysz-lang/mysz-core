@@ -11,12 +11,15 @@ use crate::parse::parsing::Type;
 use crate::semantics::analysis::FunctionSignature;
 
 fn strip_mangling(name: &str) -> &str {
-    name.split("__")
-        .next()
-        .unwrap_or(name)
-        .split('<')
-        .next()
-        .unwrap_or(name)
+    let cut = [name.find("__"), name.find('.'), name.find('<')]
+        .into_iter()
+        .flatten()
+        .min();
+
+    match cut {
+        Some(idx) => &name[..idx],
+        None => name,
+    }
 }
 
 /// The backend type a TAC `Value` naturally carries: literals get their
@@ -127,6 +130,11 @@ impl BackendType {
                         "generic parameters '{}' must be monomorphised before codegen",
                         s
                     )
+                )
+            }
+            Type::VariadicPack => {
+                unreachable!(
+                    "variadic pack must be resolved to a concrete __variadic__ struct before codegen"
                 )
             }
             Type::Any => BackendType::Ptr,

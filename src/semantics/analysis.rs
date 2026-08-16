@@ -25,6 +25,7 @@ pub struct StructSignature {
 pub struct FunctionSignature {
     pub generic_params: Vec<String>,
     pub param_types: Vec<Type>,
+    pub is_variadic: bool,
     pub return_type: Type,
     pub location: Location,
 }
