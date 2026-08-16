@@ -1,4 +1,4 @@
-name: nibble
+name: core
 
 on:
   push:
