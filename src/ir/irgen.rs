@@ -437,6 +437,7 @@ impl IRGen {
 
             ExprKind::Index { base, .. } => match self.expr_type(base)? {
                 Type::Array { element_type, .. } => Some(*element_type),
+                Type::Str => Some(Type::Char),
                 Type::Ptr(inner) => match *inner {
                     Type::Array { element_type, .. } => Some(*element_type),
                     other => Some(other),
@@ -568,6 +569,7 @@ impl IRGen {
                         Type::Array { element_type, .. } => *element_type.clone(),
                         other => other.clone(),
                     },
+                    Some(Type::Str) => Type::Char,
                     _ => Type::Int,
                 };
 
@@ -866,6 +868,7 @@ impl IRGen {
                         Type::Array { element_type, .. } => *element_type.clone(),
                         other => other.clone(),
                     },
+                    Some(Type::Str) => Type::Char,
                     _ => Type::Int,
                 };
 
@@ -1585,6 +1588,7 @@ impl IRGen {
                                 Type::Array { element_type, .. } => *element_type.clone(),
                                 other => other.clone(),
                             },
+                            Some(Type::Str) => Type::Char,
                             _ => Type::Int,
                         };
 

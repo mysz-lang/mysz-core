@@ -585,6 +585,7 @@ impl Analyser {
 
                 match base_type {
                     Type::Array { element_type, .. } => Ok(*element_type),
+                    Type::Str => Ok(Type::Char),
                     Type::Ptr(inner_type) => Ok(*inner_type),
                     _ => Err(AnalyserError::type_error(
                         expr.span.clone(),
