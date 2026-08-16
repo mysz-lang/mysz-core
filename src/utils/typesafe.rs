@@ -128,15 +128,6 @@ pub fn types_equal(expected: &Type, from: &Type) -> bool {
 
 pub fn type_to_string(ty: &Type) -> String {
     match ty {
-        Type::Int => "int".to_string(),
-        Type::UInt => "uint".to_string(),
-        Type::Int8 => "i8".to_string(),
-        Type::UInt8 => "u8".to_string(),
-        Type::Bool => "bool".to_string(),
-        Type::Str => "str".to_string(),
-        Type::Char => "char".to_string(),
-        Type::Void => "void".to_string(),
-        Type::Any => "any".to_string(),
         Type::Struct(name) => name.clone(),
         Type::Ptr(inner) => format!("ptr<{}>", type_to_string(inner)),
         Type::Array { element_type, size } => {
@@ -147,6 +138,27 @@ pub fn type_to_string(ty: &Type) -> String {
             format!("{}<{}>", name, args_str.join(", "))
         }
         Type::GenericParam(s) => format!("<{}>", s),
-        Type::VariadicPack => "variadic".to_string(),
+
+        _ => typeof_string(ty),
+    }
+}
+
+pub fn typeof_string(ty: &Type) -> String {
+    match ty {
+        Type::Int => "int".to_string(),
+        Type::UInt => "uint".to_string(),
+        Type::Int8 => "i8".to_string(),
+        Type::UInt8 => "u8".to_string(),
+        Type::Bool => "bool".to_string(),
+        Type::Str => "str".to_string(),
+        Type::Char => "char".to_string(),
+        Type::Void => "void".to_string(),
+        Type::Any => "any".to_string(),
+        Type::Struct(..) => "struct".to_string(),
+        Type::Ptr(..) => "ptr".to_string(),
+        Type::Array { .. } => "array".to_string(),
+        Type::GenericInstance { .. } => "generic_instance".to_string(),
+        Type::GenericParam(..) => "generic_param".to_string(),
+        Type::VariadicPack => "variadic".to_string()
     }
 }

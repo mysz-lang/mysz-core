@@ -6,6 +6,8 @@ use crate::{
     utils::typesafe::type_to_string,
 };
 
+use crate::utils::typesafe;
+
 pub struct TempGen {
     counter: usize,
 }
@@ -472,6 +474,7 @@ impl IRGen {
         match &expr.kind {
             ExprKind::Cast { left: _, right } => Some(right.clone()),
             ExprKind::Sizeof { .. } => Some(Type::Int),
+            ExprKind::Typeof { .. } => Some(Type::Str),
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
@@ -836,6 +839,15 @@ impl IRGen {
                 let resolved_ty = self.resolve_type(ty);
                 let size = self.type_size(&resolved_ty);
                 Value::Const(size)
+            }
+            ExprKind::Typeof { expr } => {
+                let resolved_expr = self.expr_type(expr);
+                if let Some(rexpr) = resolved_expr { 
+                    let etype = typesafe::typeof_string(&rexpr);
+                    return Value::Str(etype);
+                }
+
+                panic!("ICE: typeof statement cannot resolve expression.")
             }
 
             ExprKind::Cast { left, right } => {

@@ -351,6 +351,7 @@ impl Analyser {
     ) -> Result<Type, AnalyserError> {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
+            ExprKind::Typeof { .. } => Ok(Type::Str),
             ExprKind::Cast { left, right } => {
                 let leftty = self.check_expr(left.as_ref(), None)?;
                 if types_compatible(&leftty, right) {

@@ -125,6 +125,9 @@ pub enum ExprKind {
     Sizeof {
         ty: Type,
     },
+    Typeof {
+        expr: Box<Expr>,
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -56,6 +56,7 @@ pub enum TokenType {
     UseKeyword,
     StructKeyword,
     SizeOfKeyword,
+    TypeOfKeyword,
     BreakKeyword,
     ConstKeyword,
     AsKeyword,

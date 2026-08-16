@@ -1312,6 +1312,19 @@ impl Parser {
                     span: start_tk.location,
                 })
             }
+            TokenType::TypeOfKeyword => {
+                let start_tk = self.get_token().cloned()?;
+                self.advance(); // consume 'typeof'
+
+                self.expect(TokenType::LParen)?;
+                let target_expr = self.parse_expr()?;
+                self.expect(TokenType::RParen)?;
+
+                Some(Expr {
+                    kind: ExprKind::Typeof { expr: Box::new(target_expr) },
+                    span: start_tk.location
+                })
+            }
             TokenType::Identifier => {
                 let id_tk = self.get_token()?.clone();
                 self.advance();
