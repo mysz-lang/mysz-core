@@ -335,6 +335,7 @@ impl Analyser {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn declare_function(
         &mut self,
         name: &str,
@@ -859,27 +860,26 @@ impl Analyser {
                             },
                         );
 
-                        if let Some(param_name) = &sig.variadic_param_name {
-                            if let Some(func_body) =
+                        if let Some(param_name) = &sig.variadic_param_name
+                            && let Some(func_body) =
                                 self.function_bodies.get(&callee.value).cloned()
-                            {
-                                self.enter_scope();
+                        {
+                            self.enter_scope();
 
-                                self.declare_variable(
-                                    param_name,
-                                    Type::VariadicPack {
-                                        name: param_name.clone(),
-                                        types: variadic_types,
-                                    },
-                                    callee.location.clone(),
-                                )?;
+                            self.declare_variable(
+                                param_name,
+                                Type::VariadicPack {
+                                    name: param_name.clone(),
+                                    types: variadic_types,
+                                },
+                                callee.location.clone(),
+                            )?;
 
-                                for stmt in &func_body {
-                                    self.check_stmt(stmt, TypeCheckMode::Strict)?;
-                                }
-
-                                self.leave_scope();
+                            for stmt in &func_body {
+                                self.check_stmt(stmt, TypeCheckMode::Strict)?;
                             }
+
+                            self.leave_scope();
                         }
                     }
                 }

@@ -379,11 +379,11 @@ impl Lexer {
 
         self.advance();
 
-        return Ok(Token {
+        Ok(Token {
             ttype: TokenType::Period,
             location: loc,
             value: current.to_string(),
-        });
+        })
     }
 
     fn lex_lt(&mut self) -> Result<Token, LexError> {
