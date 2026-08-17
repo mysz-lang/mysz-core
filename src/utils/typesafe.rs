@@ -117,6 +117,15 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
             if expected == &Type::Ptr(Box::new(Type::Char)) && found == &Type::Str {
                 return true;
             }
+
+            if found == &Type::Char && expected == &Type::UInt8 {
+                return true;
+            }
+
+            if found == &Type::UInt8 && expected == &Type::Char {
+                return true;
+            }
+
             false
         }
         TypeCheckMode::Passive => true,
