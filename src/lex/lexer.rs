@@ -602,6 +602,7 @@ impl Lexer {
             "pub" => TokenType::PubKeyword,
             "use" => TokenType::UseKeyword,
             "for" => TokenType::ForKeyword,
+            "in" => TokenType::InKeyword,
             "return" => TokenType::ReturnKeyword,
             "extern" => TokenType::ExternKeyword,
             "true" => TokenType::True,

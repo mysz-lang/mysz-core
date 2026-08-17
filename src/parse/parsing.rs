@@ -41,7 +41,10 @@ pub enum Type {
     },
     GenericParam(String),
 
-    VariadicPack,
+    VariadicPack {
+        name: String,
+        types: Vec<Type>,
+    },
 
     Any,
 }
@@ -127,7 +130,7 @@ pub enum ExprKind {
     },
     Typeof {
         expr: Box<Expr>,
-    }
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +181,11 @@ pub enum Stmt {
         init: Box<Stmt>,
         cond: Expr,
         step: Box<Stmt>,
+        body: Vec<Stmt>,
+    },
+    ForIn {
+        field_ident: Identifier,
+        target_expr: Expr,
         body: Vec<Stmt>,
     },
     Return {

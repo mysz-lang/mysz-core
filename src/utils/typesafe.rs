@@ -1,4 +1,6 @@
-use crate::parse::parsing::Type;
+use std::collections::HashMap;
+
+use crate::{parse::parsing::Type, semantics::analysis::StructSignature};
 
 pub fn mangle_name(base_name: &str, args: &[Type]) -> String {
     let mut name = base_name.to_string();
@@ -34,7 +36,7 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
             base
         }
         Type::GenericParam(s) => format!("gparam__{}", s),
-        Type::VariadicPack => {
+        Type::VariadicPack { .. } => {
             unreachable!(
                 "VariadicPack is a symbolic placeholder and should never be mangled directly \
                  — a concrete arg type was expected here. This indicates a compiler bug."
@@ -159,6 +161,114 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::Array { .. } => "array".to_string(),
         Type::GenericInstance { .. } => "generic_instance".to_string(),
         Type::GenericParam(..) => "generic_param".to_string(),
-        Type::VariadicPack => "variadic".to_string()
+        Type::VariadicPack { .. } => "variadic".to_string(),
+    }
+}
+
+pub mod variadic {
+    use indexmap::IndexMap;
+
+    use crate::semantics::analysis::StructSignature;
+    use crate::utils::location::Location;
+    use crate::utils::typesafe::Type;
+
+    pub fn structure(fields: &[Type], location: Location) -> StructSignature {
+        let mut struct_fields = IndexMap::new();
+
+        for (i, ty) in fields.iter().enumerate() {
+            struct_fields.insert(field_name(i), ty.clone());
+        }
+
+        struct_fields.insert(length_field().to_string(), Type::Int);
+
+        StructSignature {
+            generic_params: Vec::new(),
+            fields: struct_fields,
+            location,
+        }
+    }
+
+    pub fn field_name(index: usize) -> String {
+        format!("i{}", index)
+    }
+
+    pub fn length_field() -> &'static str {
+        "il"
+    }
+
+    /// The two kinds of field a variadic-pack access can name, per the
+    /// naming convention established by `field_name`/`length_field` above.
+    pub enum PackField {
+        /// `pack.iN` — the Nth variadic argument.
+        Index(usize),
+        /// `pack.il` — the number of variadic arguments passed.
+        Length,
+    }
+
+    /// Parses a field name against the pack naming convention, without
+    /// needing to know the concrete argument types. This is what makes it
+    /// possible to type-check `a.i0` inside the *generic*, un-instantiated
+    /// body of a variadic function/proc, where the real element types and
+    /// count aren't known yet (they're only known at each call site).
+    pub fn parse_field(field: &str) -> Option<PackField> {
+        if field == length_field() {
+            return Some(PackField::Length);
+        }
+        field
+            .strip_prefix('i')
+            .and_then(|rest| rest.parse::<usize>().ok())
+            .map(PackField::Index)
+    }
+}
+
+pub fn is_iterable(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Struct(_)
+            | Type::Array { .. }
+            | Type::GenericInstance { .. }
+            | Type::VariadicPack { .. }
+    )
+}
+
+pub fn iterable_elements(
+    ty: &Type,
+    structs: &HashMap<String, StructSignature>,
+) -> Option<Vec<(Option<String>, Type)>> {
+    match ty {
+        Type::Struct(name) => {
+            let sig = structs.get(name)?;
+            let mut result = Vec::new();
+            for (fname, ftype) in sig.fields.iter() {
+                result.push((Some(fname.clone()), ftype.clone()));
+            }
+            Some(result)
+        }
+        Type::GenericInstance { name, args } => {
+            // Resolve to concrete struct name using the same mangling as before.
+            let concrete_name = crate::utils::typesafe::mangle_name(name, args);
+            let sig = structs.get(&concrete_name)?;
+            let mut result = Vec::new();
+            for (fname, ftype) in sig.fields.iter() {
+                result.push((Some(fname.clone()), ftype.clone()));
+            }
+            Some(result)
+        }
+        Type::Array { element_type, size } => {
+            let elem = element_type.as_ref().clone();
+            let mut result = Vec::with_capacity(*size);
+            for _ in 0..*size {
+                result.push((None, elem.clone()));
+            }
+            Some(result)
+        }
+        Type::VariadicPack { types, .. } => {
+            let mut result = Vec::new();
+            for (i, ty) in types.iter().enumerate() {
+                result.push((Some(format!("i{}", i)), ty.clone()));
+            }
+            Some(result)
+        }
+        _ => None,
     }
 }

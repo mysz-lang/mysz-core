@@ -53,6 +53,7 @@ pub enum TokenType {
     ReturnKeyword,
     ExternKeyword,
     ForKeyword,
+    InKeyword,
     UseKeyword,
     StructKeyword,
     SizeOfKeyword,

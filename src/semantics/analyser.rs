@@ -1,7 +1,9 @@
+use indexmap::IndexMap;
+
 use crate::parse::parsing::*;
 use crate::semantics::analysis::{FunctionSignature, Scope, StructSignature, Symbol};
 use crate::utils::location::Location;
-use crate::utils::typesafe::*;
+use crate::utils::typesafe::{self, *};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -169,7 +171,7 @@ impl Analyser {
                         .zip(resolved_args.iter().cloned())
                         .collect();
 
-                    let mut fresh_fields = HashMap::new();
+                    let mut fresh_fields = IndexMap::new();
                     for (f_name, f_type) in &template.fields {
                         let substituted = self.substitute_type(f_type, &mapping);
                         fresh_fields.insert(f_name.clone(), substituted);
@@ -278,7 +280,7 @@ impl Analyser {
         &mut self,
         name: &str,
         generic_params: Vec<String>,
-        fields: HashMap<String, Type>,
+        fields: IndexMap<String, Type>,
         location: Location,
     ) -> Result<(), AnalyserError> {
         if let Some(existing) = self.structs.get(name) {
@@ -468,24 +470,39 @@ impl Analyser {
 
                         Ok(self.substitute_type(raw_field_type, &mapping))
                     }
-                    Type::VariadicPack => {
-                        let valid = field.starts_with('i')
-                            && field.len() > 1
-                            && field[1..].chars().all(|c| c.is_ascii_digit());
-                        if !valid {
-                            return Err(AnalyserError::semantic_error(
-                                expr.span.clone(),
-                                format!(
-                                    "Invalid variadic access '{}': expected 'iN' (e.g. 'i0', 'i1').",
-                                    field
-                                ),
-                            ));
+                    Type::VariadicPack { name: _, types } => {
+                        if types.is_empty() {
+                            // We're checking the generic body of a variadic
+                            // function/proc, not a concrete call site — the
+                            // real argument types and count aren't known
+                            // yet, so we can only validate that `field`
+                            // follows the pack naming convention (`iN` /
+                            // `il`), not resolve it to a concrete type.
+                            // Concrete field types are only known — and only
+                            // matter for codegen — once irgen instantiates
+                            // this function per call site.
+                            match variadic::parse_field(field) {
+                                Some(variadic::PackField::Index(_)) => Ok(Type::Any),
+                                Some(variadic::PackField::Length) => Ok(Type::Int),
+                                None => Err(AnalyserError::semantic_error(
+                                    expr.span.clone(),
+                                    format!("Invalid variadic field '{}'.", field),
+                                )),
+                            }
+                        } else {
+                            let signature = variadic::structure(&types, expr.span.clone());
+
+                            let field_type = signature.fields.get(field).ok_or_else(|| {
+                                AnalyserError::semantic_error(
+                                    expr.span.clone(),
+                                    format!("Invalid variadic field '{}'.", field),
+                                )
+                            })?;
+
+                            Ok(field_type.clone())
                         }
-                        Ok(Type::Any)
                     }
-                    Type::Any => {
-                        Ok(Type::Any)
-                    }
+                    Type::Any => Ok(Type::Any),
                     _ => Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
@@ -959,7 +976,7 @@ impl Analyser {
                 generic_params,
                 fields,
             } => {
-                let mut struct_fields = HashMap::new();
+                let mut struct_fields = IndexMap::new();
 
                 let prev_generic_params =
                     std::mem::replace(&mut self.current_generic_params, generic_params.clone());
@@ -1268,7 +1285,43 @@ impl Analyser {
 
                 Ok(())
             }
+            Stmt::ForIn {
+                field_ident,
+                target_expr,
+                body,
+            } => {
+                let target_type = self.check_expr(target_expr, None)?;
 
+                let elements = typesafe::iterable_elements(&target_type, &self.structs)
+                    .ok_or_else(|| {
+                        AnalyserError::type_error(
+                            target_expr.span.clone(),
+                            format!("Type '{}' is not iterable.", type_to_string(&target_type)),
+                        )
+                    })?;
+
+                self.loop_depth += 1;
+
+                for (_, element_type) in elements {
+                    self.enter_scope();
+
+                    self.declare_variable(
+                        &field_ident.value,
+                        element_type,
+                        field_ident.location.clone(),
+                    )?;
+
+                    for body_stmt in body {
+                        self.check_stmt(body_stmt)?;
+                    }
+
+                    self.leave_scope();
+                }
+
+                self.loop_depth -= 1;
+
+                Ok(())
+            }
             Stmt::If {
                 cond,
                 then_branch,
@@ -1387,7 +1440,10 @@ impl Analyser {
                 if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
                     self.declare_variable(
                         &variadic_param.name.value,
-                        Type::VariadicPack,
+                        Type::VariadicPack {
+                            name: variadic_param.name.value.clone(),
+                            types: Vec::new(),
+                        },
                         variadic_param.name.location.clone(),
                     )?;
                 }

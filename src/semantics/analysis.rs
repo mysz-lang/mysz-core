@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+
 use crate::{parse::parsing::Type, utils::location::Location};
 
 #[derive(Debug)]
@@ -17,7 +19,7 @@ pub struct Scope {
 #[derive(Clone, Debug)]
 pub struct StructSignature {
     pub generic_params: Vec<String>,
-    pub fields: HashMap<String, Type>,
+    pub fields: IndexMap<String, Type>,
     pub location: Location,
 }
 

@@ -622,16 +622,39 @@ impl Parser {
     }
 
     fn parse_for(&mut self) -> Option<Stmt> {
-        self.advance();
-
+        self.advance(); // consume 'for'
         self.expect(TokenType::LParen)?;
+
+        let current_idx = self.token_idx;
+        let first_token = self.tokens.get(current_idx);
+        let second_token = self.tokens.get(current_idx + 1);
+
+        if let (Some(first), Some(second)) = (first_token, second_token) {
+            if first.ttype == TokenType::Identifier && second.ttype == TokenType::InKeyword {
+                let ident_tok = first.clone();
+                self.advance();
+                self.advance();
+                let target_expr = self.parse_expr()?;
+                self.expect(TokenType::RParen)?;
+                self.expect(TokenType::LBrace)?;
+                let body = self.parse_block();
+                return Some(Stmt::ForIn {
+                    field_ident: Identifier {
+                        value: ident_tok.value,
+                        location: ident_tok.location,
+                    },
+                    target_expr,
+                    body,
+                });
+            }
+        }
+
         let init = self.parse_statement(false)?;
         self.expect(TokenType::SemiColon)?;
         let cond = self.parse_expr()?;
         self.expect(TokenType::SemiColon)?;
         let step = self.parse_statement(false)?;
         self.expect(TokenType::RParen)?;
-
         self.expect(TokenType::LBrace)?;
         let body = self.parse_block();
 
@@ -1321,8 +1344,10 @@ impl Parser {
                 self.expect(TokenType::RParen)?;
 
                 Some(Expr {
-                    kind: ExprKind::Typeof { expr: Box::new(target_expr) },
-                    span: start_tk.location
+                    kind: ExprKind::Typeof {
+                        expr: Box::new(target_expr),
+                    },
+                    span: start_tk.location,
                 })
             }
             TokenType::Identifier => {

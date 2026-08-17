@@ -381,6 +381,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
+ "indexmap",
  "regex",
  "serde",
  "serde_derive",

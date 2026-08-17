@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use crate::{
     ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value},
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
+    utils::location::Location,
     utils::typesafe::type_to_string,
 };
 
 use crate::utils::typesafe;
+use crate::utils::typesafe::variadic;
 
 pub struct TempGen {
     counter: usize,
@@ -146,7 +148,7 @@ impl IRGen {
                 .cloned()
                 .unwrap_or_else(|| panic!("Unresolved generic parameter: {}", name)),
 
-            Type::VariadicPack => {
+            Type::VariadicPack { .. } => {
                 panic!(
                     "ICE: VariadicPack reached substitute_type: it should have been resolved to a concrete __variadic__ struct before codegen substitution."
                 )
@@ -193,32 +195,42 @@ impl IRGen {
         name
     }
 
-    fn instantiate_variadic_struct(&mut self, struct_name: &str, arg_types: &[Type]) {
+    /// Builds the layout for a variadic argument pack.
+    ///
+    /// This defers entirely to `typesafe::variadic::structure` — the same
+    /// function the analyser uses to type-check field access on a
+    /// `VariadicPack` (e.g. `pack.i0`, `pack.il`) — so the fields the
+    /// analyser considers valid and the fields actually laid out in memory
+    /// here can never drift apart. Field names/order come from that single
+    /// source of truth instead of being duplicated as ad-hoc strings.
+    fn instantiate_variadic_struct(
+        &mut self,
+        struct_name: &str,
+        arg_types: &[Type],
+        location: Location,
+    ) {
         if self.struct_defs.contains_key(struct_name) {
             return;
         }
+
+        let signature = variadic::structure(arg_types, location);
 
         let mut offset: i64 = 0;
         let mut max_align: i64 = 1;
         let mut field_offsets = HashMap::new();
 
-        for (i, ty) in arg_types.iter().enumerate() {
-            let field_name = format!("i{}", i);
+        for (field_name, ty) in signature.fields.iter() {
             let size = self.type_size(ty);
             let align = self.type_alignment(ty);
             if align > max_align {
                 max_align = align;
             }
             offset = (offset + align - 1) & !(align - 1);
-            field_offsets.insert(field_name, (offset, ty.clone()));
+            field_offsets.insert(field_name.clone(), (offset, ty.clone()));
             offset += size;
         }
 
-        let total_size = if arg_types.is_empty() {
-            0
-        } else {
-            (offset + max_align - 1) & !(max_align - 1)
-        };
+        let total_size = (offset + max_align - 1) & !(max_align - 1);
 
         self.struct_defs.insert(
             struct_name.to_string(),
@@ -366,7 +378,7 @@ impl IRGen {
                         panic!("Failed to find layout for generic instance: {mangled_name}")
                     })
             }
-            Type::VariadicPack => {
+            Type::VariadicPack { .. } => {
                 panic!(
                     "ICE: VariadicPack reached type_size: it should have been resolved to a concrete __variadic__ struct before size queries."
                 )
@@ -408,7 +420,7 @@ impl IRGen {
                         panic!("Failed to find layout for generic instance: {mangled_name}")
                     })
             }
-            Type::VariadicPack => {
+            Type::VariadicPack { .. } => {
                 panic!(
                     "ICE: VariadicPack reached type_alignment: it should have been resolved to a concrete __variadic__ struct before alignment queries."
                 )
@@ -633,39 +645,49 @@ impl IRGen {
 
         if is_variadic_capable {
             let struct_name = format!("__variadic__{}", resolved_func_name);
-            self.instantiate_variadic_struct(&struct_name, &variadic_types);
+            self.instantiate_variadic_struct(
+                &struct_name,
+                &variadic_types,
+                callee.location.clone(),
+            );
 
             let raw = self.temps.next_temp();
             let pack_var = format!("_variadic_pack_{}", raw);
             self.var_types
                 .insert(pack_var.clone(), Type::Struct(struct_name.clone()));
 
-            for (i, val) in variadic_values.into_iter().enumerate() {
-                let field_name = format!("i{}", i);
-                let (offset, field_ty) =
-                    self.struct_defs[&struct_name].field_offsets[&field_name].clone();
+            let variadic_len = variadic_values.len() as i64;
 
-                let base_addr_temp = self
+            let store_field = |irgen: &mut Self, field_name: &str, val: Value| {
+                let (offset, field_ty) =
+                    irgen.struct_defs[&struct_name].field_offsets[field_name].clone();
+
+                let base_addr_temp = irgen
                     .next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name.clone()))));
-                self.code.push(Instruction::Unary {
+                irgen.code.push(Instruction::Unary {
                     dst: base_addr_temp.clone(),
                     op: IrOp::Ref,
                     value: Value::Var(pack_var.clone()),
                 });
 
-                let slot_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(field_ty)));
-                self.code.push(Instruction::Binary {
+                let slot_addr_temp = irgen.next_temp_with_type(Type::Ptr(Box::new(field_ty)));
+                irgen.code.push(Instruction::Binary {
                     dst: slot_addr_temp.clone(),
                     op: IrOp::Add,
                     lhs: Value::Temp(base_addr_temp),
                     rhs: Value::Const(offset),
                 });
 
-                self.code.push(Instruction::Store {
+                irgen.code.push(Instruction::Store {
                     ptr: Value::Temp(slot_addr_temp),
                     source: val,
                 });
+            };
+
+            for (i, val) in variadic_values.into_iter().enumerate() {
+                store_field(self, &variadic::field_name(i), val);
             }
+            store_field(self, variadic::length_field(), Value::Const(variadic_len));
 
             arg_values.push(Value::Var(pack_var));
         }
@@ -728,13 +750,28 @@ impl IRGen {
     fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                let ty = self.var_types.get(name).cloned().unwrap_or(Type::Int);
+                let local_mangled = format!("{}::{}", self.current_function, name);
+
+                let resolved_name = if self.var_types.get(&local_mangled).is_some() {
+                    local_mangled
+                } else {
+                    name.clone()
+                };
+
+                let ty = self
+                    .var_types
+                    .get(&resolved_name)
+                    .cloned()
+                    .unwrap_or(Type::Int);
+
                 let temp = self.next_temp_with_type(Type::Ptr(Box::new(ty)));
+
                 self.code.push(Instruction::Unary {
                     dst: temp.clone(),
                     op: IrOp::Ref,
-                    value: Value::Var(name.clone()),
+                    value: Value::Var(resolved_name),
                 });
+
                 Value::Temp(temp)
             }
 
@@ -842,7 +879,7 @@ impl IRGen {
             }
             ExprKind::Typeof { expr } => {
                 let resolved_expr = self.expr_type(expr);
-                if let Some(rexpr) = resolved_expr { 
+                if let Some(rexpr) = resolved_expr {
                     let etype = typesafe::typeof_string(&rexpr);
                     return Value::Str(etype);
                 }
@@ -1360,12 +1397,18 @@ impl IRGen {
                     .or_else(|| self.var_types.get(&mangled_name).cloned())
                     .map(|ty| self.resolve_type(&ty));
 
-                let is_array = matches!(current_ty, Some(Type::Array { .. }));
+                let is_aggregate = matches!(
+                    current_ty,
+                    Some(Type::Array { .. })
+                        | Some(Type::Struct(_))
+                        | Some(Type::GenericInstance { .. })
+                        | Some(Type::VariadicPack { .. })
+                );
 
                 let target_var = Value::Var(mangled_name.clone());
 
                 if let Some(expr_node) = expr {
-                    if is_array {
+                    if is_aggregate {
                         self.gen_expr(expr_node, Some(target_var));
                     } else {
                         let value = self.gen_expr(expr_node, None);
@@ -1421,6 +1464,7 @@ impl IRGen {
                     }
                 }
             }
+
             Stmt::Reassignment { ident, expr } => {
                 let mangled_name = format!("{}::{}", self.current_function, ident.value);
                 let is_array =
@@ -1533,6 +1577,277 @@ impl IRGen {
                     );
                 }
             }
+            Stmt::ForIn {
+                field_ident,
+                target_expr,
+                body,
+            } => {
+                let target_type = self
+                    .expr_type(target_expr)
+                    .unwrap_or_else(|| panic!("ICE: Cannot determine type of for-in target"));
+
+                let resolved_type = self.resolve_type(&target_type);
+
+                let target_value = self.gen_expr(target_expr, None);
+
+                let field_var = format!("{}::{}", self.current_function, field_ident.value);
+
+                match resolved_type {
+                    Type::Struct(struct_name) => {
+                        let layout = self.get_struct_layout(&struct_name).unwrap_or_else(|| {
+                            panic!("ICE: Struct layout not found for '{}'", struct_name)
+                        });
+
+                        let mut fields: Vec<(i64, Type)> = layout
+                            .field_offsets
+                            .values()
+                            .map(|(offset, ty)| (*offset, ty.clone()))
+                            .collect();
+
+                        fields.sort_by_key(|(offset, _)| *offset);
+
+                        for (offset, field_type) in fields {
+                            let field_type = self.resolve_type(&field_type);
+
+                            let base_addr = self.next_temp_with_type(Type::Ptr(Box::new(
+                                Type::Struct(struct_name.clone()),
+                            )));
+
+                            self.code.push(Instruction::Unary {
+                                dst: base_addr.clone(),
+                                op: IrOp::Ref,
+                                value: target_value.clone(),
+                            });
+
+                            let field_addr =
+                                self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+
+                            self.code.push(Instruction::Binary {
+                                dst: field_addr.clone(),
+                                op: IrOp::Add,
+                                lhs: Value::Temp(base_addr),
+                                rhs: Value::Const(offset),
+                            });
+
+                            let field_value = self.next_temp_with_type(field_type.clone());
+
+                            self.code.push(Instruction::Load {
+                                dst: field_value.clone(),
+                                ptr: Value::Temp(field_addr),
+                                ty: field_type.clone(),
+                            });
+
+                            self.var_types.insert(field_var.clone(), field_type);
+
+                            self.code.push(Instruction::Assign {
+                                dst: field_var.clone(),
+                                src: Value::Temp(field_value),
+                            });
+
+                            for stmt in body {
+                                self.gen_stmt(stmt);
+                            }
+                        }
+                    }
+
+                    Type::Array { element_type, size } => {
+                        let element_type = self.resolve_type(&element_type);
+                        let stride = self.element_size(&element_type);
+
+                        // We need the address of the array itself.
+                        let target_addr = self.gen_lvalue_addr(target_expr);
+
+                        for index in 0..size {
+                            let offset = index as i64 * stride;
+
+                            let element_addr =
+                                self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
+
+                            self.code.push(Instruction::Binary {
+                                dst: element_addr.clone(),
+                                op: IrOp::Add,
+                                lhs: target_addr.clone(),
+                                rhs: Value::Const(offset),
+                            });
+
+                            let element_value = self.next_temp_with_type(element_type.clone());
+
+                            self.code.push(Instruction::Load {
+                                dst: element_value.clone(),
+                                ptr: Value::Temp(element_addr),
+                                ty: element_type.clone(),
+                            });
+
+                            self.var_types
+                                .insert(field_var.clone(), element_type.clone());
+
+                            self.code.push(Instruction::Assign {
+                                dst: field_var.clone(),
+                                src: Value::Temp(element_value),
+                            });
+
+                            for stmt in body {
+                                self.gen_stmt(stmt);
+                            }
+                        }
+                    }
+                    Type::GenericInstance { name, args } => {
+                        let concrete_type =
+                            self.resolve_type(&Type::GenericInstance { name, args });
+
+                        match concrete_type {
+                            Type::Struct(struct_name) => {
+                                let layout =
+                                    self.get_struct_layout(&struct_name).unwrap_or_else(|| {
+                                        panic!("ICE: Struct layout not found for '{}'", struct_name)
+                                    });
+
+                                let mut fields: Vec<(i64, Type)> = layout
+                                    .field_offsets
+                                    .values()
+                                    .map(|(offset, ty)| (*offset, ty.clone()))
+                                    .collect();
+
+                                fields.sort_by_key(|(offset, _)| *offset);
+
+                                for (offset, field_type) in fields {
+                                    let field_type = self.resolve_type(&field_type);
+
+                                    let base_addr = self.next_temp_with_type(Type::Ptr(Box::new(
+                                        Type::Struct(struct_name.clone()),
+                                    )));
+
+                                    self.code.push(Instruction::Unary {
+                                        dst: base_addr.clone(),
+                                        op: IrOp::Ref,
+                                        value: target_value.clone(),
+                                    });
+
+                                    let field_addr = self.next_temp_with_type(Type::Ptr(Box::new(
+                                        field_type.clone(),
+                                    )));
+
+                                    self.code.push(Instruction::Binary {
+                                        dst: field_addr.clone(),
+                                        op: IrOp::Add,
+                                        lhs: Value::Temp(base_addr),
+                                        rhs: Value::Const(offset),
+                                    });
+
+                                    let field_value = self.next_temp_with_type(field_type.clone());
+
+                                    self.code.push(Instruction::Load {
+                                        dst: field_value.clone(),
+                                        ptr: Value::Temp(field_addr),
+                                        ty: field_type.clone(),
+                                    });
+
+                                    self.var_types.insert(field_var.clone(), field_type);
+
+                                    self.code.push(Instruction::Assign {
+                                        dst: field_var.clone(),
+                                        src: Value::Temp(field_value),
+                                    });
+
+                                    for stmt in body {
+                                        self.gen_stmt(stmt);
+                                    }
+                                }
+                            }
+
+                            other => {
+                                panic!(
+                                    "ICE: Generic for-in target resolved to non-struct type {}",
+                                    type_to_string(&other)
+                                );
+                            }
+                        }
+                    }
+
+                    Type::VariadicPack { .. } => {
+                        /*
+                         * A VariadicPack has already been materialised by gen_call()
+                         * as a concrete __variadic__ struct. Therefore use its
+                         * generated struct layout exactly like an ordinary struct.
+                         */
+                        let struct_type = self.resolve_type(&target_type);
+
+                        let struct_name = match struct_type {
+                            Type::Struct(name) => name,
+                            other => {
+                                panic!(
+                                    "ICE: VariadicPack did not resolve to a struct: {}",
+                                    type_to_string(&other)
+                                );
+                            }
+                        };
+
+                        let layout = self.get_struct_layout(&struct_name).unwrap_or_else(|| {
+                            panic!("ICE: Variadic pack layout not found for '{}'", struct_name)
+                        });
+
+                        let mut fields: Vec<(String, i64, Type)> = layout
+                            .field_offsets
+                            .iter()
+                            .map(|(name, (offset, ty))| (name.clone(), *offset, ty.clone()))
+                            .filter(|(name, _, _)| name != variadic::length_field())
+                            .collect();
+
+                        fields.sort_by_key(|(_, offset, _)| *offset);
+
+                        for (_, offset, field_type) in fields {
+                            let field_type = self.resolve_type(&field_type);
+
+                            let base_addr = self.next_temp_with_type(Type::Ptr(Box::new(
+                                Type::Struct(struct_name.clone()),
+                            )));
+
+                            self.code.push(Instruction::Unary {
+                                dst: base_addr.clone(),
+                                op: IrOp::Ref,
+                                value: target_value.clone(),
+                            });
+
+                            let field_addr =
+                                self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+
+                            self.code.push(Instruction::Binary {
+                                dst: field_addr.clone(),
+                                op: IrOp::Add,
+                                lhs: Value::Temp(base_addr),
+                                rhs: Value::Const(offset),
+                            });
+
+                            let field_value = self.next_temp_with_type(field_type.clone());
+
+                            self.code.push(Instruction::Load {
+                                dst: field_value.clone(),
+                                ptr: Value::Temp(field_addr),
+                                ty: field_type.clone(),
+                            });
+
+                            self.var_types.insert(field_var.clone(), field_type);
+
+                            self.code.push(Instruction::Assign {
+                                dst: field_var.clone(),
+                                src: Value::Temp(field_value),
+                            });
+
+                            for stmt in body {
+                                self.gen_stmt(stmt);
+                            }
+                        }
+                    }
+
+                    other => {
+                        panic!(
+                            "ICE: Cannot use type {} as a for-in target",
+                            type_to_string(&other)
+                        );
+                    }
+                }
+            }
+
             Stmt::For {
                 init,
                 cond,
@@ -1860,7 +2175,11 @@ impl IRGen {
 
                 if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
                     let struct_name = format!("__variadic__{}", resolved_func_name);
-                    self.instantiate_variadic_struct(&struct_name, &variadic_types); // no-op if call site already built it
+                    self.instantiate_variadic_struct(
+                        &struct_name,
+                        &variadic_types,
+                        variadic_param.name.location.clone(),
+                    ); // no-op if call site already built it
                     let unique_param_name =
                         format!("{}::{}", resolved_func_name, variadic_param.name.value);
                     self.var_types

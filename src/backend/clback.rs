@@ -132,7 +132,7 @@ impl BackendType {
                     )
                 )
             }
-            Type::VariadicPack => {
+            Type::VariadicPack { .. } => {
                 unreachable!(
                     "variadic pack must be resolved to a concrete __variadic__ struct before codegen"
                 )
@@ -875,15 +875,10 @@ impl CraneliftBackend {
                         })
                         .unwrap_or(&Type::Int);
 
-                    let abi = AbiType::from_frontend(
-                        frontend_type,
-                        &self.struct_defs,
-                        ptr_type,
-                    );
+                    let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
 
                     match abi {
-                        AbiType::Aggregate { .. } => {
-                        }
+                        AbiType::Aggregate { .. } => {}
 
                         _ => {
                             let dest_ty = BackendType::from_frontend(frontend_type);
@@ -960,6 +955,7 @@ impl CraneliftBackend {
                     call_args.push(val);
                     call_arg_types.push(arg_ty);
                 }
+                
                 Instruction::Cast {
                     dst: dest_name,
                     cast_ty,
