@@ -41,7 +41,7 @@ pub struct Analyser {
     pub scopes: Vec<Scope>,
     pub current_scope: usize,
     pub functions: HashMap<String, FunctionSignature>,
-    pub function_bodies: HashMap<String, Vec<Stmt>>,
+    pub function_bodies: HashMap<String, (Vec<Parameter>, Vec<Stmt>)>,
     pub structs: HashMap<String, StructSignature>,
     pub constants: HashMap<String, (Type, Expr)>,
     current_return_type: Option<Type>,
@@ -860,16 +860,38 @@ impl Analyser {
                             },
                         );
 
-                        if let Some(param_name) = &sig.variadic_param_name
-                            && let Some(func_body) =
+                        if let Some(variadic_name) = &sig.variadic_param_name
+                            && let Some((params, func_body)) =
                                 self.function_bodies.get(&callee.value).cloned()
                         {
                             self.enter_scope();
 
+                            // Declare the fixed parameters.
+                            for param in params.iter().filter(|p| !p.is_variadic) {
+                                let param_type = sig
+                                    .param_types
+                                    .get(
+                                        params
+                                            .iter()
+                                            .filter(|p| !p.is_variadic)
+                                            .position(|p| p.name.value == param.name.value)
+                                            .unwrap(),
+                                    )
+                                    .cloned()
+                                    .unwrap();
+
+                                self.declare_variable(
+                                    &param.name.value,
+                                    param_type,
+                                    param.name.location.clone(),
+                                )?;
+                            }
+
+                            // Declare the specialized variadic pack.
                             self.declare_variable(
-                                param_name,
+                                variadic_name,
                                 Type::VariadicPack {
-                                    name: param_name.clone(),
+                                    name: variadic_name.clone(),
                                     types: variadic_types,
                                 },
                                 callee.location.clone(),
@@ -1517,8 +1539,7 @@ impl Analyser {
                 }
 
                 self.function_bodies
-                    .insert(name.value.clone(), body.clone());
-
+                    .insert(name.value.clone(), (params.clone(), body.clone()));
                 self.declare_function(
                     &name.value,
                     generic_params.clone(),

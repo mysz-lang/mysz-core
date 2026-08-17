@@ -281,6 +281,32 @@ impl IRGen {
 
             ExprKind::Typeof { .. } => Some(Type::Str),
 
+            ExprKind::Field { base, field } => {
+                let base_ty = self.type_of_expr(base)?;
+
+                let struct_name = match base_ty {
+                    Type::Struct(name) => name,
+
+                    Type::GenericInstance { name, args } => {
+                        let mut mangled_name = name;
+
+                        for arg in args {
+                            mangled_name.push_str("__");
+                            mangled_name.push_str(&self.mangle_type(&arg));
+                        }
+
+                        mangled_name
+                    }
+
+                    _ => return None,
+                };
+
+                self.struct_defs
+                    .get(&struct_name)
+                    .and_then(|layout| layout.field_offsets.get(field))
+                    .map(|(_, ty)| ty.clone())
+            }
+
             _ => None,
         }
     }
