@@ -720,7 +720,7 @@ impl CraneliftBackend {
                 if let Some(frontend_type) = frontend_type {
                     let abi = AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
                     if let AbiType::Aggregate { total_size, .. } = abi
-                        && let Some(&_dest_slot) = stack_slot_map.get(dest_name)
+                        && !stack_slot_map.contains_key(dest_name)
                     {
                         let slot = builder.create_sized_stack_slot(StackSlotData::new(
                             StackSlotKind::ExplicitSlot,
@@ -955,7 +955,7 @@ impl CraneliftBackend {
                     call_args.push(val);
                     call_arg_types.push(arg_ty);
                 }
-                
+
                 Instruction::Cast {
                     dst: dest_name,
                     cast_ty,

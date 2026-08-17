@@ -658,6 +658,11 @@ impl IRGen {
 
             let variadic_len = variadic_values.len() as i64;
 
+            self.code.push(Instruction::Assign {
+                dst: pack_var.clone(),
+                src: Value::Const(0),
+            });
+
             let store_field = |irgen: &mut Self, field_name: &str, val: Value| {
                 let (offset, field_ty) =
                     irgen.struct_defs[&struct_name].field_offsets[field_name].clone();
@@ -1467,12 +1472,23 @@ impl IRGen {
 
             Stmt::Reassignment { ident, expr } => {
                 let mangled_name = format!("{}::{}", self.current_function, ident.value);
-                let is_array =
-                    matches!(self.var_types.get(&mangled_name), Some(Type::Array { .. }));
+                let var_type = self.var_types.get(&mangled_name).cloned();
+
+                let is_aggregate =
+                    matches!(var_type, Some(Type::Array { .. } | Type::Struct { .. }));
+
                 let target_var = Value::Var(mangled_name.clone());
 
-                if is_array {
-                    self.gen_expr(expr, Some(target_var));
+                if is_aggregate {
+                    let src_val = self.gen_expr(expr, Some(target_var.clone()));
+
+                    // If gen_expr didn't write directly to target_var, store the source into the destination pointer
+                    if src_val != target_var {
+                        self.code.push(Instruction::Store {
+                            ptr: target_var,
+                            source: src_val,
+                        });
+                    }
                 } else {
                     let value = self.gen_expr(expr, None);
                     self.code.push(Instruction::Assign {

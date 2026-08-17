@@ -1292,6 +1292,29 @@ impl Analyser {
             } => {
                 let target_type = self.check_expr(target_expr, None)?;
 
+                if let Type::VariadicPack { types, .. } = &target_type {
+                    for elem_type in types {
+                        self.enter_scope();
+
+                        self.declare_variable(
+                            &field_ident.value,
+                            elem_type.clone(),
+                            field_ident.location.clone(),
+                        )?;
+
+                        self.loop_depth += 1;
+
+                        for body_stmt in body {
+                            self.check_stmt(body_stmt)?;
+                        }
+
+                        self.loop_depth -= 1;
+                        self.leave_scope();
+                    }
+
+                    return Ok(());
+                }
+
                 let elements = typesafe::iterable_elements(&target_type, &self.structs)
                     .ok_or_else(|| {
                         AnalyserError::type_error(
@@ -1300,25 +1323,29 @@ impl Analyser {
                         )
                     })?;
 
+                self.enter_scope();
+
+                let element_type = elements.first().map(|(_, ty)| ty.clone()).ok_or_else(|| {
+                    AnalyserError::type_error(
+                        target_expr.span.clone(),
+                        "Cannot infer the element type of an empty iterable.".to_string(),
+                    )
+                })?;
+
+                self.declare_variable(
+                    &field_ident.value,
+                    element_type,
+                    field_ident.location.clone(),
+                )?;
+
                 self.loop_depth += 1;
 
-                for (_, element_type) in elements {
-                    self.enter_scope();
-
-                    self.declare_variable(
-                        &field_ident.value,
-                        element_type,
-                        field_ident.location.clone(),
-                    )?;
-
-                    for body_stmt in body {
-                        self.check_stmt(body_stmt)?;
-                    }
-
-                    self.leave_scope();
+                for body_stmt in body {
+                    self.check_stmt(body_stmt)?;
                 }
 
                 self.loop_depth -= 1;
+                self.leave_scope();
 
                 Ok(())
             }

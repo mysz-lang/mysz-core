@@ -25,7 +25,7 @@ pub enum IrOp {
     Or,  // ||
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Const(i64),
     Temp(String),

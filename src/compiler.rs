@@ -546,7 +546,7 @@ pub fn compile_ast_program(
         }
     }
     irgen.gen_program(program);
-    // irgen.dump();
+    irgen.dump();
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
     let mut skip_current_duplicate = false;
