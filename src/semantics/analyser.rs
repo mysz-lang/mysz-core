@@ -41,6 +41,7 @@ pub struct Analyser {
     pub scopes: Vec<Scope>,
     pub current_scope: usize,
     pub functions: HashMap<String, FunctionSignature>,
+    pub function_bodies: HashMap<String, Vec<Stmt>>,
     pub structs: HashMap<String, StructSignature>,
     pub constants: HashMap<String, (Type, Expr)>,
     current_return_type: Option<Type>,
@@ -57,6 +58,7 @@ impl Analyser {
             }],
             current_scope: 0,
             functions: HashMap::new(),
+            function_bodies: HashMap::new(),
             structs: HashMap::new(),
             constants: HashMap::new(),
             current_return_type: None,
@@ -82,6 +84,34 @@ impl Analyser {
 
         self.scopes.pop();
         self.current_scope = parent;
+    }
+
+    fn evaluates_statically_to_false(&mut self, cond: &Expr) -> Result<bool, AnalyserError> {
+        match &cond.kind {
+            ExprKind::Binary { left, op, right } => match op {
+                BinaryOp::Eq => {
+                    if let (ExprKind::Typeof { expr }, ExprKind::Literal(Literal::String(target))) =
+                        (&left.kind, &right.kind)
+                    {
+                        let actual_type = self.check_expr(expr, None)?;
+                        return Ok(type_to_string(&actual_type) != *target);
+                    }
+                    Ok(false)
+                }
+                BinaryOp::Or => {
+                    let left_false = self.evaluates_statically_to_false(left)?;
+                    let right_false = self.evaluates_statically_to_false(right)?;
+                    Ok(left_false && right_false)
+                }
+                BinaryOp::And => {
+                    let left_false = self.evaluates_statically_to_false(left)?;
+                    let right_false = self.evaluates_statically_to_false(right)?;
+                    Ok(left_false || right_false)
+                }
+                _ => Ok(false),
+            },
+            _ => Ok(false),
+        }
     }
 
     fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
@@ -311,6 +341,7 @@ impl Analyser {
         generic_params: Vec<String>,
         param_types: Vec<Type>,
         is_variadic: bool,
+        variadic_name: Option<String>,
         return_type: Type,
         location: Location,
     ) -> Result<(), AnalyserError> {
@@ -330,6 +361,7 @@ impl Analyser {
                 generic_params,
                 param_types,
                 is_variadic,
+                variadic_param_name: variadic_name,
                 return_type,
                 location,
             },
@@ -472,15 +504,6 @@ impl Analyser {
                     }
                     Type::VariadicPack { name: _, types } => {
                         if types.is_empty() {
-                            // We're checking the generic body of a variadic
-                            // function/proc, not a concrete call site — the
-                            // real argument types and count aren't known
-                            // yet, so we can only validate that `field`
-                            // follows the pack naming convention (`iN` /
-                            // `il`), not resolve it to a concrete type.
-                            // Concrete field types are only known — and only
-                            // matter for codegen — once irgen instantiates
-                            // this function per call site.
                             match variadic::parse_field(field) {
                                 Some(variadic::PackField::Index(_)) => Ok(Type::Any),
                                 Some(variadic::PackField::Length) => Ok(Type::Int),
@@ -712,6 +735,7 @@ impl Analyser {
                                 generic_params: Vec::new(),
                                 param_types: fresh_params,
                                 is_variadic: template.is_variadic,
+                                variadic_param_name: template.variadic_param_name,
                                 return_type: fresh_return,
                                 location: template.location.clone(),
                             },
@@ -829,10 +853,34 @@ impl Analyser {
                                 generic_params: Vec::new(),
                                 param_types: param_types.clone(),
                                 is_variadic: true,
+                                variadic_param_name: sig.variadic_param_name.clone(),
                                 return_type: return_type.clone(),
                                 location: sig.location.clone(),
                             },
                         );
+
+                        if let Some(param_name) = &sig.variadic_param_name {
+                            if let Some(func_body) =
+                                self.function_bodies.get(&callee.value).cloned()
+                            {
+                                self.enter_scope();
+
+                                self.declare_variable(
+                                    param_name,
+                                    Type::VariadicPack {
+                                        name: param_name.clone(),
+                                        types: variadic_types,
+                                    },
+                                    callee.location.clone(),
+                                )?;
+
+                                for stmt in &func_body {
+                                    self.check_stmt(stmt, TypeCheckMode::Strict)?;
+                                }
+
+                                self.leave_scope();
+                            }
+                        }
                     }
                 }
 
@@ -967,7 +1015,7 @@ impl Analyser {
         }
     }
 
-    pub fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), AnalyserError> {
+    pub fn check_stmt(&mut self, stmt: &Stmt, mode: TypeCheckMode) -> Result<(), AnalyserError> {
         match stmt {
             Stmt::Use { .. } => unreachable!(),
 
@@ -1044,9 +1092,11 @@ impl Analyser {
 
                 let mut param_types = Vec::new();
                 let mut is_variadic = false;
+                let mut variadic_param = None;
                 for param in params {
                     if param.is_variadic {
                         is_variadic = true;
+                        variadic_param = Some(param.name.value.clone());
                         continue;
                     }
                     let ptype = match &param.ptype {
@@ -1068,6 +1118,7 @@ impl Analyser {
                     generic_params.clone(),
                     param_types,
                     is_variadic,
+                    variadic_param,
                     return_type,
                     name.location.clone(),
                 )?;
@@ -1246,7 +1297,7 @@ impl Analyser {
                 self.enter_scope();
                 self.loop_depth += 1;
                 for block_stmt in body {
-                    self.check_stmt(block_stmt)?;
+                    self.check_stmt(block_stmt, mode)?;
                 }
                 self.leave_scope();
                 self.loop_depth -= 1;
@@ -1261,7 +1312,7 @@ impl Analyser {
             } => {
                 self.enter_scope();
 
-                self.check_stmt(init.as_ref())?;
+                self.check_stmt(init.as_ref(), mode)?;
 
                 let cond_type = self.check_expr(cond, None)?;
                 if !self.check_truthiness(&cond_type) {
@@ -1276,10 +1327,10 @@ impl Analyser {
                 }
 
                 for block_stmt in body {
-                    self.check_stmt(block_stmt)?;
+                    self.check_stmt(block_stmt, mode)?;
                 }
 
-                self.check_stmt(step.as_ref())?;
+                self.check_stmt(step.as_ref(), mode)?;
 
                 self.leave_scope();
 
@@ -1293,7 +1344,13 @@ impl Analyser {
                 let target_type = self.check_expr(target_expr, None)?;
 
                 if let Type::VariadicPack { types, .. } = &target_type {
-                    for elem_type in types {
+                    let iter_types = if types.is_empty() {
+                        vec![Type::Any]
+                    } else {
+                        types.clone()
+                    };
+
+                    for elem_type in iter_types {
                         self.enter_scope();
 
                         self.declare_variable(
@@ -1305,7 +1362,7 @@ impl Analyser {
                         self.loop_depth += 1;
 
                         for body_stmt in body {
-                            self.check_stmt(body_stmt)?;
+                            self.check_stmt(body_stmt, mode)?;
                         }
 
                         self.loop_depth -= 1;
@@ -1341,7 +1398,7 @@ impl Analyser {
                 self.loop_depth += 1;
 
                 for body_stmt in body {
-                    self.check_stmt(body_stmt)?;
+                    self.check_stmt(body_stmt, mode)?;
                 }
 
                 self.loop_depth -= 1;
@@ -1366,11 +1423,13 @@ impl Analyser {
                     ));
                 }
 
-                self.enter_scope();
-                for block_stmt in then_branch {
-                    self.check_stmt(block_stmt)?;
+                if !self.evaluates_statically_to_false(cond)? {
+                    self.enter_scope();
+                    for block_stmt in then_branch {
+                        self.check_stmt(block_stmt, mode)?;
+                    }
+                    self.leave_scope();
                 }
-                self.leave_scope();
 
                 for (cond, body) in else_if_branches {
                     let cond_type = self.check_expr(cond, None)?;
@@ -1384,17 +1443,19 @@ impl Analyser {
                         ));
                     }
 
-                    self.enter_scope();
-                    for body_stmt in body {
-                        self.check_stmt(body_stmt)?;
+                    if !self.evaluates_statically_to_false(cond)? {
+                        self.enter_scope();
+                        for body_stmt in body {
+                            self.check_stmt(body_stmt, mode)?;
+                        }
+                        self.leave_scope();
                     }
-                    self.leave_scope();
                 }
 
                 if let Some(else_stmts) = else_branch {
                     self.enter_scope();
                     for block_stmt in else_stmts {
-                        self.check_stmt(block_stmt)?;
+                        self.check_stmt(block_stmt, mode)?;
                     }
                     self.leave_scope();
                 }
@@ -1430,11 +1491,14 @@ impl Analyser {
 
                 let mut param_types = Vec::new();
                 let mut is_variadic = false;
+                let mut variadic_param = None;
                 for param in params {
                     if param.is_variadic {
                         is_variadic = true;
+                        variadic_param = Some(param.name.value.clone());
                         continue;
                     }
+
                     let ptype = match &param.ptype {
                         Some(pt) => {
                             if is_generic {
@@ -1448,22 +1512,29 @@ impl Analyser {
                         }
                         None => Type::Any,
                     };
+
                     param_types.push(ptype);
                 }
+
+                self.function_bodies
+                    .insert(name.value.clone(), body.clone());
 
                 self.declare_function(
                     &name.value,
                     generic_params.clone(),
                     param_types.clone(),
                     is_variadic,
+                    variadic_param,
                     return_type.clone(),
                     name.location.clone(),
                 )?;
 
                 self.enter_scope();
-                for (param, ptype) in params.iter().zip(param_types) {
+
+                for (param, ptype) in params.iter().filter(|p| !p.is_variadic).zip(param_types) {
                     self.declare_variable(&param.name.value, ptype, param.name.location.clone())?;
                 }
+
                 if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
                     self.declare_variable(
                         &variadic_param.name.value,
@@ -1476,13 +1547,23 @@ impl Analyser {
                 }
 
                 let prev_return_type = self.current_return_type.replace(return_type.clone());
+
+                let body_mode = if is_variadic {
+                    TypeCheckMode::Passive
+                } else {
+                    mode
+                };
+
                 let mut returns = false;
+
                 for block_stmt in body {
                     if let Stmt::Return { .. } = block_stmt {
                         returns = true;
                     }
-                    self.check_stmt(block_stmt)?;
+
+                    self.check_stmt(block_stmt, body_mode)?;
                 }
+
                 self.current_return_type = prev_return_type;
 
                 if return_type != Type::Void && !returns {
@@ -1498,6 +1579,7 @@ impl Analyser {
 
                 self.current_generic_params = prev_generic_params;
                 self.leave_scope();
+
                 Ok(())
             }
 
@@ -1532,7 +1614,7 @@ impl Analyser {
 
     pub fn analyse(&mut self, program: &Program) -> Result<(), AnalyserError> {
         for stmt in &program.statements {
-            self.check_stmt(stmt)?;
+            self.check_stmt(stmt, TypeCheckMode::Strict)?;
         }
         Ok(())
     }

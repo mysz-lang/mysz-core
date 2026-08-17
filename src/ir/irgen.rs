@@ -10,6 +10,14 @@ use crate::{
 use crate::utils::typesafe;
 use crate::utils::typesafe::variadic;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstVal {
+    Bool(bool),
+    Str(String),
+    Char(char),
+    Int(i64),
+}
+
 pub struct TempGen {
     counter: usize,
 }
@@ -86,6 +94,8 @@ pub struct IRGen {
     pub instantiated_fns: std::collections::HashSet<String>,
     pub deferred_instantiations: Vec<(String, Vec<Type>, Vec<Type>)>, // (callee_name, generic_args, variadic_arg_types)
     pub current_substitutions: HashMap<String, Type>,
+
+    pub var_aliases: Vec<HashMap<String, String>>,
 }
 
 impl IRGen {
@@ -108,6 +118,170 @@ impl IRGen {
             instantiated_fns: std::collections::HashSet::new(),
             deferred_instantiations: Vec::new(),
             current_substitutions: HashMap::new(),
+
+            var_aliases: vec![HashMap::new()],
+        }
+    }
+    pub fn eval_const(&mut self, expr: &Expr) -> Option<ConstVal> {
+        match &expr.kind {
+            ExprKind::Literal(lit) => match lit {
+                Literal::Int(i) => Some(ConstVal::Int(*i)),
+                Literal::String(s) => Some(ConstVal::Str(s.clone())),
+                Literal::Char(c) => Some(ConstVal::Char(*c)),
+                Literal::Bool(b) => Some(ConstVal::Bool(*b)),
+                _ => None,
+            },
+
+            ExprKind::Typeof { expr: inner } => {
+                let ty = self.type_of_expr(inner)?;
+                Some(ConstVal::Str(typesafe::typeof_string(&ty)))
+            }
+
+            ExprKind::Binary { left, op, right } => {
+                let l = self.eval_const(left)?;
+                let r = self.eval_const(right)?;
+
+                match (op, l, r) {
+                    (BinaryOp::Eq, ConstVal::Str(a), ConstVal::Str(b)) => {
+                        Some(ConstVal::Bool(a == b))
+                    }
+                    (BinaryOp::Eq, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a == b))
+                    }
+                    (BinaryOp::Eq, ConstVal::Bool(a), ConstVal::Bool(b)) => {
+                        Some(ConstVal::Bool(a == b))
+                    }
+                    (BinaryOp::Eq, ConstVal::Char(a), ConstVal::Char(b)) => {
+                        Some(ConstVal::Bool(a == b))
+                    }
+
+                    (BinaryOp::NEq, ConstVal::Str(a), ConstVal::Str(b)) => {
+                        Some(ConstVal::Bool(a != b))
+                    }
+                    (BinaryOp::NEq, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a != b))
+                    }
+                    (BinaryOp::NEq, ConstVal::Bool(a), ConstVal::Bool(b)) => {
+                        Some(ConstVal::Bool(a != b))
+                    }
+                    (BinaryOp::NEq, ConstVal::Char(a), ConstVal::Char(b)) => {
+                        Some(ConstVal::Bool(a != b))
+                    }
+
+                    (BinaryOp::And, ConstVal::Bool(a), ConstVal::Bool(b)) => {
+                        Some(ConstVal::Bool(a && b))
+                    }
+                    (BinaryOp::Or, ConstVal::Bool(a), ConstVal::Bool(b)) => {
+                        Some(ConstVal::Bool(a || b))
+                    }
+
+                    (BinaryOp::Gt, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a > b))
+                    }
+                    (BinaryOp::GtE, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a >= b))
+                    }
+                    (BinaryOp::Lt, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a < b))
+                    }
+                    (BinaryOp::LtE, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Bool(a <= b))
+                    }
+                    (BinaryOp::Add, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Int(a + b))
+                    }
+                    (BinaryOp::Sub, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Int(a - b))
+                    }
+                    (BinaryOp::Mul, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        Some(ConstVal::Int(a * b))
+                    }
+                    (BinaryOp::Div, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        if b == 0 {
+                            None
+                        } else {
+                            Some(ConstVal::Int(a / b))
+                        }
+                    }
+                    (BinaryOp::Mod, ConstVal::Int(a), ConstVal::Int(b)) => {
+                        if b == 0 {
+                            None
+                        } else {
+                            Some(ConstVal::Int(a % b))
+                        }
+                    }
+
+                    _ => None,
+                }
+            }
+
+            _ => None,
+        }
+    }
+
+    pub fn type_of_expr(&self, expr: &Expr) -> Option<Type> {
+        match &expr.kind {
+            ExprKind::Literal(lit) => match lit {
+                Literal::Int(_) => Some(Type::Int),
+                Literal::String(_) => Some(Type::Str),
+                Literal::Char(_) => Some(Type::Char),
+                Literal::Bool(_) => Some(Type::Bool),
+                Literal::Arr { elements } => {
+                    let elem_type = elements.first().and_then(|e| self.type_of_expr(e))?;
+                    Some(Type::Array {
+                        element_type: Box::new(elem_type),
+                        size: elements.len(),
+                    })
+                }
+            },
+
+            ExprKind::Identifier(name) => {
+                let resolved = self.resolve_var_name(name);
+
+                if let Some(ty) = self.var_types.get(&resolved) {
+                    return Some(ty.clone());
+                }
+
+                if let Some(ty) = self.var_types.get(name) {
+                    return Some(ty.clone());
+                }
+
+                None
+            }
+
+            ExprKind::Cast { right, .. } => Some(right.clone()),
+
+            ExprKind::Binary { op, left, .. } => match op {
+                BinaryOp::Eq
+                | BinaryOp::NEq
+                | BinaryOp::Gt
+                | BinaryOp::GtE
+                | BinaryOp::Lt
+                | BinaryOp::LtE
+                | BinaryOp::And
+                | BinaryOp::Or => Some(Type::Bool),
+                _ => self.type_of_expr(left),
+            },
+
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::Not => Some(Type::Bool),
+                UnaryOp::AddressOf => {
+                    let inner_ty = self.type_of_expr(expr)?;
+                    Some(Type::Ptr(Box::new(inner_ty)))
+                }
+                UnaryOp::Deref => {
+                    if let Some(Type::Ptr(inner_ty)) = self.type_of_expr(expr) {
+                        Some(*inner_ty)
+                    } else {
+                        None
+                    }
+                }
+                _ => self.type_of_expr(expr),
+            },
+
+            ExprKind::Typeof { .. } => Some(Type::Str),
+
+            _ => None,
         }
     }
 
@@ -120,6 +294,19 @@ impl IRGen {
         };
         self.var_types.insert(qualified_name.clone(), ty);
         qualified_name
+    }
+
+    fn resolve_var_name(&self, name: &str) -> String {
+        if let Some(aliased) = self.var_aliases.iter().rev().find_map(|s| s.get(name)) {
+            return aliased.clone();
+        }
+
+        let local_mangled = format!("{}::{}", self.current_function, name);
+        if self.var_types.get(&local_mangled).is_some() {
+            return local_mangled;
+        }
+
+        name.to_string()
     }
 
     fn substitute_type(&self, ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
@@ -658,9 +845,12 @@ impl IRGen {
 
             let variadic_len = variadic_values.len() as i64;
 
-            self.code.push(Instruction::Assign {
-                dst: pack_var.clone(),
-                src: Value::Const(0),
+            let pack_type = Type::Struct(struct_name.clone());
+            let _dummy_addr = self.next_temp_with_type(Type::Ptr(Box::new(pack_type.clone())));
+            self.code.push(Instruction::Unary {
+                dst: _dummy_addr,
+                op: IrOp::Ref,
+                value: Value::Var(pack_var.clone()),
             });
 
             let store_field = |irgen: &mut Self, field_name: &str, val: Value| {
@@ -755,13 +945,7 @@ impl IRGen {
     fn gen_lvalue_addr(&mut self, expr: &Expr) -> Value {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                let local_mangled = format!("{}::{}", self.current_function, name);
-
-                let resolved_name = if self.var_types.get(&local_mangled).is_some() {
-                    local_mangled
-                } else {
-                    name.clone()
-                };
+                let resolved_name = self.resolve_var_name(name);
 
                 let ty = self
                     .var_types
@@ -1218,14 +1402,11 @@ impl IRGen {
             }
 
             ExprKind::Identifier(name) => {
-                let local_mangled = format!("{}::{}", self.current_function, name);
-                if self.var_types.get(&local_mangled).is_some() {
-                    return Value::Var(local_mangled);
-                }
                 let maybe_const_expr = self
                     .analyser_constants
                     .get(name)
                     .map(|(_, expr)| expr.clone());
+
                 if let Some(expr) = maybe_const_expr {
                     if let Some(val) = self.evaluated_constants.get(name) {
                         return val.clone();
@@ -1234,7 +1415,8 @@ impl IRGen {
                     self.evaluated_constants.insert(name.clone(), val.clone());
                     return val;
                 }
-                Value::Var(name.clone())
+
+                Value::Var(self.resolve_var_name(name))
             }
 
             ExprKind::Unary { op, expr } => match op {
@@ -1482,7 +1664,6 @@ impl IRGen {
                 if is_aggregate {
                     let src_val = self.gen_expr(expr, Some(target_var.clone()));
 
-                    // If gen_expr didn't write directly to target_var, store the source into the destination pointer
                     if src_val != target_var {
                         self.code.push(Instruction::Store {
                             ptr: target_var,
@@ -1516,8 +1697,42 @@ impl IRGen {
                 else_if_branches,
                 else_branch,
             } => {
-                let true_end = self.labels.next_label();
+                if let Some(ConstVal::Bool(is_true)) = self.eval_const(cond) {
+                    if is_true {
+                        for stmt in then_branch {
+                            self.gen_stmt(stmt);
+                        }
+                        return;
+                    }
 
+                    let mut resolved_statically = true;
+                    for (ei_cond, ei_body) in else_if_branches {
+                        match self.eval_const(ei_cond) {
+                            Some(ConstVal::Bool(true)) => {
+                                for stmt in ei_body {
+                                    self.gen_stmt(stmt);
+                                }
+                                return;
+                            }
+                            Some(ConstVal::Bool(false)) => continue,
+                            _ => {
+                                resolved_statically = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if resolved_statically {
+                        if let Some(else_stmts) = else_branch {
+                            for stmt in else_stmts {
+                                self.gen_stmt(stmt);
+                            }
+                        }
+                        return;
+                    }
+                }
+
+                let true_end = self.labels.next_label();
                 let mut next_target = self.labels.next_label();
 
                 let cond_val = self.gen_expr(cond, None);
@@ -1555,10 +1770,8 @@ impl IRGen {
                     for stmt in else_stmts {
                         self.gen_stmt(stmt);
                     }
-                } else {
-                    if next_target != true_end {
-                        self.code.push(Instruction::Label(next_target));
-                    }
+                } else if next_target != true_end {
+                    self.code.push(Instruction::Label(next_target));
                 }
 
                 self.code.push(Instruction::Label(true_end));
@@ -1622,8 +1835,13 @@ impl IRGen {
 
                         fields.sort_by_key(|(offset, _)| *offset);
 
-                        for (offset, field_type) in fields {
+                        for (i, (offset, field_type)) in fields.into_iter().enumerate() {
                             let field_type = self.resolve_type(&field_type);
+
+                            let iteration_var =
+                                format!("{}::{}#{}", self.current_function, field_ident.value, i);
+                            let shadow_var =
+                                format!("{}::{}", self.current_function, field_ident.value);
 
                             let base_addr = self.next_temp_with_type(Type::Ptr(Box::new(
                                 Type::Struct(struct_name.clone()),
@@ -1653,58 +1871,30 @@ impl IRGen {
                                 ty: field_type.clone(),
                             });
 
-                            self.var_types.insert(field_var.clone(), field_type);
+                            self.var_types.push_scope();
+
+                            let mut alias_scope = HashMap::new();
+                            alias_scope.insert(field_ident.value.clone(), iteration_var.clone());
+                            self.var_aliases.push(alias_scope);
+
+                            self.var_types
+                                .insert(iteration_var.clone(), field_type.clone());
+                            self.var_types
+                                .insert(shadow_var.clone(), field_type.clone());
+                            self.var_types
+                                .insert(field_ident.value.clone(), field_type.clone());
 
                             self.code.push(Instruction::Assign {
-                                dst: field_var.clone(),
+                                dst: iteration_var,
                                 src: Value::Temp(field_value),
                             });
 
                             for stmt in body {
                                 self.gen_stmt(stmt);
                             }
-                        }
-                    }
 
-                    Type::Array { element_type, size } => {
-                        let element_type = self.resolve_type(&element_type);
-                        let stride = self.element_size(&element_type);
-
-                        // We need the address of the array itself.
-                        let target_addr = self.gen_lvalue_addr(target_expr);
-
-                        for index in 0..size {
-                            let offset = index as i64 * stride;
-
-                            let element_addr =
-                                self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-
-                            self.code.push(Instruction::Binary {
-                                dst: element_addr.clone(),
-                                op: IrOp::Add,
-                                lhs: target_addr.clone(),
-                                rhs: Value::Const(offset),
-                            });
-
-                            let element_value = self.next_temp_with_type(element_type.clone());
-
-                            self.code.push(Instruction::Load {
-                                dst: element_value.clone(),
-                                ptr: Value::Temp(element_addr),
-                                ty: element_type.clone(),
-                            });
-
-                            self.var_types
-                                .insert(field_var.clone(), element_type.clone());
-
-                            self.code.push(Instruction::Assign {
-                                dst: field_var.clone(),
-                                src: Value::Temp(element_value),
-                            });
-
-                            for stmt in body {
-                                self.gen_stmt(stmt);
-                            }
+                            self.var_aliases.pop();
+                            self.var_types.pop_scope();
                         }
                     }
                     Type::GenericInstance { name, args } => {
@@ -2100,12 +2290,7 @@ impl IRGen {
                     }
 
                     ExprKind::Identifier(name) => {
-                        let mangled_name = format!("{}::{}", self.current_function, name);
-                        let dst = if self.var_types.get(&mangled_name).is_some() {
-                            mangled_name
-                        } else {
-                            name.clone()
-                        };
+                        let dst = self.resolve_var_name(name);
                         self.code.push(Instruction::Assign {
                             dst,
                             src: value_to_store,
@@ -2195,7 +2380,7 @@ impl IRGen {
                         &struct_name,
                         &variadic_types,
                         variadic_param.name.location.clone(),
-                    ); // no-op if call site already built it
+                    );
                     let unique_param_name =
                         format!("{}::{}", resolved_func_name, variadic_param.name.value);
                     self.var_types

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cranelift::codegen::Context;
 use cranelift::{codegen::ir::StackSlot, prelude::*};
@@ -219,6 +219,8 @@ pub struct CraneliftBackend {
     pub functions: HashMap<String, FunctionSignature>,
     pub string_literals: HashMap<String, DataId>,
     pub declared_funcs: HashMap<String, FuncId>,
+    /// Functions compiled into this object file (not runtime / libc symbols).
+    defined_funcs: HashSet<String>,
 }
 
 impl CraneliftBackend {
@@ -249,7 +251,27 @@ impl CraneliftBackend {
             functions,
             string_literals: HashMap::new(),
             declared_funcs: HashMap::new(),
+            defined_funcs: HashSet::new(),
         }
+    }
+
+    fn is_defined_in_module(&self, name: &str) -> bool {
+        self.defined_funcs.contains(name) || self.defined_funcs.contains(strip_mangling(name))
+    }
+
+    fn linkage_for_callee(&self, callee_name: &str) -> Linkage {
+        if self.is_defined_in_module(callee_name) {
+            Linkage::Local
+        } else {
+            Linkage::Import
+        }
+    }
+
+    /// Registers every function that will be emitted in this object file so
+    /// call sites do not treat monomorphised / variadic instantiations as
+    /// external imports before their bodies are compiled.
+    pub fn register_defined_functions(&mut self, names: impl IntoIterator<Item = String>) {
+        self.defined_funcs.extend(names);
     }
 
     pub fn scan_externs(&mut self, insts: &[Instruction]) {
@@ -420,6 +442,8 @@ impl CraneliftBackend {
         func_ctx: &mut FunctionBuilderContext,
         incoming_var_types: &ScopedMap,
     ) {
+        self.defined_funcs.insert(name.to_string());
+
         let mut terminated = false;
 
         let ptr_type = self.module.target_config().pointer_type();
@@ -1048,11 +1072,7 @@ impl CraneliftBackend {
                         if let Some(&id) = self.declared_funcs.get(stripped) {
                             id
                         } else {
-                            let linkage = if public {
-                                Linkage::Export
-                            } else {
-                                Linkage::Local
-                            };
+                            let linkage = self.linkage_for_callee(callee_name);
 
                             let id = self
                                 .module

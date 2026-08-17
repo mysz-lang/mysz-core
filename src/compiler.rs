@@ -587,6 +587,7 @@ pub fn compile_ast_program(
     }
 
     let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, analyser.functions.clone());
+    backend.register_defined_functions(unique_function_names.iter().cloned());
     backend.scan_externs(&tac_instructions);
 
     let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();

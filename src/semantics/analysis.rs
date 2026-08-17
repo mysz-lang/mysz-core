@@ -28,6 +28,7 @@ pub struct FunctionSignature {
     pub generic_params: Vec<String>,
     pub param_types: Vec<Type>,
     pub is_variadic: bool,
+    pub variadic_param_name: Option<String>,
     pub return_type: Type,
     pub location: Location,
 }

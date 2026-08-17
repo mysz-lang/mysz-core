@@ -91,9 +91,11 @@ pub fn is_truthy_type(ty: &Type) -> bool {
     )
 }
 
+#[derive(Clone, Copy)]
 pub enum TypeCheckMode {
     Strict,   // exact match only
     Coercive, // allows implicit conversions
+    Passive,  // allows any conversion
 }
 
 pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
@@ -117,6 +119,7 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
             }
             false
         }
+        TypeCheckMode::Passive => true,
     }
 }
 
@@ -196,12 +199,10 @@ pub mod variadic {
         "il"
     }
 
-    /// The two kinds of field a variadic-pack access can name, per the
-    /// naming convention established by `field_name`/`length_field` above.
     pub enum PackField {
-        /// `pack.iN` — the Nth variadic argument.
+        /// `pack.iN`: the Nth variadic argument.
         Index(usize),
-        /// `pack.il` — the number of variadic arguments passed.
+        /// `pack.il`: the number of variadic arguments passed.
         Length,
     }
 
@@ -224,10 +225,7 @@ pub mod variadic {
 pub fn is_iterable(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Struct(_)
-            | Type::Array { .. }
-            | Type::GenericInstance { .. }
-            | Type::VariadicPack { .. }
+        Type::Struct(_) | Type::GenericInstance { .. } | Type::VariadicPack { .. }
     )
 }
 
@@ -245,20 +243,11 @@ pub fn iterable_elements(
             Some(result)
         }
         Type::GenericInstance { name, args } => {
-            // Resolve to concrete struct name using the same mangling as before.
             let concrete_name = crate::utils::typesafe::mangle_name(name, args);
             let sig = structs.get(&concrete_name)?;
             let mut result = Vec::new();
             for (fname, ftype) in sig.fields.iter() {
                 result.push((Some(fname.clone()), ftype.clone()));
-            }
-            Some(result)
-        }
-        Type::Array { element_type, size } => {
-            let elem = element_type.as_ref().clone();
-            let mut result = Vec::with_capacity(*size);
-            for _ in 0..*size {
-                result.push((None, elem.clone()));
             }
             Some(result)
         }
