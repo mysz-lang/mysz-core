@@ -1596,7 +1596,12 @@ impl IRGen {
 
                 if let Some(expr_node) = expr {
                     if is_aggregate {
-                        self.gen_expr(expr_node, Some(target_var));
+                        let value = self.gen_expr(expr_node, Some(target_var));
+
+                        self.code.push(Instruction::Assign {
+                            dst: mangled_name,
+                            src: value,
+                        });
                     } else {
                         let value = self.gen_expr(expr_node, None);
                         if vtype.is_none() {
