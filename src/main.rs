@@ -1,3 +1,5 @@
+use crate::utils::ctx::{CompilerCtx, CompilerTarget};
+
 pub mod backend;
 pub mod compiler;
 pub mod ir;
@@ -7,10 +9,10 @@ pub mod semantics;
 pub mod utils;
 
 fn main() {
-    let res =
-        compiler::compile_root_file("./interntest/main.mysz", "./interntest/main.o", &[], false);
+    let ctx = CompilerCtx::new("./interntest/main.mysz", &[], false, CompilerTarget::Cranelift);
 
-    // let res = compiler::check_root_file("./interntest/main.mysz", &[], true);
+    let res =
+        compiler::compile_root_file(ctx, "./interntest/main.o");
 
     if res.is_err() {
         println!("{:#}", res.err().unwrap());

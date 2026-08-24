@@ -1,3 +1,4 @@
+use crate::utils::ctx::CompilerCtx;
 use crate::backend::clback;
 use crate::ir::irgen::IRGen;
 use crate::ir::tac::Instruction;
@@ -222,20 +223,18 @@ fn parse_and_flatten<P: AsRef<Path>>(
     Ok((program, sources))
 }
 
-pub fn check_root_file<P: AsRef<Path>>(
-    input_path: P,
-    custom_search_paths: &[PathBuf],
-    json_output: bool,
+pub fn check_root_file<'a, P: AsRef<Path>>(
+    ctx: CompilerCtx<'a, P>
 ) -> Result<(), String> {
-    let (program, sources) = parse_and_flatten(&input_path, custom_search_paths, json_output)?;
-    let file_path = input_path.as_ref().canonicalize().unwrap();
+    let (program, sources) = parse_and_flatten(&ctx.input_path, ctx.search_paths, ctx.output_json)?;
+    let file_path = ctx.input_path.as_ref().canonicalize().unwrap();
     let root_source = sources
         .get(&file_path.display().to_string())
         .map(|s| s.as_str());
 
     let mut analyser = Analyser::new();
     if let Err(err) = analyser.analyse(&program) {
-        if json_output {
+        if ctx.output_json {
             let json_err = json_error_from_analyser_error(&err);
             return Err(serde_json::to_string(&json_err).unwrap());
         } else {
@@ -403,15 +402,13 @@ fn flatten_program_statements(
     Ok(flattened)
 }
 
-pub fn compile_root_file<P: AsRef<Path>>(
-    input_path: P,
+pub fn compile_root_file<'a, P: AsRef<Path>>(
+    ctx: CompilerCtx<'a, P>,
     output_filename: &str,
-    custom_search_paths: &[PathBuf],
-    json_output: bool,
 ) -> Result<(), String> {
-    let input_path = input_path.as_ref().canonicalize().map_err(|e| {
+    let input_path = ctx.input_path.as_ref().canonicalize().map_err(|e| {
         format_simple_error(
-            input_path.as_ref(),
+            ctx.input_path.as_ref(),
             &format!("Failed to canonicalize path: {}", e),
         )
     })?;
@@ -420,15 +417,15 @@ pub fn compile_root_file<P: AsRef<Path>>(
     if let Some(parent) = input_path.parent() {
         search_paths.push(parent.to_path_buf());
     }
-    search_paths.extend_from_slice(custom_search_paths);
+    search_paths.extend_from_slice(ctx.search_paths);
 
-    let (source, tokens) = read_and_lex_file(&input_path, json_output)?;
+    let (source, tokens) = read_and_lex_file(&input_path, ctx.output_json)?;
 
     let mut parser = myszparser::new(tokens);
     parser.parse();
 
     if !parser.parser_errs.is_empty() {
-        if json_output {
+        if ctx.output_json {
             let json_errors: Vec<JsonError> = parser
                 .parser_errs
                 .iter()
@@ -454,7 +451,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
         &mut visiting,
         &mut processed,
         &mut sources,
-        json_output,
+        ctx.output_json.clone(),
         input_path.as_path(),
     )?;
 
@@ -467,7 +464,7 @@ pub fn compile_root_file<P: AsRef<Path>>(
         output_filename,
         &sources,
         &input_path,
-        json_output,
+        ctx.output_json.clone(),
     )
 }
 
