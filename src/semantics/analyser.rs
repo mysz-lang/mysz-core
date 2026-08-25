@@ -687,6 +687,7 @@ impl Analyser {
 
                 let mut resolved_func_name = callee.value.clone();
 
+                // Resolve generic function arguments and create the concrete signature.
                 if !template.generic_params.is_empty() || !generic_args.is_empty() {
                     if template.generic_params.len() != generic_args.len() {
                         return Err(AnalyserError::type_error(
@@ -701,6 +702,7 @@ impl Analyser {
                     }
 
                     let mut inst_args = Vec::new();
+
                     for g_arg in generic_args {
                         inst_args.push(self.instantiate_generic_types(g_arg, &callee.location)?);
                     }
@@ -708,7 +710,8 @@ impl Analyser {
                     resolved_func_name = mangle_name(&callee.value, &inst_args);
 
                     if !self.functions.contains_key(&resolved_func_name) {
-                        let mut mapping: HashMap<String, Type> = HashMap::new();
+                        let mut mapping = HashMap::new();
+
                         for (param_name, concrete_type) in
                             template.generic_params.iter().zip(&inst_args)
                         {
@@ -719,14 +722,18 @@ impl Analyser {
 
                         let substituted_return =
                             self.substitute_type(&template.return_type, &mapping);
+
                         let fresh_return =
                             self.instantiate_generic_types(&substituted_return, &callee.location)?;
 
                         let mut fresh_params = Vec::new();
+
                         for p_ty in &template.param_types {
                             let substituted_param = self.substitute_type(p_ty, &mapping);
+
                             let fully_resolved_param = self
                                 .instantiate_generic_types(&substituted_param, &callee.location)?;
+
                             fresh_params.push(fully_resolved_param);
                         }
 
@@ -736,7 +743,7 @@ impl Analyser {
                                 generic_params: Vec::new(),
                                 param_types: fresh_params,
                                 is_variadic: template.is_variadic,
-                                variadic_param_name: template.variadic_param_name,
+                                variadic_param_name: template.variadic_param_name.clone(),
                                 return_type: fresh_return,
                                 location: template.location.clone(),
                             },
@@ -746,25 +753,28 @@ impl Analyser {
 
                 let sig = self.functions.get(&resolved_func_name).unwrap().clone();
 
+                // `param_types` contains ONLY fixed parameters.
+                let fixed_arg_count = sig.param_types.len();
+
                 if sig.is_variadic {
-                    if args.len() < sig.param_types.len() {
+                    if args.len() < fixed_arg_count {
                         return Err(AnalyserError::type_error(
                             expr.span.clone(),
                             format!(
                                 "Function '{}' expects at least {} argument(s), found {}",
                                 callee.value,
-                                sig.param_types.len(),
+                                fixed_arg_count,
                                 args.len()
                             ),
                         ));
                     }
-                } else if args.len() != sig.param_types.len() {
+                } else if args.len() != fixed_arg_count {
                     return Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
                             "Function '{}' expects {} argument(s), found {}",
                             callee.value,
-                            sig.param_types.len(),
+                            fixed_arg_count,
                             args.len()
                         ),
                     ));
@@ -773,13 +783,14 @@ impl Analyser {
                 let param_types = sig.param_types.clone();
                 let return_type = sig.return_type.clone();
 
-                let fixed_arg_count = param_types.len();
+                // Check fixed arguments.
                 for (i, (arg, expected)) in args[..fixed_arg_count]
                     .iter()
                     .zip(param_types.iter())
                     .enumerate()
                 {
                     let arg_type = self.check_expr(arg, Some(expected))?;
+
                     match (expected, &arg_type) {
                         (
                             Type::Array {
@@ -839,7 +850,9 @@ impl Analyser {
 
                 if sig.is_variadic {
                     let variadic_args = &args[fixed_arg_count..];
+
                     let mut variadic_types = Vec::new();
+
                     for arg in variadic_args {
                         variadic_types.push(self.check_expr(arg, None)?);
                     }
@@ -852,7 +865,14 @@ impl Analyser {
                             variadic_mangled_name.clone(),
                             FunctionSignature {
                                 generic_params: Vec::new(),
+
+                                // IMPORTANT:
+                                // This remains the fixed parameter list.
+                                //
+                                // The variadic argument is NOT a normal LLVM/TAC
+                                // parameter. It is materialised as the variadic pack.
                                 param_types: param_types.clone(),
+
                                 is_variadic: true,
                                 variadic_param_name: sig.variadic_param_name.clone(),
                                 return_type: return_type.clone(),
@@ -860,54 +880,70 @@ impl Analyser {
                             },
                         );
 
-                        if let Some(variadic_name) = &sig.variadic_param_name
-                            && let Some((params, func_body)) =
+                        if let Some(variadic_name) = &sig.variadic_param_name {
+                            if let Some((params, func_body)) =
                                 self.function_bodies.get(&callee.value).cloned()
-                        {
-                            self.enter_scope();
+                            {
+                                self.enter_scope();
 
-                            // Declare the fixed parameters.
-                            for param in params.iter().filter(|p| !p.is_variadic) {
-                                let param_type = sig
-                                    .param_types
-                                    .get(
-                                        params
-                                            .iter()
-                                            .filter(|p| !p.is_variadic)
-                                            .position(|p| p.name.value == param.name.value)
-                                            .unwrap(),
-                                    )
-                                    .cloned()
-                                    .unwrap();
+                                /*
+                                 * Declare fixed parameters using the actual parameter
+                                 * declaration order from the source.
+                                 *
+                                 * Do NOT use `params` itself as the signature passed
+                                 * to LLVM. This is only analyser/type-checker scope
+                                 * information.
+                                 */
+                                let mut fixed_index = 0;
 
-                                self.declare_variable(
-                                    &param.name.value,
-                                    param_type,
+                                for param in &params {
+                                    if param.is_variadic {
+                                        continue;
+                                    }
+
+                                    let param_type = param_types
+                            .get(fixed_index)
+                            .cloned()
+                            .ok_or_else(|| {
+                                AnalyserError::semantic_error(
                                     param.name.location.clone(),
+                                    format!(
+                                        "Internal error: missing type for parameter '{}'",
+                                        param.name.value
+                                    ),
+                                )
+                            })?;
+
+                                    self.declare_variable(
+                                        &param.name.value,
+                                        param_type,
+                                        param.name.location.clone(),
+                                    )?;
+
+                                    fixed_index += 1;
+                                }
+                                self.declare_variable(
+                                    variadic_name,
+                                    Type::VariadicPack {
+                                        name: variadic_name.clone(),
+                                        types: variadic_types,
+                                    },
+                                    callee.location.clone(),
                                 )?;
+
+                                for stmt in &func_body {
+                                    self.check_stmt(stmt, TypeCheckMode::Strict)?;
+                                }
+
+                                self.leave_scope();
                             }
-
-                            // Declare the specialized variadic pack.
-                            self.declare_variable(
-                                variadic_name,
-                                Type::VariadicPack {
-                                    name: variadic_name.clone(),
-                                    types: variadic_types,
-                                },
-                                callee.location.clone(),
-                            )?;
-
-                            for stmt in &func_body {
-                                self.check_stmt(stmt, TypeCheckMode::Strict)?;
-                            }
-
-                            self.leave_scope();
                         }
                     }
                 }
 
                 Ok(return_type)
             }
+
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;

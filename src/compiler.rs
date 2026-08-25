@@ -565,7 +565,7 @@ pub fn compile_ast_program(
 
     irgen.gen_program(program);
 
-    irgen.dump();
+    // irgen.dump();
 
     // ----------------------------
     // Remove duplicate definitions
@@ -720,13 +720,14 @@ fn compile_with_llvm(
     file_path: &Path,
     output_filename: &str,
 ) -> Result<(), String> {
+    irgen.dump();
+
     let concrete_functions: HashMap<String, FunctionSignature> = functions
-    .into_iter()
-    .filter(|(_, sig)| {
-        !sig.param_types.iter().any(is_generic_type)
-            && !is_generic_type(&sig.return_type)
-    })
-    .collect();
+        .into_iter()
+        .filter(|(_, sig)| {
+            !sig.param_types.iter().any(is_generic_type) && !is_generic_type(&sig.return_type)
+        })
+        .collect();
 
     let context = inkContext::create();
 
@@ -746,7 +747,7 @@ fn compile_with_llvm(
         concrete_functions,
     );
 
-    backend.compile(&tac_instructions);
+    backend.compile(&tac_instructions)?;
 
     backend.verify()?;
 
@@ -760,18 +761,20 @@ fn compile_with_llvm(
             "generic",
             "",
             OptimizationLevel::None,
-            RelocMode::Default,
+            RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| "failed to create LLVM target machine".to_string())?;
 
-    let object_path = format!("{}.o", output_filename);
-
     target_machine
-        .write_to_file(backend.module(), FileType::Object, Path::new(&object_path))
+        .write_to_file(
+            backend.module(),
+            FileType::Object,
+            Path::new(&output_filename),
+        )
         .map_err(|e| e.to_string())?;
 
-    backend.print_ir();
+    // backend.print_ir();
 
     Ok(())
 }

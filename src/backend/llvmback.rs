@@ -6,8 +6,8 @@ use inkwell::{
     builder::Builder,
     context::Context,
     module::Module,
-    types::{BasicType, BasicTypeEnum},
-    values::{BasicValueEnum, FunctionValue, IntValue, PointerValue},
+    types::{BasicType, BasicTypeEnum, StructType},
+    values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
 
 use crate::{
@@ -35,7 +35,8 @@ pub struct LlvmBackend<'ctx> {
     temps: HashMap<String, BasicValueEnum<'ctx>>,
     temp_types: HashMap<String, Type>,
     vars: HashMap<String, PointerValue<'ctx>>,
-    strings: HashMap<String, PointerValue<'ctx>>,
+    strings: HashMap<String, GlobalValue<'ctx>>,
+    struct_types: HashMap<String, StructType<'ctx>>,
 
     var_types: ScopedMap,
     struct_defs: HashMap<String, StructLayout>,
@@ -70,6 +71,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             temp_types: HashMap::new(),
             vars: HashMap::new(),
             strings: HashMap::new(),
+            struct_types: HashMap::new(),
 
             var_types,
             struct_defs,
@@ -99,18 +101,17 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     pub fn compile(&mut self, instructions: &[Instruction]) -> Result<(), String> {
-        self.declare_functions()?;
+        self.declare_structs()?;
+        self.declare_functions(instructions)?;
         self.create_blocks(instructions)?;
 
         self.compile_instructions(instructions)?;
-
-        self.dump_blocks();
 
         Ok(())
     }
 
     fn compile_instructions(&mut self, instructions: &[Instruction]) -> Result<(), String> {
-        for instruction in instructions {
+        for instruction in instructions.iter() {
             self.compile_instruction(instruction)?;
         }
 
@@ -163,9 +164,12 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),
 
-            Type::Struct(_) => {
-                todo!("LLVM struct representation")
-            }
+            Type::Struct(name) => self
+                .struct_types
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| panic!("unknown struct '{}'", name))
+                .into(),
 
             Type::Void => {
                 panic!("ICE: void used where an LLVM value type was required")
@@ -247,37 +251,23 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     fn llvm_string(&mut self, value: &str) -> Result<PointerValue<'ctx>, String> {
-        if let Some(ptr) = self.strings.get(value) {
-            return Ok(*ptr);
+        if let Some(global) = self.strings.get(value).copied() {
+            return Ok(global.as_pointer_value());
         }
 
-        let bytes = value.as_bytes();
+        let name = format!("str.{}", self.strings.len());
 
-        let string_type = self.context.i8_type().array_type((bytes.len() + 1) as u32);
+        let global = self
+            .builder
+            .build_global_string_ptr(value, &name)
+            .map_err(|err| err.to_string())?;
 
-        let mut values = bytes
-            .iter()
-            .map(|byte| self.context.i8_type().const_int(*byte as u64, false))
-            .collect::<Vec<_>>();
-
-        values.push(self.context.i8_type().const_zero());
-
-        let string_value = self.context.i8_type().const_array(&values);
-
-        let global =
-            self.module
-                .add_global(string_type, None, &format!("str.{}", self.strings.len()));
-
-        global.set_constant(true);
-        global.set_initializer(&string_value);
         global.set_linkage(inkwell::module::Linkage::Private);
+        global.set_constant(true);
 
-        let zero = self.context.i64_type().const_zero();
-        let indices = [self.context.i64_type().const_zero(), zero];
+        let ptr = global.as_pointer_value();
 
-        let ptr = unsafe { global.as_pointer_value().const_gep(string_type, &indices) };
-
-        self.strings.insert(value.to_string(), ptr);
+        self.strings.insert(value.to_string(), global);
 
         Ok(ptr)
     }
@@ -308,7 +298,21 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .copied()
                 .ok_or_else(|| format!("unknown variable '{}'", name)),
 
-            _ => Err("cannot take reference of this value".to_string()),
+            Value::Temp(name) => {
+                let value = self
+                    .temps
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown temporary '{}'", name))?;
+
+                if !value.is_pointer_value() {
+                    return Err(format!("temporary '{}' is not a pointer", name));
+                }
+
+                Ok(value.into_pointer_value())
+            }
+
+            _ => Err("cannot use this value as a pointer".to_string()),
         }
     }
 
@@ -600,6 +604,90 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         Ok(result.as_basic_value().into_int_value())
     }
+
+    fn struct_field_at_offset(&self, struct_name: &str, offset: i64) -> Result<&Type, String> {
+        let layout = self
+            .struct_defs
+            .get(struct_name)
+            .ok_or_else(|| format!("unknown struct '{}'", struct_name))?;
+
+        layout
+            .field_offsets
+            .values()
+            .find(|(field_offset, _)| *field_offset == offset)
+            .map(|(_, ty)| ty)
+            .ok_or_else(|| format!("struct '{}' has no field at offset {}", struct_name, offset))
+    }
+
+    fn llvm_address_of(&mut self, value: &Value) -> Result<PointerValue<'ctx>, String> {
+        match value {
+            Value::Var(name) => {
+                if let Some(ptr) = self.vars.get(name).copied() {
+                    return Ok(ptr);
+                }
+
+                let ty = self
+                    .var_types
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown variable '{}'", name))?;
+
+                let llvm_ty = self.llvm_type(&ty);
+
+                let ptr = self
+                    .builder
+                    .build_alloca(llvm_ty, name)
+                    .map_err(|err| err.to_string())?;
+
+                self.vars.insert(name.clone(), ptr);
+
+                Ok(ptr)
+            }
+
+            Value::Temp(name) => {
+                let value = self
+                    .temps
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown temporary '{}'", name))?;
+
+                if !value.is_pointer_value() {
+                    return Err(format!("temporary '{}' is not a pointer", name));
+                }
+
+                Ok(value.into_pointer_value())
+            }
+
+            _ => Err("cannot take address of this value".to_string()),
+        }
+    }
+
+    fn declare_structs(&mut self) -> Result<(), String> {
+        // First create all named struct types.
+        for name in self.struct_defs.keys() {
+            let struct_type = self.context.opaque_struct_type(name);
+            self.struct_types.insert(name.clone(), struct_type);
+        }
+
+        // Then populate their bodies.
+        for (name, layout) in &self.struct_defs {
+            let struct_type = self
+                .struct_types
+                .get(name)
+                .copied()
+                .ok_or_else(|| format!("unknown struct '{}'", name))?;
+
+            let field_types = layout
+                .field_offsets
+                .values()
+                .map(|(_, ty)| self.llvm_type(ty))
+                .collect::<Vec<_>>();
+
+            struct_type.set_body(&field_types, false);
+        }
+
+        Ok(())
+    }
 }
 
 /// Compilation functions
@@ -752,7 +840,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
 
             IrOp::Ref => (
-                self.llvm_ptr(value)?.into(),
+                self.llvm_address_of(value)?.into(),
                 Type::Ptr(Box::new(value_type)),
             ),
 
@@ -971,7 +1059,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         rhs: &Value,
     ) -> Result<(), String> {
         match op {
-            IrOp::Add | IrOp::Sub | IrOp::Div | IrOp::Mod => {
+            IrOp::Add | IrOp::Sub | IrOp::Div | IrOp::Mul | IrOp::Mod => {
                 self.compile_binary_maths(dst, op, lhs, rhs)
             }
 
@@ -996,6 +1084,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         rhs: &Value,
     ) -> Result<(), String> {
         let result_type = self.value_type(lhs)?;
+
+        if matches!(self.value_type(lhs)?, Type::Ptr(_)) && is_integer(&self.value_type(rhs)?) {
+            return self.compile_pointer_arithmetic(dst, op, lhs, rhs);
+        }
 
         if !is_integer(&result_type) {
             return Err(format!(
@@ -1059,6 +1151,65 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         self.temps.insert(dst.to_string(), result);
         self.temp_types.insert(dst.to_string(), result_type);
+
+        Ok(())
+    }
+
+    fn compile_pointer_arithmetic(
+        &mut self,
+        dst: &str,
+        op: &IrOp,
+        lhs: &Value,
+        rhs: &Value,
+    ) -> Result<(), String> {
+        let lhs_type = self.value_type(lhs)?;
+
+        let result_pointee = match &lhs_type {
+            Type::Ptr(inner) => match inner.as_ref() {
+                Type::Struct(name) => {
+                    if let Value::Const(offset) = rhs {
+                        self.struct_field_at_offset(name, *offset)?.clone()
+                    } else {
+                        inner.as_ref().clone()
+                    }
+                }
+
+                other => other.clone(),
+            },
+
+            _ => unreachable!(),
+        };
+        let ptr = self.llvm_value(lhs)?.into_pointer_value();
+        let offset = self.llvm_value(rhs)?.into_int_value();
+
+        let result = match op {
+            IrOp::Add => unsafe {
+                self.builder
+                    .build_gep(self.context.i8_type(), ptr, &[offset], dst)
+                    .map_err(|err| err.to_string())?
+            },
+
+            IrOp::Sub => {
+                let neg = self
+                    .builder
+                    .build_int_neg(offset, &format!("{}.neg", dst))
+                    .map_err(|err| err.to_string())?;
+
+                unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), ptr, &[neg], dst)
+                        .map_err(|err| err.to_string())?
+                }
+            }
+
+            _ => {
+                return Err(format!("invalid pointer arithmetic operation {:?}", op));
+            }
+        };
+
+        self.temps.insert(dst.to_string(), result.into());
+        self.temp_types
+            .insert(dst.to_string(), Type::Ptr(Box::new(result_pointee.clone())));
 
         Ok(())
     }
@@ -1157,6 +1308,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 rhs_value,
                 dst,
             )?,
+
+            IrOp::And => self
+                .builder
+                .build_and(lhs_value, rhs_value, dst)
+                .map_err(|e| e.to_string())?
+                .into(),
+
+            IrOp::Or => self
+                .builder
+                .build_or(lhs_value, rhs_value, dst)
+                .map_err(|e| e.to_string())?
+                .into(),
 
             _ => {
                 return Err(format!("binary operation {:?} not implemented yet", op));
@@ -1304,47 +1467,100 @@ impl<'ctx> LlvmBackend<'ctx> {
         Ok(())
     }
 
-    fn declare_functions(&mut self) -> Result<(), String> {
-        for (name, sig) in &self.func_defs {
-            if self.functions.contains_key(name) {
-                return Err(format!("duplicate function '{}'", name));
+    fn declare_functions(&mut self, tac: &[Instruction]) -> Result<(), String> {
+        // First collect the functions that actually occur in the TAC.
+        let mut tac_functions: Vec<String> = Vec::new();
+
+        for instruction in tac {
+            if let Instruction::FunctionLabel(name) = instruction {
+                if !tac_functions.contains(name) {
+                    tac_functions.push(name.clone());
+                }
+            }
+        }
+
+        // Declare every concrete function emitted by TAC.
+        for name in tac_functions {
+            if self.functions.contains_key(&name) {
+                continue;
             }
 
-            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = sig
+            let mut llvm_param_types = Vec::new();
+
+            for instruction in tac {
+                let param_name = match instruction {
+                    Instruction::Param { p } => p,
+                    _ => continue,
+                };
+
+                let prefix = format!("{}::", name);
+
+                if !param_name.starts_with(&prefix) {
+                    continue;
+                }
+
+                let param_ty = self
+                    .var_types
+                    .get(param_name)
+                    .ok_or_else(|| format!("no type information for parameter '{}'", param_name))?;
+
+                llvm_param_types.push(self.llvm_type(param_ty).into());
+            }
+
+            // If this concrete TAC function has no Param instructions,
+            // fall back to the semantic signature. This handles things
+            // like main() and zero-parameter functions.
+            if llvm_param_types.is_empty() {
+                if let Some(sig) = self.func_defs.get(&name) {
+                    llvm_param_types = sig
+                        .param_types
+                        .iter()
+                        .map(|ty| self.llvm_type(ty).into())
+                        .collect();
+                }
+            }
+
+            let return_type = self
+                .func_defs
+                .get(&name)
+                .map(|sig| sig.return_type.clone())
+                .unwrap_or(Type::Void);
+
+            let fn_type = match &return_type {
+                Type::Void => self.context.void_type().fn_type(&llvm_param_types, false),
+
+                ty => self.llvm_type(ty).fn_type(&llvm_param_types, false),
+            };
+
+            let function = self.module.add_function(&name, fn_type, None);
+
+            self.functions.insert(name, function);
+        }
+
+        // Declare externs that don't have TAC FunctionLabels.
+        for (name, sig) in &self.func_defs {
+            if self.functions.contains_key(name) {
+                continue;
+            }
+
+            // Only functions with no TAC body reach here.
+            let param_types: Vec<_> = sig
                 .param_types
                 .iter()
                 .map(|ty| self.llvm_type(ty).into())
                 .collect();
 
             let fn_type = match &sig.return_type {
-                Type::Void => self
-                    .context
-                    .void_type()
-                    .fn_type(&param_types, sig.is_variadic),
-                ret => self.llvm_type(ret).fn_type(&param_types, sig.is_variadic),
+                Type::Void => self.context.void_type().fn_type(&param_types, false),
+
+                ty => self.llvm_type(ty).fn_type(&param_types, false),
             };
 
             let function = self.module.add_function(name, fn_type, None);
+
             self.functions.insert(name.clone(), function);
         }
 
         Ok(())
-    }
-}
-
-/// Temporary functions
-impl<'ctx> LlvmBackend<'ctx> {
-    fn dump_blocks(&self) {
-        for function in self.module.get_functions() {
-            eprintln!("FUNCTION: {}", function.get_name().to_string_lossy());
-
-            for block in function.get_basic_blocks() {
-                eprintln!(
-                    "  BLOCK: {} | terminator: {}",
-                    block.get_name().to_str().unwrap_or("<unnamed>"),
-                    block.get_terminator().is_some()
-                );
-            }
-        }
     }
 }

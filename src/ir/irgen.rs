@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+
 use crate::{
     ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value},
     parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
@@ -74,7 +76,7 @@ impl Default for FunctionGen {
 pub struct StructLayout {
     pub total_size: i64,
     pub alignment: i64,
-    pub field_offsets: HashMap<String, (i64, Type)>,
+    pub field_offsets: IndexMap<String, (i64, Type)>,
 }
 
 pub struct IRGen {
@@ -430,7 +432,7 @@ impl IRGen {
 
         let mut offset: i64 = 0;
         let mut max_align: i64 = 1;
-        let mut field_offsets = HashMap::new();
+        let mut field_offsets = IndexMap::new();
 
         for (field_name, ty) in signature.fields.iter() {
             let size = self.type_size(ty);
@@ -504,7 +506,7 @@ impl IRGen {
     ) {
         let mut current_offset: i64 = 0;
         let mut max_alignment: i64 = 1;
-        let mut field_offsets = HashMap::new();
+        let mut field_offsets = IndexMap::new();
 
         for field in fields {
             let field_name = field.name.value.clone();
@@ -865,19 +867,13 @@ impl IRGen {
             );
 
             let raw = self.temps.next_temp();
-            let pack_var = format!("_variadic_pack_{}", raw);
-            self.var_types
-                .insert(pack_var.clone(), Type::Struct(struct_name.clone()));
-
-            let variadic_len = variadic_values.len() as i64;
+            let pack_var = format!("_anon_struct_{}", raw);
 
             let pack_type = Type::Struct(struct_name.clone());
-            let _dummy_addr = self.next_temp_with_type(Type::Ptr(Box::new(pack_type.clone())));
-            self.code.push(Instruction::Unary {
-                dst: _dummy_addr,
-                op: IrOp::Ref,
-                value: Value::Var(pack_var.clone()),
-            });
+
+            self.var_types.insert(pack_var.clone(), pack_type.clone());
+
+            let variadic_len = variadic_values.len() as i64;
 
             let store_field = |irgen: &mut Self, field_name: &str, val: Value| {
                 let (offset, field_ty) =
@@ -1307,8 +1303,11 @@ impl IRGen {
                 let target_val = match target_dest {
                     Some(dest) => dest,
                     None => {
-                        let temp_name = self.next_temp_with_type(concrete_type.clone());
-                        Value::Temp(temp_name)
+                        let anon_name = format!("_anon_struct_{}", self.temps.next_temp());
+                        self.var_types
+                            .insert(anon_name.clone(), concrete_type.clone());
+
+                        Value::Var(anon_name)
                     }
                 };
 
