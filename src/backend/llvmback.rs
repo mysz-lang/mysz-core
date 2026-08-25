@@ -751,7 +751,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         Ok(())
     }
 
-    fn compile_load(&mut self, dst: &String, ptr: &Value, ty: &Type) -> Result<(), String> {
+    fn compile_load(&mut self, dst: &str, ptr: &Value, ty: &Type) -> Result<(), String> {
         let ptr_ty = self.value_type(ptr)?;
 
         let pointee_ty = match &ptr_ty {
@@ -780,13 +780,13 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_load(llvm_ty, ptr, dst)
             .map_err(|err| err.to_string())?;
 
-        self.temps.insert(dst.clone(), value);
-        self.temp_types.insert(dst.clone(), ty.clone());
+        self.temps.insert(dst.to_owned(), value);
+        self.temp_types.insert(dst.to_owned(), ty.clone());
 
         Ok(())
     }
 
-    fn compile_unary(&mut self, dst: &String, op: &IrOp, value: &Value) -> Result<(), String> {
+    fn compile_unary(&mut self, dst: &str, op: &IrOp, value: &Value) -> Result<(), String> {
         let value_type = self.value_type(value)?;
 
         let (result_val, result_type): (BasicValueEnum<'ctx>, Type) = match op {
@@ -847,8 +847,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             _ => unreachable!(),
         };
 
-        self.temps.insert(dst.clone(), result_val);
-        self.temp_types.insert(dst.clone(), result_type);
+        self.temps.insert(dst.to_owned(), result_val);
+        self.temp_types.insert(dst.to_owned(), result_type);
 
         Ok(())
     }
@@ -1409,12 +1409,13 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn compile_label(&mut self, label: &str) -> Result<(), String> {
         let block = self.get_block(label)?;
 
-        if let Some(current) = self.builder.get_insert_block() {
-            if current != block && current.get_terminator().is_none() {
-                self.builder
-                    .build_unconditional_branch(block)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = self.builder.get_insert_block()
+            && current != block
+            && current.get_terminator().is_none()
+        {
+            self.builder
+                .build_unconditional_branch(block)
+                .map_err(|err| err.to_string())?;
         }
 
         self.builder.position_at_end(block);
@@ -1472,10 +1473,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         let mut tac_functions: Vec<String> = Vec::new();
 
         for instruction in tac {
-            if let Instruction::FunctionLabel(name) = instruction {
-                if !tac_functions.contains(name) {
-                    tac_functions.push(name.clone());
-                }
+            if let Instruction::FunctionLabel(name) = instruction
+                && !tac_functions.contains(name)
+            {
+                tac_functions.push(name.clone());
             }
         }
 
@@ -1510,14 +1511,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             // If this concrete TAC function has no Param instructions,
             // fall back to the semantic signature. This handles things
             // like main() and zero-parameter functions.
-            if llvm_param_types.is_empty() {
-                if let Some(sig) = self.func_defs.get(&name) {
-                    llvm_param_types = sig
-                        .param_types
-                        .iter()
-                        .map(|ty| self.llvm_type(ty).into())
-                        .collect();
-                }
+            if llvm_param_types.is_empty()
+                && let Some(sig) = self.func_defs.get(&name)
+            {
+                llvm_param_types = sig
+                    .param_types
+                    .iter()
+                    .map(|ty| self.llvm_type(ty).into())
+                    .collect();
             }
 
             let return_type = self

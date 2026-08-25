@@ -456,7 +456,7 @@ pub fn compile_root_file<'a, P: AsRef<Path>>(
         &mut visiting,
         &mut processed,
         &mut sources,
-        ctx.output_json.clone(),
+        ctx.output_json,
         input_path.as_path(),
     )?;
 
@@ -469,7 +469,7 @@ pub fn compile_root_file<'a, P: AsRef<Path>>(
         output_filename,
         &sources,
         &input_path,
-        ctx.output_json.clone(),
+        ctx.output_json,
         &ctx.target,
     )
 }
@@ -701,14 +701,13 @@ fn compile_with_cranelift(
 }
 
 fn is_generic_type(ty: &Type) -> bool {
-    match ty {
+    matches!(
+        ty,
         Type::GenericParam(_)
-        | Type::GenericInstance { .. }
-        | Type::VariadicPack { .. }
-        | Type::Any => true,
-
-        _ => false,
-    }
+            | Type::GenericInstance { .. }
+            | Type::VariadicPack { .. }
+            | Type::Any
+    )
 }
 
 #[allow(unused)]
@@ -736,7 +735,7 @@ fn compile_with_llvm(
     let modname = file_path.file_name();
 
     if modname.is_none() {
-        return Err(format!("filepath doesn't containe a file"));
+        return Err("filepath doesn't containe a file".to_string());
     }
 
     let mut backend = LlvmBackend::new(

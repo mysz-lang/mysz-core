@@ -880,63 +880,60 @@ impl Analyser {
                             },
                         );
 
-                        if let Some(variadic_name) = &sig.variadic_param_name {
-                            if let Some((params, func_body)) =
+                        if let Some(variadic_name) = &sig.variadic_param_name
+                            && let Some((params, func_body)) =
                                 self.function_bodies.get(&callee.value).cloned()
-                            {
-                                self.enter_scope();
+                        {
+                            self.enter_scope();
 
-                                /*
-                                 * Declare fixed parameters using the actual parameter
-                                 * declaration order from the source.
-                                 *
-                                 * Do NOT use `params` itself as the signature passed
-                                 * to LLVM. This is only analyser/type-checker scope
-                                 * information.
-                                 */
-                                let mut fixed_index = 0;
+                            /*
+                             * Declare fixed parameters using the actual parameter
+                             * declaration order from the source.
+                             *
+                             * Do NOT use `params` itself as the signature passed
+                             * to LLVM. This is only analyser/type-checker scope
+                             * information.
+                             */
+                            let mut fixed_index = 0;
 
-                                for param in &params {
-                                    if param.is_variadic {
-                                        continue;
-                                    }
-
-                                    let param_type = param_types
-                            .get(fixed_index)
-                            .cloned()
-                            .ok_or_else(|| {
-                                AnalyserError::semantic_error(
-                                    param.name.location.clone(),
-                                    format!(
-                                        "Internal error: missing type for parameter '{}'",
-                                        param.name.value
-                                    ),
-                                )
-                            })?;
-
-                                    self.declare_variable(
-                                        &param.name.value,
-                                        param_type,
-                                        param.name.location.clone(),
-                                    )?;
-
-                                    fixed_index += 1;
+                            for param in &params {
+                                if param.is_variadic {
+                                    continue;
                                 }
+
+                                let param_type =
+                                    param_types.get(fixed_index).cloned().ok_or_else(|| {
+                                        AnalyserError::semantic_error(
+                                            param.name.location.clone(),
+                                            format!(
+                                                "Internal error: missing type for parameter '{}'",
+                                                param.name.value
+                                            ),
+                                        )
+                                    })?;
+
                                 self.declare_variable(
-                                    variadic_name,
-                                    Type::VariadicPack {
-                                        name: variadic_name.clone(),
-                                        types: variadic_types,
-                                    },
-                                    callee.location.clone(),
+                                    &param.name.value,
+                                    param_type,
+                                    param.name.location.clone(),
                                 )?;
 
-                                for stmt in &func_body {
-                                    self.check_stmt(stmt, TypeCheckMode::Strict)?;
-                                }
-
-                                self.leave_scope();
+                                fixed_index += 1;
                             }
+                            self.declare_variable(
+                                variadic_name,
+                                Type::VariadicPack {
+                                    name: variadic_name.clone(),
+                                    types: variadic_types,
+                                },
+                                callee.location.clone(),
+                            )?;
+
+                            for stmt in &func_body {
+                                self.check_stmt(stmt, TypeCheckMode::Strict)?;
+                            }
+
+                            self.leave_scope();
                         }
                     }
                 }
