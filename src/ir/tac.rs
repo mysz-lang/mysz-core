@@ -4,16 +4,12 @@ use crate::parse::parsing::Type;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrOp {
+    // binary
     Add,
     Sub,
     Mul,
     Div,
     Mod, // %
-
-    Neg, // unary minus
-    Pos, // unary plus
-    Ref, // unary &
-    Not, // unary !
 
     Eq,  // ==
     NEq, // !=
@@ -23,6 +19,12 @@ pub enum IrOp {
     LtE, // <=
     And, // &&
     Or,  // ||
+
+    // unary
+    Neg, // unary minus
+    Pos, // unary plus
+    Ref, // unary &
+    Not, // unary !
 }
 
 #[derive(Debug, Clone, PartialEq)]

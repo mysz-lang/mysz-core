@@ -5,7 +5,7 @@ pub mod lex;
 pub mod parse;
 pub mod semantics;
 pub mod utils;
-use std::path::{Path};
+use std::path::Path;
 
 use crate::utils::ctx::CompilerCtx;
 
@@ -16,8 +16,6 @@ pub fn compile_file<'a, P: AsRef<Path>>(
     compiler::compile_root_file(ctx, output_filename)
 }
 
-pub fn check_file<'a, P: AsRef<Path>>(
-    ctx: CompilerCtx<'a, P>,
-) -> Result<(), String> {
+pub fn check_file<'a, P: AsRef<Path>>(ctx: CompilerCtx<'a, P>) -> Result<(), String> {
     compiler::check_root_file(ctx)
 }

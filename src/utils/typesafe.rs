@@ -75,12 +75,20 @@ pub fn normalise_type(ty: &Type) -> Type {
 
 #[inline]
 pub fn is_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::UInt | Type::Int8 | Type::UInt8)
+    matches!(
+        ty,
+        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char
+    )
 }
 
 #[inline]
 pub fn is_signed_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int)
+    matches!(ty, Type::Int | Type::Int8)
+}
+
+#[inline]
+pub fn is_unsigned_integer(ty: &Type) -> bool {
+    matches!(ty, Type::UInt | Type::UInt8 | Type::Char)
 }
 
 #[inline]

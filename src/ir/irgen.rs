@@ -2491,6 +2491,7 @@ impl IRGen {
                 ),
             }
         }
+        println!("[DUMP_END]")
     }
 }
 impl Default for IRGen {

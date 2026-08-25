@@ -1,14 +1,21 @@
-use crate::utils::ctx::CompilerCtx;
 use crate::backend::clback;
+use crate::backend::llvmback::LlvmBackend;
 use crate::ir::irgen::IRGen;
 use crate::ir::tac::Instruction;
 use crate::lex::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
-use crate::parse::parsing::{Identifier, Parameter, Program, Stmt};
+use crate::parse::parsing::{Identifier, Parameter, Program, Stmt, Type};
 use crate::semantics::analyser::{Analyser, AnalyserError};
+use crate::semantics::analysis::FunctionSignature;
+use crate::utils::ctx::{CompilerCtx, CompilerTarget};
 use clap::builder::OsStr;
-use cranelift::codegen::Context;
-use cranelift_frontend::FunctionBuilderContext;
+use cranelift::codegen::Context as clContext;
+use cranelift_frontend::FunctionBuilderContext as clFunctionBuilderContext;
+use inkwell::OptimizationLevel;
+use inkwell::context::Context as inkContext;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
 use serde_derive::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -223,9 +230,7 @@ fn parse_and_flatten<P: AsRef<Path>>(
     Ok((program, sources))
 }
 
-pub fn check_root_file<'a, P: AsRef<Path>>(
-    ctx: CompilerCtx<'a, P>
-) -> Result<(), String> {
+pub fn check_root_file<'a, P: AsRef<Path>>(ctx: CompilerCtx<'a, P>) -> Result<(), String> {
     let (program, sources) = parse_and_flatten(&ctx.input_path, ctx.search_paths, ctx.output_json)?;
     let file_path = ctx.input_path.as_ref().canonicalize().unwrap();
     let root_source = sources
@@ -465,6 +470,7 @@ pub fn compile_root_file<'a, P: AsRef<Path>>(
         &sources,
         &input_path,
         ctx.output_json.clone(),
+        &ctx.target,
     )
 }
 
@@ -474,6 +480,7 @@ pub fn compile_ast_program(
     sources: &SourceMap,
     file_path: &Path,
     json_output: bool,
+    target: &CompilerTarget,
 ) -> Result<(), String> {
     let root_source = sources
         .get(&file_path.display().to_string())
@@ -487,38 +494,50 @@ pub fn compile_ast_program(
             .as_ref(),
     );
 
+    // ----------------------------
+    // Semantic analysis
+    // ----------------------------
+
     let mut analyser = Analyser::new();
+
     if let Err(err) = analyser.analyse(program) {
         if json_output {
             let location = match err.clone() {
                 AnalyserError::SemanticError { location, .. }
                 | AnalyserError::TypeError { location, .. } => location,
             };
+
             let message = match err.clone() {
                 AnalyserError::SemanticError { message, .. }
                 | AnalyserError::TypeError { message, .. } => message,
             };
+
             let json_err = JsonError {
                 file: location.file.to_string(),
                 line: location.line,
                 column: location.col,
                 message: message.to_string(),
-                severity: match err {
-                    AnalyserError::TypeError { .. } => "error".to_string(),
-                    AnalyserError::SemanticError { .. } => "error".to_string(),
-                },
+                severity: "error".to_string(),
             };
+
             let json_str = serde_json::to_string(&json_err)
                 .map_err(|e| format!("Failed to serialize error: {}", e))?;
+
             return Err(json_str);
         } else {
             let formatted = format_analyser_error(&err, sources, root_source);
+
             return Err(format!("Semantic error:\n{}", formatted));
         }
     }
+
+    // ----------------------------
     // IR generation
+    // ----------------------------
+
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
+
     for (name, sig) in &analyser.structs {
         if !sig.generic_params.is_empty() {
             let fields_vec: Vec<Parameter> = sig
@@ -537,18 +556,26 @@ pub fn compile_ast_program(
                     is_variadic: false,
                 })
                 .collect();
+
             irgen
                 .struct_blueprints
                 .insert(name.clone(), (sig.generic_params.clone(), fields_vec));
         }
     }
+
     irgen.gen_program(program);
-    // irgen.dump();
+
+    irgen.dump();
+
+    // ----------------------------
+    // Remove duplicate definitions
+    // ----------------------------
+
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
     let mut skip_current_duplicate = false;
 
-    for inst in irgen.code {
+    for inst in irgen.code.iter().cloned() {
         match &inst {
             Instruction::FunctionLabel(name) => {
                 if seen_labels.contains(name) {
@@ -559,6 +586,7 @@ pub fn compile_ast_program(
                     tac_instructions.push(inst);
                 }
             }
+
             _ => {
                 if !skip_current_duplicate {
                     tac_instructions.push(inst);
@@ -567,7 +595,12 @@ pub fn compile_ast_program(
         }
     }
 
+    // ----------------------------
+    // Public functions
+    // ----------------------------
+
     let mut public_functions = HashSet::new();
+
     for stmt in &program.statements {
         if let Stmt::Function { name, public, .. } = stmt
             && *public
@@ -576,18 +609,55 @@ pub fn compile_ast_program(
         }
     }
 
+    // ----------------------------
+    // Backend selection
+    // ----------------------------
+
+    match target {
+        CompilerTarget::Cranelift => compile_with_cranelift(
+            irgen,
+            analyser.functions.clone(),
+            tac_instructions,
+            public_functions,
+            file_path,
+            output_filename,
+        ),
+
+        CompilerTarget::Llvm => compile_with_llvm(
+            irgen,
+            analyser.functions.clone(),
+            tac_instructions,
+            public_functions,
+            file_path,
+            output_filename,
+        ),
+    }
+}
+
+fn compile_with_cranelift(
+    irgen: IRGen,
+    functions: HashMap<String, FunctionSignature>,
+    tac_instructions: Vec<Instruction>,
+    public_functions: HashSet<String>,
+    file_path: &Path,
+    output_filename: &str,
+) -> Result<(), String> {
     let mut unique_function_names = HashSet::new();
+
     for inst in &tac_instructions {
         if let Instruction::FunctionLabel(name) = inst {
             unique_function_names.insert(name.clone());
         }
     }
 
-    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, analyser.functions.clone());
+    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, functions);
+
     backend.register_defined_functions(unique_function_names.iter().cloned());
+
     backend.scan_externs(&tac_instructions);
 
     let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
+
     backend.pre_declare_strings(&instruction_refs);
 
     for func_name in unique_function_names {
@@ -595,16 +665,20 @@ pub fn compile_ast_program(
 
         let func_instructions: Vec<&Instruction> = tac_instructions
             .iter()
-            .skip_while(
-                |inst| !matches!(inst, Instruction::FunctionLabel(name) if name == &func_name),
-            )
+            .skip_while(|inst| {
+                !matches!(
+                    inst,
+                    Instruction::FunctionLabel(name)
+                        if name == &func_name
+                )
+            })
             .skip(1)
             .take_while(|inst| !matches!(inst, Instruction::FunctionLabel(_)))
             .collect();
 
         if !func_instructions.is_empty() {
-            let mut ctx = Context::new();
-            let mut func_ctx = FunctionBuilderContext::new();
+            let mut ctx = clContext::new();
+            let mut func_ctx = clFunctionBuilderContext::new();
 
             backend.compile_function(
                 &func_name,
@@ -618,10 +692,91 @@ pub fn compile_ast_program(
     }
 
     let product = backend.finish();
+
     let emit_result = product.emit().map_err(|e| {
         format_simple_error(file_path, &format!("Failed to emit object code: {}", e))
     })?;
 
+    write_output_file(file_path, output_filename, &emit_result)
+}
+
+fn is_generic_type(ty: &Type) -> bool {
+    match ty {
+        Type::GenericParam(_)
+        | Type::GenericInstance { .. }
+        | Type::VariadicPack { .. }
+        | Type::Any => true,
+
+        _ => false,
+    }
+}
+
+#[allow(unused)]
+fn compile_with_llvm(
+    irgen: IRGen,
+    functions: HashMap<String, FunctionSignature>,
+    tac_instructions: Vec<Instruction>,
+    public_functions: HashSet<String>,
+    file_path: &Path,
+    output_filename: &str,
+) -> Result<(), String> {
+    let concrete_functions: HashMap<String, FunctionSignature> = functions
+    .into_iter()
+    .filter(|(_, sig)| {
+        !sig.param_types.iter().any(is_generic_type)
+            && !is_generic_type(&sig.return_type)
+    })
+    .collect();
+
+    let context = inkContext::create();
+
+    Target::initialize_native(&InitializationConfig::default()).map_err(|e| e.to_string())?;
+
+    let modname = file_path.file_name();
+
+    if modname.is_none() {
+        return Err(format!("filepath doesn't containe a file"));
+    }
+
+    let mut backend = LlvmBackend::new(
+        &context,
+        &modname.unwrap().to_string_lossy(),
+        irgen.var_types,
+        irgen.struct_defs,
+        concrete_functions,
+    );
+
+    backend.compile(&tac_instructions);
+
+    backend.verify()?;
+
+    let target_triple = TargetMachine::get_default_triple();
+
+    let target = Target::from_triple(&target_triple).map_err(|e| e.to_string())?;
+
+    let target_machine = target
+        .create_target_machine(
+            &target_triple,
+            "generic",
+            "",
+            OptimizationLevel::None,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "failed to create LLVM target machine".to_string())?;
+
+    let object_path = format!("{}.o", output_filename);
+
+    target_machine
+        .write_to_file(backend.module(), FileType::Object, Path::new(&object_path))
+        .map_err(|e| e.to_string())?;
+
+    backend.print_ir();
+
+    Ok(())
+}
+
+fn write_output_file(file_path: &Path, output_filename: &str, bytes: &[u8]) -> Result<(), String> {
     let mut file = File::create(output_filename).map_err(|e| {
         format_simple_error(
             file_path,
@@ -629,7 +784,7 @@ pub fn compile_ast_program(
         )
     })?;
 
-    file.write_all(&emit_result).map_err(|e| {
+    file.write_all(bytes).map_err(|e| {
         format_simple_error(
             file_path,
             &format!(

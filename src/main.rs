@@ -9,10 +9,9 @@ pub mod semantics;
 pub mod utils;
 
 fn main() {
-    let ctx = CompilerCtx::new("./interntest/main.mysz", &[], false, CompilerTarget::Cranelift);
+    let ctx = CompilerCtx::new("./interntest/main.mysz", &[], false, CompilerTarget::Llvm);
 
-    let res =
-        compiler::compile_root_file(ctx, "./interntest/main.o");
+    let res = compiler::compile_root_file(ctx, "./interntest/main.o");
 
     if res.is_err() {
         println!("{:#}", res.err().unwrap());
