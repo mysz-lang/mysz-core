@@ -28,7 +28,7 @@ mysz-core = { git = "https://github.com/mysz-lang/mysz-core.git", branch = "main
 
 ```toml
 [dependencies]
-mysz-core = "0.3.1"
+mysz-core = "0.3.2"
 ```
 
 `mysz-core` will output object files, it is the responsibility of the embedding environment, or developer to link it and output a binary or library.
