@@ -346,8 +346,9 @@ impl Analyser {
         variadic_name: Option<String>,
         return_type: Type,
         location: Location,
+        safe_to_dupe: bool,
     ) -> Result<(), AnalyserError> {
-        if let Some(existing) = self.functions.get(name) {
+        if let Some(existing) = self.functions.get(name) && !safe_to_dupe {
             return Err(AnalyserError::SemanticError {
                 location,
                 message: format!(
@@ -755,6 +756,16 @@ impl Analyser {
                 }
 
                 let sig = self.functions.get(&resolved_func_name).unwrap().clone();
+
+                if !sig.public && sig.location.file != callee.location.file {
+                    return Err(AnalyserError::semantic_error(
+                        callee.location.clone(),
+                        format!(
+                            "Function '{}' is private and cannot be called from another module",
+                            callee.value
+                        ),
+                    ));
+                }
 
                 // `param_types` contains ONLY fixed parameters.
                 let fixed_arg_count = sig.param_types.len();
@@ -1168,6 +1179,7 @@ impl Analyser {
                     variadic_param,
                     return_type,
                     name.location.clone(),
+                    true,
                 )?;
                 Ok(())
             }
@@ -1574,6 +1586,7 @@ impl Analyser {
                     variadic_param,
                     return_type.clone(),
                     name.location.clone(),
+                    false,
                 )?;
 
                 self.enter_scope();
