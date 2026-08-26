@@ -26,6 +26,7 @@ pub struct StructSignature {
 #[derive(Clone, Debug)]
 pub struct FunctionSignature {
     pub generic_params: Vec<String>,
+    pub public: bool,
     pub param_types: Vec<Type>,
     pub is_variadic: bool,
     pub variadic_param_name: Option<String>,

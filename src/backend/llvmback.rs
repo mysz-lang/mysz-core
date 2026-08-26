@@ -5,7 +5,7 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
-    module::Module,
+    module::{Module, Linkage},
     types::{BasicType, BasicTypeEnum, StructType},
     values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
@@ -1469,7 +1469,6 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     fn declare_functions(&mut self, tac: &[Instruction]) -> Result<(), String> {
-        // First collect the functions that actually occur in the TAC.
         let mut tac_functions: Vec<String> = Vec::new();
 
         for instruction in tac {
@@ -1480,7 +1479,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
         }
 
-        // Declare every concrete function emitted by TAC.
         for name in tac_functions {
             if self.functions.contains_key(&name) {
                 continue;
@@ -1508,9 +1506,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                 llvm_param_types.push(self.llvm_type(param_ty).into());
             }
 
-            // If this concrete TAC function has no Param instructions,
-            // fall back to the semantic signature. This handles things
-            // like main() and zero-parameter functions.
             if llvm_param_types.is_empty()
                 && let Some(sig) = self.func_defs.get(&name)
             {
@@ -1533,18 +1528,28 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ty => self.llvm_type(ty).fn_type(&llvm_param_types, false),
             };
 
-            let function = self.module.add_function(&name, fn_type, None);
+            let linkage = self
+                .func_defs
+                .get(&name)
+                .map(|sig| {
+                    if sig.public {
+                        Linkage::External
+                    } else {
+                        Linkage::Internal
+                    }
+                })
+                .unwrap_or(Linkage::Internal);
+
+            let function = self.module.add_function(&name, fn_type, Some(linkage));
 
             self.functions.insert(name, function);
         }
 
-        // Declare externs that don't have TAC FunctionLabels.
         for (name, sig) in &self.func_defs {
             if self.functions.contains_key(name) {
                 continue;
             }
 
-            // Only functions with no TAC body reach here.
             let param_types: Vec<_> = sig
                 .param_types
                 .iter()

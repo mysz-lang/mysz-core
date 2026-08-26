@@ -340,6 +340,7 @@ impl Analyser {
         &mut self,
         name: &str,
         generic_params: Vec<String>,
+        public: bool,
         param_types: Vec<Type>,
         is_variadic: bool,
         variadic_name: Option<String>,
@@ -361,6 +362,7 @@ impl Analyser {
             FunctionSignature {
                 generic_params,
                 param_types,
+                public,
                 is_variadic,
                 variadic_param_name: variadic_name,
                 return_type,
@@ -742,6 +744,7 @@ impl Analyser {
                             FunctionSignature {
                                 generic_params: Vec::new(),
                                 param_types: fresh_params,
+                                public: template.public,
                                 is_variadic: template.is_variadic,
                                 variadic_param_name: template.variadic_param_name.clone(),
                                 return_type: fresh_return,
@@ -865,13 +868,9 @@ impl Analyser {
                             variadic_mangled_name.clone(),
                             FunctionSignature {
                                 generic_params: Vec::new(),
-
-                                // IMPORTANT:
-                                // This remains the fixed parameter list.
-                                //
-                                // The variadic argument is NOT a normal LLVM/TAC
-                                // parameter. It is materialised as the variadic pack.
                                 param_types: param_types.clone(),
+
+                                public: sig.public,
 
                                 is_variadic: true,
                                 variadic_param_name: sig.variadic_param_name.clone(),
@@ -886,14 +885,6 @@ impl Analyser {
                         {
                             self.enter_scope();
 
-                            /*
-                             * Declare fixed parameters using the actual parameter
-                             * declaration order from the source.
-                             *
-                             * Do NOT use `params` itself as the signature passed
-                             * to LLVM. This is only analyser/type-checker scope
-                             * information.
-                             */
                             let mut fixed_index = 0;
 
                             for param in &params {
@@ -1171,6 +1162,7 @@ impl Analyser {
                 self.declare_function(
                     &name.value,
                     generic_params.clone(),
+                    true,
                     param_types,
                     is_variadic,
                     variadic_param,
@@ -1519,7 +1511,7 @@ impl Analyser {
             }
             Stmt::Function {
                 name,
-                public: _,
+                public,
                 rttype,
                 generic_params,
                 params,
@@ -1576,6 +1568,7 @@ impl Analyser {
                 self.declare_function(
                     &name.value,
                     generic_params.clone(),
+                    *public,
                     param_types.clone(),
                     is_variadic,
                     variadic_param,
