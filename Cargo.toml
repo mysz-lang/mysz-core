@@ -25,5 +25,8 @@ serde_derive = "1.0.228"
 indexmap = "2.14.0"
 inkwell = {version = "0.10.0", features = ["llvm22-1"]}
 
+[features]
+docs = ["inkwell/llvm22-1-no-llvm-linking"]
+
 [package.metadata.docs.rs]
-features = ["llvm22-1-no-llvm-linking"]
+features = ["docs"]
