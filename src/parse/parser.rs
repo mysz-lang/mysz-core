@@ -242,6 +242,7 @@ impl Parser {
         let stmt = match tk.ttype {
             TokenType::VarKeyword => self.parse_assignment(),
             TokenType::StructKeyword => self.parse_struct(),
+            TokenType::EnumKeyword => self.parse_enum(),
             TokenType::IfKeyword => self.parse_if(),
             TokenType::WhileKeyword => self.parse_while(),
             TokenType::ConstKeyword => self.parse_const(),
@@ -678,6 +679,38 @@ impl Parser {
         let body = self.parse_block();
 
         Some(Stmt::While { cond, body })
+    }
+
+    fn parse_enum(&mut self) -> Option<Stmt> {
+        self.advance();
+
+        let ident = self.expect(TokenType::Identifier)?;
+
+        self.expect(TokenType::LBrace)?;
+        let mut options = Vec::new();
+
+        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
+        {
+            let name = to_ident(self.get_token().cloned())?;
+            options.push(name);
+            if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
+                self.advance();
+            } else if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    "Expected ',' or '}' after enum option".to_string(),
+                    self.get_token().unwrap().location.clone(),
+                );
+                return None;
+            }
+        }
+
+        self.expect(TokenType::RBrace)?;
+
+        Some(Stmt::Enum {
+            name: to_ident(Some(ident))?,
+            options
+        })
     }
 
     fn parse_struct(&mut self) -> Option<Stmt> {

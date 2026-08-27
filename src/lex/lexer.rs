@@ -608,6 +608,7 @@ impl Lexer {
             "true" => TokenType::True,
             "false" => TokenType::False,
             "struct" => TokenType::StructKeyword,
+            "enum" => TokenType::EnumKeyword,
             "sizeof" => TokenType::SizeOfKeyword,
             "typeof" => TokenType::TypeOfKeyword,
             "break" => TokenType::BreakKeyword,

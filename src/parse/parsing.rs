@@ -200,6 +200,10 @@ pub enum Stmt {
         generic_params: Vec<String>,
         fields: Vec<Parameter>,
     },
+    Enum {
+        name: Identifier,
+        options: Vec<Identifier>
+    },
     Function {
         name: Identifier,
         public: bool,
