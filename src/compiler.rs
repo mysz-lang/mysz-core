@@ -565,7 +565,7 @@ pub fn compile_ast_program(
 
     irgen.gen_program(program);
 
-    irgen.dump();
+    // irgen.dump();
 
     // Remove duplicate definitions
 

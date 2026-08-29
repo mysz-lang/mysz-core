@@ -13,7 +13,7 @@ fn main() {
         "./interntest/main.mysz",
         &[],
         false,
-        CompilerTarget::Cranelift,
+        CompilerTarget::Llvm,
     );
 
     let res = compiler::compile_root_file(ctx, "./interntest/main.o");
