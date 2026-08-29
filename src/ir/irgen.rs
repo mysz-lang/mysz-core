@@ -228,6 +228,8 @@ impl IRGen {
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(_) => Some(Type::Int),
                 Literal::String(_) => Some(Type::Str),
+                Literal::Double(_) => Some(Type::Double),
+                Literal::Float(_) => Some(Type::Float),
                 Literal::Char(_) => Some(Type::Char),
                 Literal::Bool(_) => Some(Type::Bool),
                 Literal::Arr { elements } => {
@@ -380,6 +382,8 @@ impl IRGen {
             | Type::UInt
             | Type::Int8
             | Type::UInt8
+            | Type::Double
+            | Type::Float
             | Type::Bool
             | Type::Str
             | Type::Char
@@ -568,6 +572,8 @@ impl IRGen {
                 self.var_types.get(name).cloned().unwrap_or(Type::Int)
             }
             Value::Const(_) => Type::Int,
+            Value::Double(_) => Type::Double,
+            Value::Float(_) => Type::Float,
             Value::Bool(_) => Type::Bool,
             Value::Char(_) => Type::Char,
             Value::Str(_) => Type::Str,
@@ -577,7 +583,8 @@ impl IRGen {
 
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Enum(..) | Type::Int | Type::UInt => 8,
+            Type::Enum(..) | Type::Int | Type::UInt | Type::Double => 8,
+            Type::Float => 4,
             Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::Str => 8,
@@ -616,7 +623,8 @@ impl IRGen {
 
     fn type_alignment(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Enum(..) | Type::Int | Type::UInt => 8,
+            Type::Enum(..) | Type::Int | Type::UInt | Type::Double => 8,
+            Type::Float => 4,
             Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::GenericParam(name) => {
@@ -714,6 +722,8 @@ impl IRGen {
             ExprKind::Typeof { .. } => Some(Type::Str),
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
+            ExprKind::Literal(Literal::Float(_)) => Some(Type::Float),
+            ExprKind::Literal(Literal::Double(_)) => Some(Type::Double),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
             ExprKind::Literal(Literal::Char(_)) => Some(Type::Char),
             ExprKind::Literal(Literal::Arr { elements }) => {
@@ -1115,19 +1125,17 @@ impl IRGen {
                 let to_type = self.resolve_type(right);
 
                 let cast_kind = match (&from_type, &to_type) {
-                    // Pointer to pointer
                     (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
 
-                    // ptr<char> -> str (they're the exact same, just make sure the ptr<char> has a direct block of characters that end with \0 following it)
                     (Type::Ptr(_), Type::Str) => CastType::BitCast,
 
-                    // Integer size transformations
                     (
                         Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
                         Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
                     ) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
+
                         if from_size < to_size {
                             CastType::Extend
                         } else if from_size > to_size {
@@ -1137,7 +1145,20 @@ impl IRGen {
                         }
                     }
 
-                    // Fallback
+                    (Type::Float, Type::Double) => CastType::FloatExtend,
+
+                    (Type::Double, Type::Float) => CastType::FloatTruncate,
+
+                    (
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                        Type::Float | Type::Double,
+                    ) => CastType::IntToFloat,
+
+                    (
+                        Type::Float | Type::Double,
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                    ) => CastType::FloatToInt,
+
                     _ => CastType::BitCast,
                 };
 
@@ -1155,6 +1176,8 @@ impl IRGen {
 
             ExprKind::Literal(lit) => match lit {
                 Literal::Int(v) => Value::Const(*v),
+                Literal::Double(d) => Value::Double(*d),
+                Literal::Float(f) => Value::Float(*f),
                 Literal::String(s) => Value::Str(s.clone()),
                 Literal::Bool(b) => Value::Bool(*b),
                 Literal::Char(c) => Value::Char(*c),
@@ -1499,6 +1522,8 @@ impl IRGen {
                     if let ExprKind::Literal(lit) = &expr.kind {
                         let lit_val = match lit {
                             Literal::Int(v) => Value::Const(*v),
+                            Literal::Double(d) => Value::Double(*d),
+                            Literal::Float(f) => Value::Float(*f),
                             Literal::Bool(b) => Value::Bool(*b),
                             Literal::Char(c) => Value::Char(*c),
                             Literal::String(s) => Value::Str(s.clone()),

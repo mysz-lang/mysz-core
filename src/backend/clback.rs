@@ -33,6 +33,8 @@ fn value_backend_type(value: &Value, var_types: &ScopedMap) -> BackendType {
             .unwrap_or(BackendType::Int64),
         Value::Char(_) => BackendType::Char,
         Value::Const(_) => BackendType::Int64,
+        Value::Double(_) => BackendType::Float64,
+        Value::Float(_) => BackendType::Float32,
         Value::Bool(_) => BackendType::Bool,
         Value::Str(_) => BackendType::Ptr,
         Value::Void => BackendType::Int64,
@@ -83,6 +85,8 @@ pub enum BackendType {
     UInt8,
     UInt32,
     UInt64,
+    Float64,
+    Float32,
     Char,
     Bool,
     Ptr,
@@ -96,6 +100,8 @@ impl BackendType {
             BackendType::Int8 | BackendType::UInt8 => types::I8,
             BackendType::Int32 | BackendType::UInt32 => types::I32,
             BackendType::Int64 | BackendType::UInt64 => types::I64,
+            BackendType::Float64 => types::F64,
+            BackendType::Float32 => types::F32,
             BackendType::Ptr => ptr_type,
         }
     }
@@ -105,8 +111,8 @@ impl BackendType {
             BackendType::Char => 1,
             BackendType::Bool => 1,
             BackendType::Int8 | BackendType::UInt8 => 1,
-            BackendType::Int32 | BackendType::UInt32 => 4,
-            BackendType::Int64 | BackendType::UInt64 => 8,
+            BackendType::Int32 | BackendType::UInt32 | BackendType::Float32 => 4,
+            BackendType::Int64 | BackendType::UInt64 | BackendType::Float64 => 8,
             BackendType::Ptr => 8,
         }
     }
@@ -143,6 +149,8 @@ impl BackendType {
             Type::Int8 => BackendType::Int8,
             Type::UInt8 => BackendType::UInt8,
             Type::UInt => BackendType::UInt64,
+            Type::Double => BackendType::Float64,
+            Type::Float => BackendType::Float32,
             Type::Char => BackendType::Char,
             Type::Bool => BackendType::Bool,
             Type::Ptr(_) => BackendType::Ptr,
@@ -411,6 +419,8 @@ impl CraneliftBackend {
         match value {
             Value::Const(n) => builder.ins().iconst(ty, *n),
             Value::Bool(b) => builder.ins().iconst(ty, if *b { 1 } else { 0 }),
+            Value::Double(n) => builder.ins().f64const(*n),
+            Value::Float(n) => builder.ins().f32const(*n),
             Value::Void => builder.ins().iconst(ty, 0),
             Value::Char(ch) => {
                 let mut buffer = [0; 4];
@@ -1001,22 +1011,13 @@ impl CraneliftBackend {
                     let clif_target_ty = dest_backend_ty.to_clif_type(ptr_type);
 
                     let casted_val = match cast_ty {
-                        CastType::BitCast => {
-                            // A bitcast reinterprets the bits without changing them
-                            builder
-                                .ins()
-                                .bitcast(clif_target_ty, MemFlags::new(), source_val)
-                        }
-                        CastType::Extend => {
-                            // If signed use ireduce/sextend. For safety with generic ints,
-                            // standard zero/sign extension depending on signedness layout:
-                            // Assuming unsigned/zero-extension default here:
-                            builder.ins().uextend(clif_target_ty, source_val)
-                        }
-                        CastType::Truncate => {
-                            // High bits are chopped off
-                            builder.ins().ireduce(clif_target_ty, source_val)
-                        }
+                        CastType::BitCast => builder.ins().bitcast(clif_target_ty, MemFlags::new(), source_val),
+                        CastType::Extend => builder.ins().uextend(clif_target_ty, source_val),
+                        CastType::Truncate => builder.ins().ireduce(clif_target_ty, source_val),
+                        CastType::FloatExtend => builder.ins().fpromote(clif_target_ty, source_val),
+                        CastType::FloatTruncate => builder.ins().fdemote(clif_target_ty, source_val),
+                        CastType::IntToFloat => builder.ins().fcvt_from_sint(clif_target_ty, source_val),
+                        CastType::FloatToInt => builder.ins().fcvt_to_sint(clif_target_ty, source_val)
                     };
 
                     if let Some(&slot) = stack_slot_map.get(dest_name) {

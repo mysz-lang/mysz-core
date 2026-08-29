@@ -447,6 +447,8 @@ impl Analyser {
                         Ok(Type::Int)
                     }
                 }
+                Literal::Double(_) => Ok(Type::Double),
+                Literal::Float(_) => Ok(Type::Float),
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool),
                 Literal::Char(_) => Ok(Type::Char),

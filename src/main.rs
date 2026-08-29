@@ -9,12 +9,7 @@ pub mod semantics;
 pub mod utils;
 
 fn main() {
-    let ctx = CompilerCtx::new(
-        "./interntest/main.mysz",
-        &[],
-        false,
-        CompilerTarget::Llvm,
-    );
+    let ctx = CompilerCtx::new("./interntest/main.mysz", &[], false, CompilerTarget::Llvm);
 
     let res = compiler::compile_root_file(ctx, "./interntest/main.o");
 

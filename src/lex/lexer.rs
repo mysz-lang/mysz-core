@@ -560,10 +560,10 @@ impl Lexer {
 
     fn lex_numeric(&mut self) -> Token {
         let loc = self.current_location();
-        let mut numstring: Vec<char> = Vec::new();
+        let mut numstring = String::new();
 
         while let Some(ch) = self.get_char() {
-            if ch.is_numeric() {
+            if ch.is_ascii_digit() {
                 numstring.push(ch);
                 self.advance();
             } else {
@@ -571,10 +571,45 @@ impl Lexer {
             }
         }
 
+        let mut is_float = false;
+
+        if self.get_char() == Some('.') && self.peek(1).is_some_and(|ch| ch.is_ascii_digit()) {
+            is_float = true;
+            numstring.push('.');
+            self.advance();
+
+            while let Some(ch) = self.get_char() {
+                if ch.is_ascii_digit() {
+                    numstring.push(ch);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let ttype = if is_float {
+            match self.get_char() {
+                Some('f') => {
+                    numstring.push('f');
+                    self.advance();
+                    TokenType::FloatLiteral
+                }
+                Some('d') => {
+                    numstring.push('d');
+                    self.advance();
+                    TokenType::DoubleLiteral
+                }
+                _ => TokenType::FloatLiteral,
+            }
+        } else {
+            TokenType::IntLiteral
+        };
+
         Token {
-            ttype: TokenType::IntLiteral,
+            ttype,
             location: loc,
-            value: numstring.into_iter().collect(),
+            value: numstring,
         }
     }
 

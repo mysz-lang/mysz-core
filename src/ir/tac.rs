@@ -30,6 +30,8 @@ pub enum IrOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Const(i64),
+    Float(f32),
+    Double(f64),
     Temp(String),
     Var(String),
     Void,
@@ -44,6 +46,10 @@ pub enum CastType {
     BitCast,
     Extend,
     Truncate,
+    FloatExtend,
+    FloatTruncate,
+    IntToFloat,
+    FloatToInt,
 }
 
 #[derive(Debug, Clone)]

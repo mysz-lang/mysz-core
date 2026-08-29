@@ -17,6 +17,8 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
         Type::UInt => "uint".to_string(),
         Type::Int8 => "int8".to_string(),
         Type::UInt8 => "uint8".to_string(),
+        Type::Float => "float".to_string(),
+        Type::Double => "double".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Str => "str".to_string(),
         Type::Char => "char".to_string(),
@@ -74,6 +76,13 @@ pub fn normalise_type(ty: &Type) -> Type {
     }
 }
 
+pub fn both_way_allow(found: &Type, expected: &Type, a: Type, b: Type) -> bool {
+    (found == &a && expected == &b)
+        || (found == &b && expected == &a)
+        || (found == &a && expected == &a)
+        || (found == &b && expected == &b)
+}
+
 #[inline]
 pub fn is_integer(ty: &Type) -> bool {
     matches!(
@@ -90,6 +99,11 @@ pub fn is_signed_integer(ty: &Type) -> bool {
 #[inline]
 pub fn is_unsigned_integer(ty: &Type) -> bool {
     matches!(ty, Type::UInt | Type::UInt8 | Type::Char)
+}
+
+#[inline]
+pub fn is_decimal(ty: &Type) -> bool {
+    matches!(ty, Type::Float | Type::Double)
 }
 
 #[inline]
@@ -112,11 +126,9 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
         return true;
     }
 
-    if (matches!(expected, Type::Int) && matches!(found, Type::Enum(_)))
-        || (matches!(found, Type::Int) && matches!(expected, Type::Enum(_)))
-    {
+    if both_way_allow(found, expected, Type::Int, Type::Enum("".to_string())) {
         return true;
-    }
+    };
 
     if matches!(expected, _found) {
         return true;
@@ -127,18 +139,23 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
             if is_integer(expected) && is_integer(found) {
                 return true;
             }
-            if found == &Type::Ptr(Box::new(Type::Char)) && expected == &Type::Str {
+
+            if both_way_allow(found, expected, Type::Ptr(Box::new(Type::Char)), Type::Str) {
                 return true;
-            }
-            if expected == &Type::Ptr(Box::new(Type::Char)) && found == &Type::Str {
+            };
+
+            if both_way_allow(found, expected, Type::Char, Type::UInt8) {
+                return true;
+            };
+
+            if is_decimal(expected) && is_decimal(found) {
                 return true;
             }
 
-            if found == &Type::Char && expected == &Type::UInt8 {
+            if is_integer(found) && is_decimal(expected) {
                 return true;
             }
-
-            if found == &Type::UInt8 && expected == &Type::Char {
+            if is_integer(expected) && is_decimal(found) {
                 return true;
             }
 
@@ -179,6 +196,8 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::UInt => "uint".to_string(),
         Type::Int8 => "i8".to_string(),
         Type::UInt8 => "u8".to_string(),
+        Type::Float => "float".to_string(),
+        Type::Double => "double".to_string(),
         Type::Bool => "bool".to_string(),
         Type::Str => "str".to_string(),
         Type::Char => "char".to_string(),

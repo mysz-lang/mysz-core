@@ -71,6 +71,8 @@ pub enum TokenType {
     IntLiteral,
     CharLiteral,
     StringLiteral,
+    FloatLiteral,
+    DoubleLiteral,
 
     // when lexing, parsing, etc fails.
     Niltoken,

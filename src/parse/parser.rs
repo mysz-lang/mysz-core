@@ -173,6 +173,14 @@ impl Parser {
                     self.advance();
                     Some(Type::Bool)
                 }
+                "float" => {
+                    self.advance();
+                    Some(Type::Float)
+                }
+                "double" => {
+                    self.advance();
+                    Some(Type::Double)
+                }
                 "str" => {
                     self.advance();
                     Some(Type::Str)
@@ -1352,6 +1360,26 @@ impl Parser {
                 let value = tk.value.parse::<i64>().unwrap();
                 Some(Expr {
                     kind: ExprKind::Literal(Literal::Int(value)),
+                    span: tk.location,
+                })
+            }
+
+            TokenType::FloatLiteral => {
+                self.advance();
+                let value = tk.value.trim_end_matches('f').parse::<f32>().unwrap();
+
+                Some(Expr {
+                    kind: ExprKind::Literal(Literal::Float(value)),
+                    span: tk.location,
+                })
+            }
+
+            TokenType::DoubleLiteral => {
+                self.advance();
+                let value = tk.value.trim_end_matches('d').parse::<f64>().unwrap();
+
+                Some(Expr {
+                    kind: ExprKind::Literal(Literal::Double(value)),
                     span: tk.location,
                 })
             }

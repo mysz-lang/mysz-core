@@ -127,6 +127,8 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn value_type(&self, value: &Value) -> Result<Type, String> {
         match value {
             Value::Const(_) => Ok(Type::Int),
+            Value::Double(_) => Ok(Type::Double),
+            Value::Float(_) => Ok(Type::Float),
             Value::Bool(_) => Ok(Type::Bool),
             Value::Char(_) => Ok(Type::Char),
 
@@ -149,6 +151,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             Type::Enum(..) | Type::Int | Type::UInt => self.context.i64_type().into(),
 
             Type::Int8 | Type::UInt8 | Type::Char => self.context.i8_type().into(),
+
+            Type::Double => self.context.f64_type().into(),
+            Type::Float => self.context.f32_type().into(),
 
             Type::Bool => self.context.bool_type().into(),
 
@@ -211,6 +216,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 
                 _ => Err("invalid type for integer constant".to_string()),
             },
+
+            Value::Double(value) => Ok(self.context.f64_type().const_float(*value).into()),
+
+            Value::Float(value) => Ok(self.context.f32_type().const_float(*value as f64).into()),
 
             Value::Bool(value) => Ok(self
                 .context
@@ -995,46 +1004,118 @@ impl<'ctx> LlvmBackend<'ctx> {
     ) -> Result<(), String> {
         let from_type = self.value_type(value)?;
 
-        if !is_integer(&from_type) || !is_integer(to_type) {
-            return Err(format!(
-                "ICE: integer cast from {} to {} reached LLVM backend",
-                type_to_string(&from_type),
-                type_to_string(to_type),
-            ));
+        if is_integer(&from_type) && is_integer(to_type) {
+            let value = self.llvm_value(value)?.into_int_value();
+            let llvm_to_type = self.llvm_type(to_type).into_int_type();
+
+            let result = match cast_ty {
+                CastType::Extend => {
+                    if is_signed_integer(&from_type) {
+                        self.builder
+                            .build_int_s_extend(value, llvm_to_type, dst)
+                            .map_err(|err| err.to_string())?
+                    } else {
+                        self.builder
+                            .build_int_z_extend(value, llvm_to_type, dst)
+                            .map_err(|err| err.to_string())?
+                    }
+                }
+
+                CastType::Truncate => self
+                    .builder
+                    .build_int_truncate(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?,
+
+                CastType::BitCast => self
+                    .builder
+                    .build_bit_cast(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?
+                    .into_int_value(),
+
+                _ => {
+                    return Err(format!(
+                        "ICE: invalid cast type {:?} for integer cast",
+                        cast_ty
+                    ));
+                }
+            };
+
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
         }
 
-        let value = self.llvm_value(value)?.into_int_value();
-        let llvm_to_type = self.llvm_type(to_type).into_int_type();
+        if is_integer(&from_type) && matches!(to_type, Type::Float | Type::Double) {
+            let value = self.llvm_value(value)?.into_int_value();
+            let llvm_to_type = self.llvm_type(to_type).into_float_type();
 
-        let result = match cast_ty {
-            CastType::Extend => {
-                if is_signed_integer(&from_type) {
-                    self.builder
-                        .build_int_s_extend(value, llvm_to_type, dst)
-                        .map_err(|err| err.to_string())?
-                } else {
-                    self.builder
-                        .build_int_z_extend(value, llvm_to_type, dst)
-                        .map_err(|err| err.to_string())?
+            let result = if is_signed_integer(&from_type) {
+                self.builder
+                    .build_signed_int_to_float(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?
+            } else {
+                self.builder
+                    .build_unsigned_int_to_float(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?
+            };
+
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
+        }
+
+        if matches!(from_type, Type::Float | Type::Double) && is_integer(to_type) {
+            let value = self.llvm_value(value)?.into_float_value();
+            let llvm_to_type = self.llvm_type(to_type).into_int_type();
+
+            let result = if is_signed_integer(to_type) {
+                self.builder
+                    .build_float_to_signed_int(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?
+            } else {
+                self.builder
+                    .build_float_to_unsigned_int(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?
+            };
+
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
+        }
+
+        if matches!(from_type, Type::Float | Type::Double) && matches!(to_type, Type::Float | Type::Double) {
+            let value = self.llvm_value(value)?.into_float_value();
+            let llvm_to_type = self.llvm_type(to_type).into_float_type();
+
+            let result = match cast_ty {
+                CastType::Extend | CastType::FloatExtend => self
+                    .builder
+                    .build_float_ext(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?,
+
+                CastType::Truncate | CastType::FloatTruncate => self
+                    .builder
+                    .build_float_trunc(value, llvm_to_type, dst)
+                    .map_err(|err| err.to_string())?,
+
+                _ => {
+                    return Err(format!(
+                        "ICE: invalid cast type {:?} for float cast",
+                        cast_ty
+                    ));
                 }
-            }
+            };
 
-            CastType::Truncate => self
-                .builder
-                .build_int_truncate(value, llvm_to_type, dst)
-                .map_err(|err| err.to_string())?,
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
+        }
 
-            CastType::BitCast => self
-                .builder
-                .build_bit_cast(value, llvm_to_type, dst)
-                .map_err(|err| err.to_string())?
-                .into_int_value(),
-        };
-
-        self.temps.insert(dst.to_string(), result.into());
-        self.temp_types.insert(dst.to_string(), to_type.clone());
-
-        Ok(())
+        Err(format!(
+            "ICE: unsupported cast from {} to {}",
+            type_to_string(&from_type),
+            type_to_string(to_type),
+        ))
     }
 
     fn compile_binary(
@@ -1564,5 +1645,41 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn float_to_double_cast_is_supported() {
+        let context = Context::create();
+
+        let mut backend = LlvmBackend::new(
+            &context,
+            "test_mod",
+            ScopedMap::new(HashMap::new()),
+            HashMap::new(),
+            HashMap::new(),
+        );
+
+        let function = backend
+            .module
+            .add_function("test_float_to_double", context.f64_type().fn_type(&[], false), None);
+        let entry = context.append_basic_block(function, "entry");
+        backend.builder.position_at_end(entry);
+
+        let result = backend.compile_cast(
+            "tmp",
+            &CastType::FloatExtend,
+            &Value::Float(1.5),
+            &Type::Double,
+        );
+
+        assert!(result.is_ok(), "float -> double cast should be supported: {result:?}");
+        assert_eq!(backend.temp_types.get("tmp"), Some(&Type::Double));
     }
 }

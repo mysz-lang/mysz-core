@@ -7,11 +7,15 @@ pub enum Literal {
     Char(char),
     Bool(bool),
     Arr { elements: Vec<Expr> },
+    Double(f64),
+    Float(f32),
 }
 impl Literal {
     pub fn to_i64(&self) -> i64 {
         match self {
             Literal::Int(n) => *n,
+            Literal::Double(n) => *n as i64,
+            Literal::Float(n) => *n as i64,
             _ => panic!("Expected integer literal"),
         }
     }
@@ -23,6 +27,8 @@ pub enum Type {
     UInt,
     Int8,
     UInt8,
+    Double,
+    Float,
     Bool,
     Str,
     Char,
