@@ -348,7 +348,9 @@ impl Analyser {
         location: Location,
         safe_to_dupe: bool,
     ) -> Result<(), AnalyserError> {
-        if let Some(existing) = self.functions.get(name) && !safe_to_dupe {
+        if let Some(existing) = self.functions.get(name)
+            && !safe_to_dupe
+        {
             return Err(AnalyserError::SemanticError {
                 location,
                 message: format!(

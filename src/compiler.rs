@@ -719,7 +719,6 @@ fn compile_with_llvm(
     file_path: &Path,
     output_filename: &str,
 ) -> Result<(), String> {
-
     let concrete_functions: HashMap<String, FunctionSignature> = functions
         .into_iter()
         .filter(|(_, sig)| {

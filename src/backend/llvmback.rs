@@ -5,7 +5,7 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
-    module::{Module, Linkage},
+    module::{Linkage, Module},
     types::{BasicType, BasicTypeEnum, StructType},
     values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
@@ -1522,10 +1522,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .map(|sig| sig.return_type.clone())
                 .unwrap_or(Type::Void);
 
-            let fn_type = match &return_type {
-                Type::Void => self.context.void_type().fn_type(&llvm_param_types, false),
+            let is_variadic = self
+                .func_defs
+                .get(&name)
+                .map(|sig| sig.is_variadic)
+                .unwrap_or(false);
 
-                ty => self.llvm_type(ty).fn_type(&llvm_param_types, false),
+            let fn_type = match &return_type {
+                Type::Void => self
+                    .context
+                    .void_type()
+                    .fn_type(&llvm_param_types, is_variadic),
+                ty => self.llvm_type(ty).fn_type(&llvm_param_types, is_variadic),
             };
 
             let linkage = self
@@ -1557,9 +1565,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .collect();
 
             let fn_type = match &sig.return_type {
-                Type::Void => self.context.void_type().fn_type(&param_types, false),
-
-                ty => self.llvm_type(ty).fn_type(&param_types, false),
+                Type::Void => self
+                    .context
+                    .void_type()
+                    .fn_type(&param_types, sig.is_variadic),
+                ty => self.llvm_type(ty).fn_type(&param_types, sig.is_variadic),
             };
 
             let function = self.module.add_function(name, fn_type, None);
