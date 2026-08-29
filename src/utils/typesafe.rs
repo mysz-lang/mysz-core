@@ -23,6 +23,7 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
         Type::Struct(name) => name.clone(),
+        Type::Enum(name) => name.clone(),
         Type::Ptr(inner) => format!("ptr__{}", type_to_mangled_string(inner)),
         Type::Array { element_type, size } => {
             format!("arr__{}__{}", type_to_mangled_string(element_type), size)
@@ -95,7 +96,7 @@ pub fn is_unsigned_integer(ty: &Type) -> bool {
 pub fn is_truthy_type(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str
+        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str | Type::Enum(..)
     )
 }
 
@@ -110,7 +111,14 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
     if expected == &Type::Any || found == &Type::Any {
         return true;
     }
-    if expected == found {
+
+    if (matches!(expected, Type::Int) && matches!(found, Type::Enum(_)))
+        || (matches!(found, Type::Int) && matches!(expected, Type::Enum(_)))
+    {
+        return true;
+    }
+
+    if matches!(expected, found) {
         return true;
     }
     match mode {
@@ -177,6 +185,7 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
         Type::Struct(s) => s.to_string(),
+        Type::Enum(s) => s.to_string(),
         Type::Ptr(s) => format!("ptr<{}>", typeof_string(s.as_ref())),
         Type::Array { element_type, .. } => format!("[{}]", typeof_string(element_type.as_ref())),
         Type::GenericInstance { .. } => "generic_instance".to_string(),

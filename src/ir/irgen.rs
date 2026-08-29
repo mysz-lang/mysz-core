@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use indexmap::IndexMap;
 
@@ -90,6 +90,7 @@ pub struct IRGen {
     pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
+    pub enum_defs: HashMap<String, IndexMap<String, i64>>,
     pub current_function: String,
 
     pub fn_blueprints: HashMap<String, Stmt>,
@@ -110,6 +111,7 @@ impl IRGen {
             loop_exits: Vec::new(),
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
+            enum_defs: HashMap::new(),
             var_types: ScopedMap::new(HashMap::new()),
             current_function: String::new(),
 
@@ -284,6 +286,11 @@ impl IRGen {
             ExprKind::Typeof { .. } => Some(Type::Str),
 
             ExprKind::Field { base, field } => {
+                if let ExprKind::Identifier(enum_name) = &base.kind
+                    && self.enum_defs.contains_key(enum_name)
+                {
+                    return Some(Type::Enum(enum_name.clone()));
+                }
                 let base_ty = self.type_of_expr(base)?;
 
                 let struct_name = match base_ty {
@@ -377,6 +384,7 @@ impl IRGen {
             | Type::Str
             | Type::Char
             | Type::Void
+            | Type::Enum(..)
             | Type::Any => ty.clone(),
         }
     }
@@ -469,6 +477,8 @@ impl IRGen {
         }
 
         match substituted {
+            Type::Struct(name) if self.enum_defs.contains_key(&name) => Type::Enum(name),
+
             Type::GenericInstance { name, args } => {
                 let resolved_args: Vec<Type> =
                     args.iter().map(|arg| self.resolve_type(arg)).collect();
@@ -567,7 +577,7 @@ impl IRGen {
 
     fn type_size(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int | Type::UInt => 8,
+            Type::Enum(..) | Type::Int | Type::UInt => 8,
             Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::Str => 8,
@@ -606,7 +616,7 @@ impl IRGen {
 
     fn type_alignment(&self, ty: &Type) -> i64 {
         match ty {
-            Type::Int | Type::UInt => 8,
+            Type::Enum(..) | Type::Int | Type::UInt => 8,
             Type::Int8 | Type::UInt8 => 1,
             Type::Bool => 1,
             Type::GenericParam(name) => {
@@ -1211,6 +1221,15 @@ impl IRGen {
             },
 
             ExprKind::Field { base, field } => {
+                if let ExprKind::Identifier(enum_name) = &base.kind
+                    && let Some(variants) = self.enum_defs.get(enum_name)
+                {
+                    let discriminant = *variants.get(field).unwrap_or_else(|| {
+                        panic!("ICE: enum '{}' has no variant '{}'", enum_name, field)
+                    });
+                    return Value::Const(discriminant);
+                }
+
                 let base_val = self.gen_expr(base, None);
                 let base_type = self.expr_type(base).unwrap_or(Type::Int);
                 let resolved_base = self.resolve_type(&base_type);
@@ -1580,6 +1599,15 @@ impl IRGen {
     pub fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Use { .. } => unreachable!(),
+
+            Stmt::Enum { name, options } => {
+                let variants: IndexMap<String, i64> = options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, opt)| (opt.value.clone(), i as i64))
+                    .collect();
+                self.enum_defs.insert(name.value.clone(), variants);
+            }
 
             Stmt::Struct {
                 name,
@@ -2347,6 +2375,7 @@ impl IRGen {
                 && !matches!(stmt, Stmt::Extern { .. })
                 && !matches!(stmt, Stmt::Struct { .. })
                 && !matches!(stmt, Stmt::Constant { .. })
+                && !matches!(stmt, Stmt::Enum { .. })
             {
                 println!(
                     "Codegen Error: top-level statement outside of a function is not supported."

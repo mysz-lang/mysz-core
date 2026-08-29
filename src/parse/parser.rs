@@ -692,6 +692,7 @@ impl Parser {
         while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
         {
             let name = to_ident(self.get_token().cloned())?;
+            self.advance();
             options.push(name);
             if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                 self.advance();
@@ -709,7 +710,7 @@ impl Parser {
 
         Some(Stmt::Enum {
             name: to_ident(Some(ident))?,
-            options
+            options,
         })
     }
 
@@ -1219,6 +1220,37 @@ impl Parser {
                     let generic_args = self.parse_generic_args();
 
                     match self.get_token().map(|t| &t.ttype) {
+                        Some(TokenType::Identifier) => {
+                            if !generic_args.is_empty() {
+                                self.throw(
+                                    ParserErrorType::UnexpectedTokenTypeError,
+                                    "Cannot apply generic arguments to an enum variant".to_string(),
+                                    expr.span.clone(),
+                                );
+                                return None;
+                            }
+
+                            if let ExprKind::Identifier(_) = &expr.kind {
+                                let variant_token = self.expect(TokenType::Identifier)?;
+                                let field_span = expr.span.clone();
+
+                                expr = Expr {
+                                    kind: ExprKind::Field {
+                                        base: Box::new(expr.clone()),
+                                        field: variant_token.value,
+                                    },
+                                    span: field_span,
+                                };
+                            } else {
+                                self.throw(
+                                    ParserErrorType::UnexpectedTokenTypeError,
+                                    "Cannot access a member on a non-identifier expression"
+                                        .to_string(),
+                                    expr.span.clone(),
+                                );
+                                return None;
+                            }
+                        }
                         Some(TokenType::LParen) => {
                             self.advance();
                             let args = self.parse_args();

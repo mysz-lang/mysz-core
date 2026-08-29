@@ -139,6 +139,7 @@ impl BackendType {
             }
             Type::Any => BackendType::Ptr,
             Type::Int => BackendType::Int64,
+            Type::Enum(..) => BackendType::Int64,
             Type::Int8 => BackendType::Int8,
             Type::UInt8 => BackendType::UInt8,
             Type::UInt => BackendType::UInt64,
@@ -1037,18 +1038,22 @@ impl CraneliftBackend {
                     dest,
                     ..
                 } => {
+                    let callee_sig = self
+                        .functions
+                        .get(callee_name)
+                        .or_else(|| self.functions.get(strip_mangling(callee_name)));
+
+                    let is_variadic = callee_sig.map(|sig| sig.is_variadic).unwrap_or(false);
+
                     let mut final_sig = self.module.make_signature();
+
                     for ty in &call_arg_types {
                         final_sig
                             .params
                             .push(AbiParam::new(ty.to_clif_type(ptr_type)));
                     }
 
-                    let callee_ret_front = self
-                        .functions
-                        .get(callee_name)
-                        .or_else(|| self.functions.get(strip_mangling(callee_name)))
-                        .map(|sig| sig.return_type.clone());
+                    let callee_ret_front = callee_sig.map(|sig| sig.return_type.clone());
 
                     if let Some(ref front_ret) = callee_ret_front {
                         let abi = AbiType::from_frontend(front_ret, &self.struct_defs, ptr_type);
@@ -1069,6 +1074,7 @@ impl CraneliftBackend {
                         id
                     } else {
                         let stripped = strip_mangling(callee_name);
+
                         if let Some(&id) = self.declared_funcs.get(stripped) {
                             id
                         } else {
@@ -1080,14 +1086,31 @@ impl CraneliftBackend {
                                 .unwrap();
 
                             self.declared_funcs.insert(callee_name.to_string(), id);
+
                             id
                         }
                     };
 
-                    let local_func = self.module.declare_func_in_func(fn_id, builder.func);
+                    let call_results = if is_variadic {
+                        let sig_ref = builder.import_signature(final_sig);
 
-                    let inst_call = builder.ins().call(local_func, &call_args);
-                    let call_results = builder.inst_results(inst_call).to_vec();
+                        let local_func = self.module.declare_func_in_func(fn_id, builder.func);
+
+                        let callee_addr = builder.ins().func_addr(ptr_type, local_func);
+
+                        let inst_call =
+                            builder
+                                .ins()
+                                .call_indirect(sig_ref, callee_addr, &call_args);
+
+                        builder.inst_results(inst_call).to_vec()
+                    } else {
+                        let local_func = self.module.declare_func_in_func(fn_id, builder.func);
+
+                        let inst_call = builder.ins().call(local_func, &call_args);
+
+                        builder.inst_results(inst_call).to_vec()
+                    };
 
                     if let Some(dest_name) = dest {
                         let frontend_type = var_types
@@ -1103,6 +1126,7 @@ impl CraneliftBackend {
                                     .and_then(|suffix| var_types.get(suffix))
                             })
                             .unwrap_or(&Type::Int);
+
                         let abi =
                             AbiType::from_frontend(frontend_type, &self.struct_defs, ptr_type);
 
@@ -1116,17 +1140,23 @@ impl CraneliftBackend {
                                     StackSlotKind::ExplicitSlot,
                                     total_size,
                                 ));
+
                                 stack_slot_map.insert(dest_name.clone(), slot);
                             }
+
                             let slot = *stack_slot_map.get(dest_name).unwrap();
-                            for (i, _item) in call_results.iter().enumerate().take(chunk_count) {
-                                let val_part = call_results[i];
+
+                            for (i, val_part) in
+                                call_results.iter().copied().enumerate().take(chunk_count)
+                            {
                                 builder.ins().stack_store(val_part, slot, (i * 8) as i32);
                             }
                         } else {
                             let dest_ty = BackendType::from_frontend(frontend_type);
+
                             if !call_results.is_empty() {
                                 let res_val = call_results[0];
+
                                 if let Some(&slot) = stack_slot_map.get(dest_name) {
                                     builder.ins().stack_store(res_val, slot, 0);
                                 } else {
@@ -1138,11 +1168,13 @@ impl CraneliftBackend {
                                         dest_ty,
                                         ptr_type,
                                     );
+
                                     builder.def_var(v, res_val);
                                 }
                             }
                         }
                     }
+
                     call_args.clear();
                     call_arg_types.clear();
                 }

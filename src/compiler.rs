@@ -56,6 +56,7 @@ fn json_error_from_analyser_error(err: &AnalyserError) -> JsonError {
     let (location, message) = match err {
         AnalyserError::TypeError { location, message } => (location, message),
         AnalyserError::SemanticError { location, message } => (location, message),
+        AnalyserError::OverDefinitionError { location, message } => (location, message),
     };
     JsonError {
         file: location.file.to_string(),
@@ -259,6 +260,7 @@ fn format_analyser_error(
     let (location, message) = match err {
         AnalyserError::TypeError { location, message } => (location, message),
         AnalyserError::SemanticError { location, message } => (location, message),
+        AnalyserError::OverDefinitionError { location, message } => (location, message),
     };
     let file_path_str = location.file.as_ref();
     let source = sources
@@ -494,9 +496,7 @@ pub fn compile_ast_program(
             .as_ref(),
     );
 
-    // ----------------------------
     // Semantic analysis
-    // ----------------------------
 
     let mut analyser = Analyser::new();
 
@@ -504,11 +504,13 @@ pub fn compile_ast_program(
         if json_output {
             let location = match err.clone() {
                 AnalyserError::SemanticError { location, .. }
+                | AnalyserError::OverDefinitionError { location, .. }
                 | AnalyserError::TypeError { location, .. } => location,
             };
 
             let message = match err.clone() {
                 AnalyserError::SemanticError { message, .. }
+                | AnalyserError::OverDefinitionError { message, .. }
                 | AnalyserError::TypeError { message, .. } => message,
             };
 
@@ -531,9 +533,7 @@ pub fn compile_ast_program(
         }
     }
 
-    // ----------------------------
     // IR generation
-    // ----------------------------
 
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
@@ -565,11 +565,9 @@ pub fn compile_ast_program(
 
     irgen.gen_program(program);
 
-    // irgen.dump();
+    irgen.dump();
 
-    // ----------------------------
     // Remove duplicate definitions
-    // ----------------------------
 
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();
@@ -595,9 +593,7 @@ pub fn compile_ast_program(
         }
     }
 
-    // ----------------------------
     // Public functions
-    // ----------------------------
 
     let mut public_functions = HashSet::new();
 
@@ -609,9 +605,7 @@ pub fn compile_ast_program(
         }
     }
 
-    // ----------------------------
     // Backend selection
-    // ----------------------------
 
     match target {
         CompilerTarget::Cranelift => compile_with_cranelift(

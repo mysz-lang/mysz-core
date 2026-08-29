@@ -33,7 +33,7 @@ pub enum Type {
         size: usize,
     },
     Struct(String),
-
+    Enum(String),
     // Generics
     GenericInstance {
         name: String,
@@ -202,7 +202,7 @@ pub enum Stmt {
     },
     Enum {
         name: Identifier,
-        options: Vec<Identifier>
+        options: Vec<Identifier>,
     },
     Function {
         name: Identifier,

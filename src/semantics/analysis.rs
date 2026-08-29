@@ -24,6 +24,12 @@ pub struct StructSignature {
 }
 
 #[derive(Clone, Debug)]
+pub struct EnumSignature {
+    pub options: Vec<String>,
+    pub location: Location,
+}
+
+#[derive(Clone, Debug)]
 pub struct FunctionSignature {
     pub generic_params: Vec<String>,
     pub public: bool,

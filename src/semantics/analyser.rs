@@ -1,7 +1,9 @@
 use indexmap::IndexMap;
 
 use crate::parse::parsing::*;
-use crate::semantics::analysis::{FunctionSignature, Scope, StructSignature, Symbol};
+use crate::semantics::analysis::{
+    EnumSignature, FunctionSignature, Scope, StructSignature, Symbol,
+};
 use crate::utils::location::Location;
 use crate::utils::typesafe::{self, *};
 use std::collections::{HashMap, HashSet};
@@ -10,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 pub enum AnalyserError {
     TypeError { location: Location, message: String },
     SemanticError { location: Location, message: String },
+    OverDefinitionError { location: Location, message: String },
 }
 impl AnalyserError {
     pub fn type_error(location: Location, message: impl Into<String>) -> Self {
@@ -20,6 +23,12 @@ impl AnalyserError {
     }
     pub fn semantic_error(location: Location, message: impl Into<String>) -> Self {
         AnalyserError::SemanticError {
+            location,
+            message: message.into(),
+        }
+    }
+    pub fn overdef_error(location: Location, message: impl Into<String>) -> Self {
+        AnalyserError::OverDefinitionError {
             location,
             message: message.into(),
         }
@@ -43,6 +52,7 @@ pub struct Analyser {
     pub functions: HashMap<String, FunctionSignature>,
     pub function_bodies: HashMap<String, (Vec<Parameter>, Vec<Stmt>)>,
     pub structs: HashMap<String, StructSignature>,
+    pub enums: HashMap<String, EnumSignature>,
     pub constants: HashMap<String, (Type, Expr)>,
     current_return_type: Option<Type>,
     loop_depth: usize,
@@ -60,6 +70,7 @@ impl Analyser {
             functions: HashMap::new(),
             function_bodies: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             constants: HashMap::new(),
             current_return_type: None,
             loop_depth: 0,
@@ -271,7 +282,7 @@ impl Analyser {
                     return Ok(());
                 }
 
-                if !self.structs.contains_key(name) {
+                if !self.structs.contains_key(name) && !self.enums.contains_key(name) {
                     return Err(AnalyserError::SemanticError {
                         location: span.clone(),
                         message: format!(
@@ -306,6 +317,28 @@ impl Analyser {
         Ok(())
     }
 
+    fn declare_enum(
+        &mut self,
+        name: &str,
+        options: Vec<String>,
+        location: Location,
+    ) -> Result<(), AnalyserError> {
+        if let Some(existing) = self.enums.get(name) {
+            return Err(AnalyserError::overdef_error(
+                existing.location.clone(),
+                format!(
+                    "Enum '{}' is already defined at [{}]",
+                    name, existing.location
+                ),
+            ));
+        };
+
+        self.enums
+            .insert(name.to_string(), EnumSignature { options, location });
+
+        Ok(())
+    }
+
     fn declare_struct(
         &mut self,
         name: &str,
@@ -314,13 +347,13 @@ impl Analyser {
         location: Location,
     ) -> Result<(), AnalyserError> {
         if let Some(existing) = self.structs.get(name) {
-            return Err(AnalyserError::SemanticError {
+            return Err(AnalyserError::overdef_error(
                 location,
-                message: format!(
-                    "Semantic Error: Struct '{}' is already defined at [{}]",
+                format!(
+                    "Struct '{}' is already defined at [{}]",
                     name, existing.location
                 ),
-            });
+            ));
         }
 
         self.structs.insert(
@@ -458,6 +491,17 @@ impl Analyser {
                 }
             },
             ExprKind::Field { base, field } => {
+                if let ExprKind::Identifier(name) = &base.kind
+                    && let Some(enum_sig) = self.enums.get(name)
+                {
+                    if !enum_sig.options.contains(field) {
+                        return Err(AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!("Enum '{}' has no variant named '{}'.", name, field),
+                        ));
+                    }
+                    return Ok(Type::Enum(name.clone()));
+                }
                 let base_type = self.check_expr(base, None)?;
 
                 match base_type {
@@ -1077,6 +1121,18 @@ impl Analyser {
     pub fn check_stmt(&mut self, stmt: &Stmt, mode: TypeCheckMode) -> Result<(), AnalyserError> {
         match stmt {
             Stmt::Use { .. } => unreachable!(),
+
+            Stmt::Enum { name, options } => {
+                self.declare_enum(
+                    &name.value,
+                    options
+                        .into_iter()
+                        .map(|ident| ident.value.clone())
+                        .collect(),
+                    name.location.clone(),
+                )?;
+                Ok(())
+            }
 
             Stmt::Struct {
                 name,

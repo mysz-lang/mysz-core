@@ -146,7 +146,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
         match ty {
-            Type::Int | Type::UInt => self.context.i64_type().into(),
+            Type::Enum(..) | Type::Int | Type::UInt => self.context.i64_type().into(),
 
             Type::Int8 | Type::UInt8 | Type::Char => self.context.i8_type().into(),
 
@@ -350,7 +350,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
 
             _ => {
-                // is_truthy_type() guarantees this should be unreachable.
                 panic!(
                     "ICE: truthy type {} has no LLVM truthiness implementation",
                     type_to_string(&ty)
@@ -427,14 +426,12 @@ impl<'ctx> LlvmBackend<'ctx> {
             .context
             .append_basic_block(function, &format!("{}.str.done", name));
 
-        // Current block -> loop.
         self.builder
             .build_unconditional_branch(loop_block)
             .map_err(|err| err.to_string())?;
 
         self.builder.position_at_end(loop_block);
 
-        // Loop-carried pointers.
         let lhs_phi = self
             .builder
             .build_phi(
@@ -457,7 +454,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         let lhs_ptr = lhs_phi.as_basic_value().into_pointer_value();
         let rhs_ptr = rhs_phi.as_basic_value().into_pointer_value();
 
-        // Load the current characters.
         let lhs_byte = self
             .builder
             .build_load(
@@ -478,7 +474,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .map_err(|err| err.to_string())?
             .into_int_value();
 
-        // If the bytes differ, the strings differ.
         let bytes_equal = self
             .builder
             .build_int_compare(
@@ -493,7 +488,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_conditional_branch(bytes_equal, advance_block, not_equal_block)
             .map_err(|err| err.to_string())?;
 
-        // Bytes were equal. Check for the terminating '\0'.
         self.builder.position_at_end(advance_block);
 
         let lhs_end = self
@@ -521,8 +515,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_or(lhs_end, rhs_end, &format!("{}.either.end", name))
             .map_err(|err| err.to_string())?;
 
-        // If either string ended, they are equal because the bytes
-        // were already proven equal.
         let advance_or_equal = self
             .context
             .append_basic_block(function, &format!("{}.str.advance.bytes", name));
@@ -531,7 +523,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_conditional_branch(either_end, equal_block, advance_or_equal)
             .map_err(|err| err.to_string())?;
 
-        // Actually increment the pointers.
         self.builder.position_at_end(advance_or_equal);
 
         let one = self.context.i64_type().const_int(1, false);
@@ -565,7 +556,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_unconditional_branch(loop_block)
             .map_err(|err| err.to_string())?;
 
-        // Strings are equal.
         self.builder.position_at_end(equal_block);
 
         let equal_value = self
@@ -577,7 +567,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_unconditional_branch(done_block)
             .map_err(|err| err.to_string())?;
 
-        // Strings are not equal.
         self.builder.position_at_end(not_equal_block);
 
         let not_equal_value = self
@@ -589,7 +578,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             .build_unconditional_branch(done_block)
             .map_err(|err| err.to_string())?;
 
-        // Merge the two results.
         self.builder.position_at_end(done_block);
 
         let result = self
@@ -663,13 +651,11 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     fn declare_structs(&mut self) -> Result<(), String> {
-        // First create all named struct types.
         for name in self.struct_defs.keys() {
             let struct_type = self.context.opaque_struct_type(name);
             self.struct_types.insert(name.clone(), struct_type);
         }
 
-        // Then populate their bodies.
         for (name, layout) in &self.struct_defs {
             let struct_type = self
                 .struct_types
