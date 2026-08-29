@@ -118,7 +118,7 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
         return true;
     }
 
-    if matches!(expected, found) {
+    if matches!(expected, _found) {
         return true;
     }
     match mode {

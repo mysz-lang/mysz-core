@@ -1125,10 +1125,7 @@ impl Analyser {
             Stmt::Enum { name, options } => {
                 self.declare_enum(
                     &name.value,
-                    options
-                        .into_iter()
-                        .map(|ident| ident.value.clone())
-                        .collect(),
+                    options.iter().map(|ident| ident.value.clone()).collect(),
                     name.location.clone(),
                 )?;
                 Ok(())
