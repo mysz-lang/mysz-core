@@ -9,6 +9,7 @@ pub enum Literal {
     Arr { elements: Vec<Expr> },
     Double(f64),
     Float(f32),
+    Nil,
 }
 impl Literal {
     pub fn to_i64(&self) -> i64 {
@@ -53,6 +54,7 @@ pub enum Type {
     },
 
     Any,
+    Nil,
 }
 
 #[derive(Debug, Clone)]

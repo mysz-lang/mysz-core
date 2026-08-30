@@ -34,6 +34,7 @@ fn value_backend_type(value: &Value, var_types: &ScopedMap) -> BackendType {
         Value::Char(_) => BackendType::Char,
         Value::Const(_) => BackendType::Int64,
         Value::Double(_) => BackendType::Float64,
+        Value::Nil => BackendType::Nil,
         Value::Float(_) => BackendType::Float32,
         Value::Bool(_) => BackendType::Bool,
         Value::Str(_) => BackendType::Ptr,
@@ -90,6 +91,7 @@ pub enum BackendType {
     Char,
     Bool,
     Ptr,
+    Nil,
 }
 
 impl BackendType {
@@ -103,6 +105,7 @@ impl BackendType {
             BackendType::Float64 => types::F64,
             BackendType::Float32 => types::F32,
             BackendType::Ptr => ptr_type,
+            BackendType::Nil => ptr_type,
         }
     }
 
@@ -113,7 +116,7 @@ impl BackendType {
             BackendType::Int8 | BackendType::UInt8 => 1,
             BackendType::Int32 | BackendType::UInt32 | BackendType::Float32 => 4,
             BackendType::Int64 | BackendType::UInt64 | BackendType::Float64 => 8,
-            BackendType::Ptr => 8,
+            BackendType::Ptr | BackendType::Nil => 8,
         }
     }
 
@@ -144,6 +147,7 @@ impl BackendType {
                 )
             }
             Type::Any => BackendType::Ptr,
+            Type::Nil => BackendType::Nil,
             Type::Int => BackendType::Int64,
             Type::Enum(..) => BackendType::Int64,
             Type::Int8 => BackendType::Int8,
@@ -441,6 +445,7 @@ impl CraneliftBackend {
                     builder.use_var(v)
                 }
             }
+            Value::Nil => builder.ins().iconst(ty, 0),
         }
     }
 
@@ -1011,13 +1016,23 @@ impl CraneliftBackend {
                     let clif_target_ty = dest_backend_ty.to_clif_type(ptr_type);
 
                     let casted_val = match cast_ty {
-                        CastType::BitCast => builder.ins().bitcast(clif_target_ty, MemFlags::new(), source_val),
+                        CastType::BitCast => {
+                            builder
+                                .ins()
+                                .bitcast(clif_target_ty, MemFlags::new(), source_val)
+                        }
                         CastType::Extend => builder.ins().uextend(clif_target_ty, source_val),
                         CastType::Truncate => builder.ins().ireduce(clif_target_ty, source_val),
                         CastType::FloatExtend => builder.ins().fpromote(clif_target_ty, source_val),
-                        CastType::FloatTruncate => builder.ins().fdemote(clif_target_ty, source_val),
-                        CastType::IntToFloat => builder.ins().fcvt_from_sint(clif_target_ty, source_val),
-                        CastType::FloatToInt => builder.ins().fcvt_to_sint(clif_target_ty, source_val)
+                        CastType::FloatTruncate => {
+                            builder.ins().fdemote(clif_target_ty, source_val)
+                        }
+                        CastType::IntToFloat => {
+                            builder.ins().fcvt_from_sint(clif_target_ty, source_val)
+                        }
+                        CastType::FloatToInt => {
+                            builder.ins().fcvt_to_sint(clif_target_ty, source_val)
+                        }
                     };
 
                     if let Some(&slot) = stack_slot_map.get(dest_name) {

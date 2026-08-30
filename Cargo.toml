@@ -1,6 +1,6 @@
 [package]
 name = "mysz-core"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2024"
 license = "Apache-2.0"
 description = "The main compiler for the Mysz language project"

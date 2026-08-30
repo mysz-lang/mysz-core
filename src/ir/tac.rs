@@ -35,6 +35,7 @@ pub enum Value {
     Temp(String),
     Var(String),
     Void,
+    Nil,
 
     Str(String),
     Char(char),

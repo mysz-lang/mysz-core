@@ -127,6 +127,7 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn value_type(&self, value: &Value) -> Result<Type, String> {
         match value {
             Value::Const(_) => Ok(Type::Int),
+            Value::Nil => Ok(Type::Nil),
             Value::Double(_) => Ok(Type::Double),
             Value::Float(_) => Ok(Type::Float),
             Value::Bool(_) => Ok(Type::Bool),
@@ -180,6 +181,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 panic!("ICE: void used where an LLVM value type was required")
             }
 
+            Type::Nil => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+
             Type::GenericInstance { .. }
             | Type::GenericParam(_)
             | Type::VariadicPack { .. }
@@ -193,6 +199,12 @@ impl<'ctx> LlvmBackend<'ctx> {
         let ty = self.value_type(value)?;
 
         match value {
+            Value::Nil => Ok(self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null()
+                .into()),
+
             Value::Const(value) => match ty {
                 Type::Int => Ok(self
                     .context
@@ -1083,7 +1095,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Ok(());
         }
 
-        if matches!(from_type, Type::Float | Type::Double) && matches!(to_type, Type::Float | Type::Double) {
+        if matches!(from_type, Type::Float | Type::Double)
+            && matches!(to_type, Type::Float | Type::Double)
+        {
             let value = self.llvm_value(value)?.into_float_value();
             let llvm_to_type = self.llvm_type(to_type).into_float_type();
 
@@ -1111,6 +1125,14 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Ok(());
         }
 
+        if matches!(to_type, Type::Nil) {
+            let llvm_to_type = self.llvm_type(to_type).into_pointer_type();
+            let result = llvm_to_type.const_null();
+
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
+        }
         Err(format!(
             "ICE: unsupported cast from {} to {}",
             type_to_string(&from_type),
@@ -1666,9 +1688,11 @@ mod tests {
             HashMap::new(),
         );
 
-        let function = backend
-            .module
-            .add_function("test_float_to_double", context.f64_type().fn_type(&[], false), None);
+        let function = backend.module.add_function(
+            "test_float_to_double",
+            context.f64_type().fn_type(&[], false),
+            None,
+        );
         let entry = context.append_basic_block(function, "entry");
         backend.builder.position_at_end(entry);
 
@@ -1679,7 +1703,10 @@ mod tests {
             &Type::Double,
         );
 
-        assert!(result.is_ok(), "float -> double cast should be supported: {result:?}");
+        assert!(
+            result.is_ok(),
+            "float -> double cast should be supported: {result:?}"
+        );
         assert_eq!(backend.temp_types.get("tmp"), Some(&Type::Double));
     }
 }

@@ -452,6 +452,7 @@ impl Analyser {
                 Literal::String(_) => Ok(Type::Str),
                 Literal::Bool(_) => Ok(Type::Bool),
                 Literal::Char(_) => Ok(Type::Char),
+                Literal::Nil => Ok(Type::Nil),
                 Literal::Arr { elements } => {
                     let expected_elem_ty = match expected_type {
                         Some(Type::Array { element_type, .. }) => Some(&**element_type),

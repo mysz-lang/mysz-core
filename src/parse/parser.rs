@@ -189,6 +189,10 @@ impl Parser {
                     self.advance();
                     Some(Type::Void)
                 }
+                "nil" => {
+                    self.advance();
+                    Some(Type::Nil)
+                }
                 "ptr" => {
                     self.advance();
                     self.expect(TokenType::LessThan)?;

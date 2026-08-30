@@ -24,6 +24,7 @@ pub fn type_to_mangled_string(ty: &Type) -> String {
         Type::Char => "char".to_string(),
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
+        Type::Nil => "nil".to_string(),
         Type::Struct(name) => name.clone(),
         Type::Enum(name) => name.clone(),
         Type::Ptr(inner) => format!("ptr__{}", type_to_mangled_string(inner)),
@@ -110,7 +111,14 @@ pub fn is_decimal(ty: &Type) -> bool {
 pub fn is_truthy_type(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Bool | Type::Str | Type::Enum(..)
+        Type::Int
+            | Type::UInt
+            | Type::Int8
+            | Type::UInt8
+            | Type::Bool
+            | Type::Str
+            | Type::Enum(..)
+            | Type::Nil
     )
 }
 
@@ -123,6 +131,10 @@ pub enum TypeCheckMode {
 
 pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
     if expected == &Type::Any || found == &Type::Any {
+        return true;
+    }
+
+    if expected == &Type::Nil || found == &Type::Nil {
         return true;
     }
 
@@ -203,6 +215,7 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::Char => "char".to_string(),
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
+        Type::Nil => "nil".to_string(),
         Type::Struct(s) => s.to_string(),
         Type::Enum(s) => s.to_string(),
         Type::Ptr(s) => format!("ptr<{}>", typeof_string(s.as_ref())),

@@ -232,6 +232,7 @@ impl IRGen {
                 Literal::Float(_) => Some(Type::Float),
                 Literal::Char(_) => Some(Type::Char),
                 Literal::Bool(_) => Some(Type::Bool),
+                Literal::Nil => Some(Type::Nil),
                 Literal::Arr { elements } => {
                     let elem_type = elements.first().and_then(|e| self.type_of_expr(e))?;
                     Some(Type::Array {
@@ -388,6 +389,7 @@ impl IRGen {
             | Type::Str
             | Type::Char
             | Type::Void
+            | Type::Nil
             | Type::Enum(..)
             | Type::Any => ty.clone(),
         }
@@ -576,6 +578,7 @@ impl IRGen {
             Value::Float(_) => Type::Float,
             Value::Bool(_) => Type::Bool,
             Value::Char(_) => Type::Char,
+            Value::Nil => Type::Nil,
             Value::Str(_) => Type::Str,
             Value::Void => Type::Void,
         }
@@ -616,7 +619,7 @@ impl IRGen {
                 )
             }
 
-            Type::Void => 0,
+            Type::Void | Type::Nil => 0,
             Type::Any => 8, // default value, since any is unsafe anyway
         }
     }
@@ -658,7 +661,7 @@ impl IRGen {
                     "ICE: VariadicPack reached type_alignment: it should have been resolved to a concrete __variadic__ struct before alignment queries."
                 )
             }
-            Type::Void => 0,
+            Type::Void | Type::Nil => 0,
             Type::Any => 8,
         }
     }
@@ -724,6 +727,7 @@ impl IRGen {
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Float(_)) => Some(Type::Float),
             ExprKind::Literal(Literal::Double(_)) => Some(Type::Double),
+            ExprKind::Literal(Literal::Nil) => Some(Type::Nil),
             ExprKind::Literal(Literal::Bool(_)) => Some(Type::Bool),
             ExprKind::Literal(Literal::Char(_)) => Some(Type::Char),
             ExprKind::Literal(Literal::Arr { elements }) => {
@@ -1180,6 +1184,7 @@ impl IRGen {
                 Literal::Float(f) => Value::Float(*f),
                 Literal::String(s) => Value::Str(s.clone()),
                 Literal::Bool(b) => Value::Bool(*b),
+                Literal::Nil => Value::Nil,
                 Literal::Char(c) => Value::Char(*c),
                 Literal::Arr { elements } => {
                     let element_type = if !elements.is_empty() {
@@ -1524,6 +1529,7 @@ impl IRGen {
                             Literal::Int(v) => Value::Const(*v),
                             Literal::Double(d) => Value::Double(*d),
                             Literal::Float(f) => Value::Float(*f),
+                            Literal::Nil => Value::Nil,
                             Literal::Bool(b) => Value::Bool(*b),
                             Literal::Char(c) => Value::Char(*c),
                             Literal::String(s) => Value::Str(s.clone()),
