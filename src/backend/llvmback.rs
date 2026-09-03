@@ -333,6 +333,14 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Ok(value.into_pointer_value())
             }
 
+            Value::Nil => {
+                let result = self
+                    .context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null();
+                Ok(result)
+            }
+
             _ => Err("cannot use this value as a pointer".to_string()),
         }
     }
@@ -828,7 +836,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             }
 
             IrOp::Not => {
-                if !is_integer(&value_type) {
+                if !is_integer(&value_type) && !matches!(value_type, Type::Bool) {
                     return Err(format!(
                         "cannot apply ~ to value of type {}",
                         type_to_string(&value_type)
@@ -973,6 +981,14 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn compile_jumpiffalse(&mut self, cond: &Value, target: &str) -> Result<(), String> {
         let target_block = self.get_block(target)?;
 
+        if let Some(current) = self.builder.get_insert_block()
+            && current.get_terminator().is_some()
+        {
+            // block already terminated (e.g. by an earlier `return`); this
+            // jumpiffalse is dead code, skip emitting into it
+            return Ok(());
+        }
+
         let cond = self.llvm_truthy(cond)?;
 
         let current_block = self
@@ -999,6 +1015,12 @@ impl<'ctx> LlvmBackend<'ctx> {
 
     fn compile_jump(&mut self, target: &str) -> Result<(), String> {
         let block = self.get_block(target)?;
+
+        if let Some(current) = self.builder.get_insert_block()
+            && current.get_terminator().is_some()
+        {
+            return Ok(());
+        }
 
         self.builder
             .build_unconditional_branch(block)
@@ -1476,6 +1498,12 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     fn compile_return(&mut self, value: &Value) -> Result<(), String> {
+        if let Some(current) = self.builder.get_insert_block()
+            && current.get_terminator().is_some()
+        {
+            return Ok(());
+        }
+
         match value {
             Value::Void => {
                 self.builder

@@ -875,12 +875,16 @@ impl IRGen {
             variadic_values.push(v);
         }
 
-        let resolved_func_name = self.mangle_call_name(
-            &callee.value,
-            &substituted_generic_args,
-            &variadic_types,
-            is_variadic_capable,
-        );
+        let resolved_func_name = if blueprint.is_some() {
+            self.mangle_call_name(
+                &callee.value,
+                &substituted_generic_args,
+                &variadic_types,
+                is_variadic_capable,
+            )
+        } else {
+            callee.value.clone()
+        };
 
         if is_variadic_capable {
             let struct_name = format!("__variadic__{}", resolved_func_name);
@@ -1258,7 +1262,7 @@ impl IRGen {
                     return Value::Const(discriminant);
                 }
 
-                let base_val = self.gen_expr(base, None);
+                let base_addr = self.gen_lvalue_addr(base);
                 let base_type = self.expr_type(base).unwrap_or(Type::Int);
                 let resolved_base = self.resolve_type(&base_type);
 
@@ -1300,20 +1304,12 @@ impl IRGen {
                     (offset, self.resolve_type(&unres_field_ty))
                 };
 
-                let base_addr_temp =
-                    self.next_temp_with_type(Type::Ptr(Box::new(Type::Struct(struct_name))));
-                self.code.push(Instruction::Unary {
-                    dst: base_addr_temp.clone(),
-                    op: IrOp::Ref,
-                    value: base_val,
-                });
-
                 let field_addr_temp =
                     self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
                 self.code.push(Instruction::Binary {
                     dst: field_addr_temp.clone(),
                     op: IrOp::Add,
-                    lhs: Value::Temp(base_addr_temp),
+                    lhs: base_addr,
                     rhs: Value::Const(offset),
                 });
 

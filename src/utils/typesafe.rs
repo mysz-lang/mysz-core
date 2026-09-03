@@ -119,6 +119,7 @@ pub fn is_truthy_type(ty: &Type) -> bool {
             | Type::Str
             | Type::Enum(..)
             | Type::Nil
+            | Type::Char
     )
 }
 
