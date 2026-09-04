@@ -1564,11 +1564,21 @@ impl IRGen {
                     } else {
                         let value = self.gen_expr(expr, None);
                         let inner_type = self.get_value_type(&value);
+
+                        let raw_temp = self.temps.next_temp();
+                        let anon_var_name = format!("_anon_ref_{}", raw_temp);
+                        self.var_types
+                            .insert(anon_var_name.clone(), inner_type.clone());
+                        self.code.push(Instruction::Assign {
+                            dst: anon_var_name.clone(),
+                            src: value,
+                        });
+
                         let temp = self.next_temp_with_type(Type::Ptr(Box::new(inner_type)));
                         self.code.push(Instruction::Unary {
                             dst: temp.clone(),
                             op: IrOp::Ref,
-                            value,
+                            value: Value::Var(anon_var_name),
                         });
                         Value::Temp(temp)
                     }
