@@ -16,8 +16,8 @@ pub mod utils;
 fn main() {
     let at_info = at_from_directory("main", "./interntest");
 
-    if at_info.is_err() {
-        eprintln!("Error: {:?}", at_info.unwrap_err());
+    if let Err(e) = at_info {
+        eprintln!("Error: {}", e);
         return;
     }
 
@@ -36,8 +36,8 @@ fn main() {
     };
     let res = compile_at_graph(&ctx, &ats, &entry, "./interntest/main.o");
 
-    if res.is_err() {
-        eprintln!("Compilation error: {}", res.unwrap_err());
+    if let Err(e) = res {
+        eprintln!("Compilation error: {}", e);
     } else {
         println!("Compilation successful!");
     }

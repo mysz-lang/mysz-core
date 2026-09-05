@@ -72,7 +72,7 @@ impl ATBuilder {
 
         fn visit_dir(
             dir: &Path,
-            root: &Path,
+            _root: &Path,
             prefix: Vec<String>,
             files: &mut Vec<ATFile>,
         ) -> Result<(), String> {
@@ -84,7 +84,7 @@ impl ATBuilder {
                 if path.is_dir() {
                     let mut new_prefix = prefix.clone();
                     new_prefix.push(path.file_stem().unwrap().to_string_lossy().to_string());
-                    visit_dir(&path, root, new_prefix, files)?;
+                    visit_dir(&path, _root, new_prefix, files)?;
                 } else if path.extension().map(|e| e == "mysz").unwrap_or(false) {
                     let module_path = prefix.clone();
                     let module_name = path.file_stem().unwrap().to_string_lossy().to_string();

@@ -645,10 +645,10 @@ fn collect_exported_symbols(program: &Program) -> Vec<(String, SymbolType)> {
 fn collect_use_statements(program: &Program) -> Vec<(String, Vec<String>)> {
     let mut uses = Vec::new();
     for stmt in &program.statements {
-        if let Stmt::Use { path } = stmt {
-            if let Some(bare_name) = path.last() {
-                uses.push((bare_name.clone(), path.clone()));
-            }
+        if let Stmt::Use { path } = stmt
+            && let Some(bare_name) = path.last()
+        {
+            uses.push((bare_name.clone(), path.clone()));
         }
     }
     uses
@@ -1071,7 +1071,7 @@ fn apply_at_aliases(
             Stmt::Use { path } => {
                 if path.len() >= 2 {
                     let bare_name = path.last().unwrap().clone();
-                    if let Some(_) = rewriter.imports.get(&bare_name) {
+                    if rewriter.imports.contains_key(&bare_name) {
                         continue;
                     }
                 }
@@ -1243,7 +1243,7 @@ fn resolve_imports(
 ) -> Result<Vec<ParsedAT>, String> {
     let mut exported_symbols: HashMap<String, ExportInfo> = HashMap::new();
 
-    for (_, parsed_at) in parsed_ats.iter().enumerate() {
+    for parsed_at in parsed_ats.iter() {
         let symbols = collect_exported_symbols(&parsed_at.program);
 
         for (name, sym_type) in symbols {
