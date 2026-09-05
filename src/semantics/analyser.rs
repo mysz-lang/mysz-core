@@ -739,7 +739,6 @@ impl Analyser {
 
                 let mut resolved_func_name = callee.value.clone();
 
-                // Resolve generic function arguments and create the concrete signature.
                 if !template.generic_params.is_empty() || !generic_args.is_empty() {
                     if template.generic_params.len() != generic_args.len() {
                         return Err(AnalyserError::type_error(
@@ -816,7 +815,6 @@ impl Analyser {
                     ));
                 }
 
-                // `param_types` contains ONLY fixed parameters.
                 let fixed_arg_count = sig.param_types.len();
 
                 if sig.is_variadic {
@@ -846,7 +844,6 @@ impl Analyser {
                 let param_types = sig.param_types.clone();
                 let return_type = sig.return_type.clone();
 
-                // Check fixed arguments.
                 for (i, (arg, expected)) in args[..fixed_arg_count]
                     .iter()
                     .zip(param_types.iter())

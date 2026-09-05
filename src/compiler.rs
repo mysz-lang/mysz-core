@@ -551,7 +551,6 @@ pub fn check_at<'a, P: AsRef<Path>>(
                 &module_registry,
             )?;
 
-            // Filter out AT `use` statements.
             let filtered: Vec<Stmt> = statements
                 .into_iter()
                 .filter(|stmt| {
@@ -571,7 +570,6 @@ pub fn check_at<'a, P: AsRef<Path>>(
             all_statements.extend(filtered);
         }
 
-        // Register this AT's symbols after parsing all files.
         let at_symbols = collect_symbols_from_at(at)?;
         symbol_registry.insert(at.name.clone(), at_symbols);
 
@@ -718,7 +716,7 @@ fn sort_files_by_dependencies(files: &[ATFile], at: &ATInfo) -> Result<Vec<PathB
     use std::collections::{HashMap, HashSet, VecDeque};
 
     let search_paths = vec![at.root_dir.clone()];
-    let mut deps_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new(); // file -> files it needs
+    let mut deps_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     let mut all_files: HashSet<PathBuf> = HashSet::new();
 
     for file in files {
@@ -742,7 +740,6 @@ fn sort_files_by_dependencies(files: &[ATFile], at: &ATInfo) -> Result<Vec<PathB
                         deps.push(resolved);
                     }
                 } else if is_dep {
-                    // inter-AT — handled by AT-level ordering already
                 } else if let Some(resolved) = find_module_file(path, &search_paths) {
                     deps.push(resolved);
                 }
@@ -751,7 +748,6 @@ fn sort_files_by_dependencies(files: &[ATFile], at: &ATInfo) -> Result<Vec<PathB
         deps_map.insert(file.path.clone(), deps);
     }
 
-    // in_degree[file] = number of prerequisites `file` still needs processed first
     let mut in_degree: HashMap<PathBuf, usize> = HashMap::new();
     for file in &all_files {
         in_degree.insert(
@@ -760,7 +756,6 @@ fn sort_files_by_dependencies(files: &[ATFile], at: &ATInfo) -> Result<Vec<PathB
         );
     }
 
-    // reverse edges: dependency -> the files that depend on it
     let mut dependents: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     for (file, deps) in &deps_map {
         for dep in deps {
@@ -774,7 +769,7 @@ fn sort_files_by_dependencies(files: &[ATFile], at: &ATInfo) -> Result<Vec<PathB
     let mut queue: VecDeque<PathBuf> = VecDeque::new();
     for (file, &deg) in &in_degree {
         if deg == 0 {
-            queue.push_back(file.clone()); // files with NO dependencies go first
+            queue.push_back(file.clone());
         }
     }
 
@@ -1200,7 +1195,7 @@ pub fn compile_at_graph<'a, P: AsRef<Path>>(
                         ImportInfo {
                             qualified_name: qualified.clone(),
                             from_at,
-                            symbol_type: SymbolType::Function, // see note below
+                            symbol_type: SymbolType::Function,
                         },
                     )
                 })
@@ -1212,7 +1207,7 @@ pub fn compile_at_graph<'a, P: AsRef<Path>>(
 
     let mut merged_statements = Vec::new();
     for (topo_pos, resolved_at) in resolved_ats.iter().enumerate() {
-        let original_idx = at_order[topo_pos]; // map back to the ats-slice index
+        let original_idx = at_order[topo_pos];
         let is_entry = original_idx == entry.info;
         let at_stmts = apply_at_aliases(
             resolved_at.program.statements.clone(),

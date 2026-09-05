@@ -984,8 +984,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         if let Some(current) = self.builder.get_insert_block()
             && current.get_terminator().is_some()
         {
-            // block already terminated (e.g. by an earlier `return`); this
-            // jumpiffalse is dead code, skip emitting into it
             return Ok(());
         }
 
