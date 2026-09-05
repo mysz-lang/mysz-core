@@ -64,6 +64,8 @@ pub enum TokenType {
     AsKeyword,
     ElseIfKeyword,
 
+    CurrentATSymbol, // @
+
     // identifier
     Identifier,
 

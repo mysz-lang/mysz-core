@@ -324,6 +324,11 @@ impl Parser {
                     self.advance();
                     token.value
                 }
+                Some(TokenType::CurrentATSymbol) => {
+                    let token = self.get_token().cloned()?;
+                    self.advance();
+                    token.value
+                }
                 other => {
                     self.throw(
                         ParserErrorType::UnexpectedTokenTypeError,

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+#[derive(PartialEq, Clone, Debug, Copy)]
 pub enum CompilerTarget {
     Cranelift,
     Llvm,

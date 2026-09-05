@@ -72,7 +72,7 @@ impl Default for FunctionGen {
         Self::new()
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructLayout {
     pub total_size: i64,
     pub alignment: i64,

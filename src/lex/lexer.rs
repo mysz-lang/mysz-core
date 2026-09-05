@@ -176,6 +176,7 @@ impl Lexer {
                         self.add_token(t);
                     }
                     ';' => self.single_char(TokenType::SemiColon)?,
+                    '@' => self.single_char(TokenType::CurrentATSymbol)?,
                     '(' => self.single_char(TokenType::LParen)?,
                     ')' => self.single_char(TokenType::RParen)?,
                     '{' => self.single_char(TokenType::LBrace)?,
