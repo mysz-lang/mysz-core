@@ -1145,6 +1145,17 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Ok(());
         }
 
+        if matches!(&from_type, Type::Ptr(inner) if matches!(inner.as_ref(), Type::Char))
+            && matches!(to_type, Type::Str)
+        {
+            let value = self.llvm_value(value)?.into_pointer_value();
+
+            self.temps.insert(dst.to_string(), value.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+
+            return Ok(());
+        }
+
         if matches!(to_type, Type::Nil) {
             let llvm_to_type = self.llvm_type(to_type).into_pointer_type();
             let result = llvm_to_type.const_null();

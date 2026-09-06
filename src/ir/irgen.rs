@@ -1135,7 +1135,9 @@ impl IRGen {
                 let cast_kind = match (&from_type, &to_type) {
                     (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
 
-                    (Type::Ptr(_), Type::Str) => CastType::BitCast,
+                    (Type::Ptr(inner), Type::Str) if matches!(inner.as_ref(), Type::Char) => {
+                        CastType::BitCast
+                    }
 
                     (
                         Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
