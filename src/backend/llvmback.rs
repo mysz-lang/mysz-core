@@ -17,7 +17,7 @@ use crate::{
     },
     parse::parsing::Type,
     semantics::analysis::FunctionSignature,
-    utils::typesafe::types_equal,
+    utils::typesafe::{is_decimal, types_equal},
 };
 
 use crate::utils::typesafe::{is_integer, is_signed_integer, is_truthy_type, type_to_string};
@@ -1194,68 +1194,107 @@ impl<'ctx> LlvmBackend<'ctx> {
     ) -> Result<(), String> {
         let result_type = self.value_type(lhs)?;
 
-        if matches!(self.value_type(lhs)?, Type::Ptr(_)) && is_integer(&self.value_type(rhs)?) {
+        if matches!(result_type, Type::Ptr(_)) && is_integer(&self.value_type(rhs)?) {
             return self.compile_pointer_arithmetic(dst, op, lhs, rhs);
         }
 
-        if !is_integer(&result_type) {
+        if !is_integer(&result_type) && !is_decimal(&result_type) {
             return Err(format!(
-                "ICE: non-integer type {} reached integer binary operation",
+                "ICE: non-numeric type {} reached binary maths operation",
                 type_to_string(&result_type)
             ));
         }
 
-        let lhs_value = self.llvm_value(lhs)?.into_int_value();
-        let rhs_value = self.llvm_value(rhs)?.into_int_value();
+        let result = if is_integer(&result_type) {
+            let lhs_value = self.llvm_value(lhs)?.into_int_value();
+            let rhs_value = self.llvm_value(rhs)?.into_int_value();
 
-        let result = match op {
-            IrOp::Add => self
-                .builder
-                .build_int_add(lhs_value, rhs_value, dst)
-                .map_err(|err| err.to_string())?
-                .into(),
+            match op {
+                IrOp::Add => self
+                    .builder
+                    .build_int_add(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
 
-            IrOp::Sub => self
-                .builder
-                .build_int_sub(lhs_value, rhs_value, dst)
-                .map_err(|err| err.to_string())?
-                .into(),
+                IrOp::Sub => self
+                    .builder
+                    .build_int_sub(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
 
-            IrOp::Mul => self
-                .builder
-                .build_int_mul(lhs_value, rhs_value, dst)
-                .map_err(|err| err.to_string())?
-                .into(),
+                IrOp::Mul => self
+                    .builder
+                    .build_int_mul(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
 
-            IrOp::Div => {
-                if is_signed_integer(&result_type) {
-                    self.builder
-                        .build_int_signed_div(lhs_value, rhs_value, dst)
-                        .map_err(|err| err.to_string())?
-                        .into()
-                } else {
-                    self.builder
-                        .build_int_unsigned_div(lhs_value, rhs_value, dst)
-                        .map_err(|err| err.to_string())?
-                        .into()
+                IrOp::Div => {
+                    if is_signed_integer(&result_type) {
+                        self.builder
+                            .build_int_signed_div(lhs_value, rhs_value, dst)
+                            .map_err(|err| err.to_string())?
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_unsigned_div(lhs_value, rhs_value, dst)
+                            .map_err(|err| err.to_string())?
+                            .into()
+                    }
                 }
-            }
 
-            IrOp::Mod => {
-                if is_signed_integer(&result_type) {
-                    self.builder
-                        .build_int_signed_rem(lhs_value, rhs_value, dst)
-                        .map_err(|err| err.to_string())?
-                        .into()
-                } else {
-                    self.builder
-                        .build_int_unsigned_rem(lhs_value, rhs_value, dst)
-                        .map_err(|err| err.to_string())?
-                        .into()
+                IrOp::Mod => {
+                    if is_signed_integer(&result_type) {
+                        self.builder
+                            .build_int_signed_rem(lhs_value, rhs_value, dst)
+                            .map_err(|err| err.to_string())?
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_unsigned_rem(lhs_value, rhs_value, dst)
+                            .map_err(|err| err.to_string())?
+                            .into()
+                    }
                 }
-            }
 
-            _ => unreachable!(),
+                _ => unreachable!(),
+            }
+        } else {
+            let lhs_value = self.llvm_value(lhs)?.into_float_value();
+            let rhs_value = self.llvm_value(rhs)?.into_float_value();
+
+            match op {
+                IrOp::Add => self
+                    .builder
+                    .build_float_add(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
+
+                IrOp::Sub => self
+                    .builder
+                    .build_float_sub(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
+
+                IrOp::Mul => self
+                    .builder
+                    .build_float_mul(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
+
+                IrOp::Div => self
+                    .builder
+                    .build_float_div(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
+
+                IrOp::Mod => self
+                    .builder
+                    .build_float_rem(lhs_value, rhs_value, dst)
+                    .map_err(|err| err.to_string())?
+                    .into(),
+
+                _ => unreachable!(),
+            }
         };
 
         self.temps.insert(dst.to_string(), result);
@@ -1263,7 +1302,6 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         Ok(())
     }
-
     fn compile_pointer_arithmetic(
         &mut self,
         dst: &str,

@@ -1025,6 +1025,11 @@ impl Analyser {
                         }
                     }
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                        let is_float_op =
+                            matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div);
+                        let is_float_pair = matches!(left_type, Type::Float | Type::Double)
+                            && matches!(right_type, Type::Float | Type::Double);
+
                         if is_integer(&left_type) && is_integer(&right_type) {
                             if types_equal(&left_type, &right_type) {
                                 Ok(left_type)
@@ -1038,12 +1043,31 @@ impl Analyser {
                                     ),
                                 ))
                             }
+                        } else if is_float_op && is_float_pair {
+                            if types_equal(&left_type, &right_type) {
+                                Ok(left_type)
+                            } else {
+                                Err(AnalyserError::type_error(
+                                    expr.span.clone(),
+                                    format!(
+                                        "Mixed-type float arithmetic ('{}' and '{}') is not allowed — cast one side explicitly",
+                                        type_to_string(&left_type),
+                                        type_to_string(&right_type)
+                                    ),
+                                ))
+                            }
                         } else {
+                            let expected = if matches!(op, BinaryOp::Mod) {
+                                "integers"
+                            } else {
+                                "integers or floats of the same type"
+                            };
                             Err(AnalyserError::type_error(
                                 expr.span.clone(),
                                 format!(
-                                    "Operator '{:?}' expects integers, but found '{}' and '{}'",
+                                    "Operator '{:?}' expects {}, but found '{}' and '{}'",
                                     op,
+                                    expected,
                                     type_to_string(&left_type),
                                     type_to_string(&right_type)
                                 ),

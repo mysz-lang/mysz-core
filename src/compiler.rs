@@ -1,4 +1,3 @@
-use crate::backend::clback;
 use crate::backend::llvmback::LlvmBackend;
 use crate::ir::irgen::IRGen;
 use crate::ir::tac::Instruction;
@@ -8,10 +7,8 @@ use crate::parse::parsing::{Expr, ExprKind, Identifier, Literal, Parameter, Prog
 use crate::semantics::analyser::{Analyser, AnalyserError};
 use crate::semantics::analysis::FunctionSignature;
 use crate::utils::ats::{ATEntry, ATFile, ATInfo, ExportInfo, ImportInfo, ParsedAT, SymbolType};
-use crate::utils::ctx::{CompilerCtx, CompilerTarget};
+use crate::utils::ctx::CompilerCtx;
 use clap::builder::OsStr;
-use cranelift::codegen::Context as clContext;
-use cranelift_frontend::FunctionBuilderContext as clFunctionBuilderContext;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context as inkContext;
 use inkwell::targets::{
@@ -20,7 +17,7 @@ use inkwell::targets::{
 use serde_derive::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -1227,14 +1224,7 @@ pub fn compile_at_graph<'a, P: AsRef<Path>>(
     };
 
     let root = &ats[entry.info].entry_file;
-    compile_ast_program(
-        &program,
-        output_filename,
-        &sources,
-        root,
-        ctx.output_json,
-        &ctx.target,
-    )
+    compile_ast_program(&program, output_filename, &sources, root, ctx.output_json)
 }
 
 fn resolve_imports(
@@ -1313,7 +1303,6 @@ pub fn compile_ast_program(
     sources: &SourceMap,
     file_path: &Path,
     json_output: bool,
-    target: &CompilerTarget,
 ) -> Result<(), String> {
     let root_source = sources
         .get(&file_path.display().to_string())
@@ -1428,91 +1417,14 @@ pub fn compile_ast_program(
         }
     }
 
-    match target {
-        CompilerTarget::Cranelift => compile_with_cranelift(
-            irgen,
-            analyser.functions.clone(),
-            tac_instructions,
-            public_functions,
-            file_path,
-            output_filename,
-        ),
-
-        CompilerTarget::Llvm => compile_with_llvm(
-            irgen,
-            analyser.functions.clone(),
-            tac_instructions,
-            public_functions,
-            file_path,
-            output_filename,
-        ),
-    }
-}
-
-fn compile_with_cranelift(
-    irgen: IRGen,
-    functions: HashMap<String, FunctionSignature>,
-    tac_instructions: Vec<Instruction>,
-    public_functions: HashSet<String>,
-    file_path: &Path,
-    output_filename: &str,
-) -> Result<(), String> {
-    let mut unique_function_names = HashSet::new();
-
-    for inst in &tac_instructions {
-        if let Instruction::FunctionLabel(name) = inst {
-            unique_function_names.insert(name.clone());
-        }
-    }
-
-    let mut backend = clback::CraneliftBackend::new(irgen.struct_defs, functions);
-
-    backend.register_defined_functions(unique_function_names.iter().cloned());
-
-    backend.scan_externs(&tac_instructions);
-
-    let instruction_refs: Vec<&Instruction> = tac_instructions.iter().collect();
-
-    backend.pre_declare_strings(&instruction_refs);
-
-    for func_name in unique_function_names {
-        let is_public = public_functions.contains(&func_name);
-
-        let func_instructions: Vec<&Instruction> = tac_instructions
-            .iter()
-            .skip_while(|inst| {
-                !matches!(
-                    inst,
-                    Instruction::FunctionLabel(name)
-                        if name == &func_name
-                )
-            })
-            .skip(1)
-            .take_while(|inst| !matches!(inst, Instruction::FunctionLabel(_)))
-            .collect();
-
-        if !func_instructions.is_empty() {
-            let mut ctx = clContext::new();
-            let mut func_ctx = clFunctionBuilderContext::new();
-
-            backend.compile_function(
-                &func_name,
-                is_public,
-                &func_instructions,
-                &mut ctx,
-                &mut func_ctx,
-                &irgen.var_types,
-            );
-        }
-    }
-
-    let product = backend.finish();
-
-    let emit_result = product.emit().map_err(|e| {
-        format_simple_error(file_path, &format!("Failed to emit object code: {}", e))
-    })?;
-
-    write_output_file(file_path, output_filename, &emit_result)
+    compile_with_llvm(
+        irgen,
+        analyser.functions.clone(),
+        tac_instructions,
+        public_functions,
+        file_path,
+        output_filename,
+    )
 }
 
 fn is_generic_type(ty: &Type) -> bool {
@@ -1585,27 +1497,6 @@ fn compile_with_llvm(
             Path::new(&output_filename),
         )
         .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-fn write_output_file(file_path: &Path, output_filename: &str, bytes: &[u8]) -> Result<(), String> {
-    let mut file = File::create(output_filename).map_err(|e| {
-        format_simple_error(
-            file_path,
-            &format!("Failed to create output file '{}': {}", output_filename, e),
-        )
-    })?;
-
-    file.write_all(bytes).map_err(|e| {
-        format_simple_error(
-            file_path,
-            &format!(
-                "Failed to write to output file '{}': {}",
-                output_filename, e
-            ),
-        )
-    })?;
 
     Ok(())
 }

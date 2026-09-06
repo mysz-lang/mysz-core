@@ -32,11 +32,10 @@ fn main() {
         input_path: "./interntest/main.mysz",
         search_paths: &["./interntest".into()],
         output_json: false,
-        target: crate::utils::ctx::CompilerTarget::Cranelift,
     };
     let res = compile_at_graph(&ctx, &ats, &entry, "./interntest/main.o");
 
-    if let Err(e) = res {
+    if let Err(e) = res.clone() {
         eprintln!("Compilation error: {}", e);
     } else {
         println!("Compilation successful!");

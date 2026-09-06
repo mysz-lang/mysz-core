@@ -1132,43 +1132,43 @@ impl IRGen {
                 let from_type = self.expr_type(left).unwrap_or(Type::Int);
                 let to_type = self.resolve_type(right);
 
-let cast_kind = match (&from_type, &to_type) {
-    (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
+                let cast_kind = match (&from_type, &to_type) {
+                    (Type::Ptr(_), Type::Ptr(_)) => CastType::BitCast,
 
-    (Type::Ptr(_), Type::Str) => CastType::BitCast,
+                    (Type::Ptr(_), Type::Str) => CastType::BitCast,
 
-    (
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
-    ) => {
-        let from_size = self.type_size(&from_type);
-        let to_size = self.type_size(&to_type);
+                    (
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
+                    ) => {
+                        let from_size = self.type_size(&from_type);
+                        let to_size = self.type_size(&to_type);
 
-        if from_size < to_size {
-            CastType::Extend
-        } else if from_size > to_size {
-            CastType::Truncate
-        } else {
-            CastType::BitCast
-        }
-    }
+                        if from_size < to_size {
+                            CastType::Extend
+                        } else if from_size > to_size {
+                            CastType::Truncate
+                        } else {
+                            CastType::BitCast
+                        }
+                    }
 
-    (Type::Float, Type::Double) => CastType::FloatExtend,
+                    (Type::Float, Type::Double) => CastType::FloatExtend,
 
-    (Type::Double, Type::Float) => CastType::FloatTruncate,
+                    (Type::Double, Type::Float) => CastType::FloatTruncate,
 
-    (
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
-        Type::Float | Type::Double,
-    ) => CastType::IntToFloat,
+                    (
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                        Type::Float | Type::Double,
+                    ) => CastType::IntToFloat,
 
-    (
-        Type::Float | Type::Double,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
-    ) => CastType::FloatToInt,
+                    (
+                        Type::Float | Type::Double,
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8,
+                    ) => CastType::FloatToInt,
 
-    _ => CastType::BitCast,
-};
+                    _ => CastType::BitCast,
+                };
 
                 let result_temp = self.next_temp_with_type(to_type.clone());
 

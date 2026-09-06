@@ -1758,7 +1758,6 @@ impl CraneliftBackend {
                                     Value::Double(d) => builder.ins().f64const(*d),
                                     Value::Char(c) => builder.ins().iconst(clif_ty, *c as i64),
                                     Value::Nil => builder.ins().iconst(clif_ty, 0),
-                                    _ => panic!("Primitive unexpected literal type matching"),
                                 };
                                 builder.ins().return_(&[val]);
                             }
