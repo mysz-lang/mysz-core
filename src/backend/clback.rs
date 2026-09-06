@@ -1748,6 +1748,16 @@ impl CraneliftBackend {
                                         builder.use_var(v)
                                     }
                                     Value::Void => builder.ins().iconst(clif_ty, 0),
+                                    Value::Str(s) => {
+                                        let data_id = self.declare_string_literal(s);
+                                        let local_id =
+                                            self.module.declare_data_in_func(data_id, builder.func);
+                                        builder.ins().global_value(ptr_type, local_id)
+                                    }
+                                    Value::Float(f) => builder.ins().f32const(*f),
+                                    Value::Double(d) => builder.ins().f64const(*d),
+                                    Value::Char(c) => builder.ins().iconst(clif_ty, *c as i64),
+                                    Value::Nil => builder.ins().iconst(clif_ty, 0),
                                     _ => panic!("Primitive unexpected literal type matching"),
                                 };
                                 builder.ins().return_(&[val]);
