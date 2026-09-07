@@ -979,6 +979,7 @@ impl IRGen {
             self.code.push(Instruction::Call {
                 dest: Some(dst.clone()),
                 name: resolved_func_name,
+                generic_args: generic_args.into(),
                 argc: arg_values.len(),
             });
             Some(Value::Temp(dst))
@@ -986,6 +987,7 @@ impl IRGen {
             self.code.push(Instruction::Call {
                 dest: None,
                 name: resolved_func_name,
+                generic_args: generic_args.into(),
                 argc: arg_values.len(),
             });
             None
@@ -1590,21 +1592,6 @@ impl IRGen {
             ExprKind::Binary { left, op, right } => {
                 let lhs = self.gen_expr(left, None);
                 let rhs = self.gen_expr(right, None);
-
-                if matches!(op, BinaryOp::Add)
-                    && (self.is_string_valued(&lhs) || self.expr_type(left) == Some(Type::Str))
-                    && (self.is_string_valued(&rhs) || self.expr_type(right) == Some(Type::Str))
-                {
-                    self.code.push(Instruction::Arg { value: lhs });
-                    self.code.push(Instruction::Arg { value: rhs });
-                    let dst = self.next_temp_with_type(Type::Str);
-                    self.code.push(Instruction::Call {
-                        dest: Some(dst.clone()),
-                        name: "str_concat".to_string(),
-                        argc: 2,
-                    });
-                    return Value::Temp(dst);
-                }
 
                 let ir_op = match op {
                     BinaryOp::Add => IrOp::Add,
@@ -2536,11 +2523,17 @@ impl IRGen {
                 Instruction::FunctionLabel(label) => println!("{label}:"),
                 Instruction::Return { value } => println!("return {:?}", value),
                 Instruction::Arg { value } => println!("arg {:?}", value),
-                Instruction::Call { dest, name, argc } => println!(
-                    "call {:?} @ {:?} [arg_count: {}]",
+                Instruction::Call {
+                    dest,
+                    name,
+                    generic_args,
+                    argc,
+                } => println!(
+                    "call {:?} @ {:?} [arg_count: {}, generics: {:?}]",
                     name,
                     dest.clone().unwrap_or("n/a".to_string()),
-                    argc
+                    argc,
+                    generic_args
                 ),
                 Instruction::Extern { fnname } => println!("extern {}", fnname),
                 Instruction::Store { ptr, source } => println!("store {:?} to *{:?}", source, ptr),

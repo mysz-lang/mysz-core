@@ -17,7 +17,7 @@ use crate::{
     },
     parse::parsing::Type,
     semantics::analysis::FunctionSignature,
-    utils::typesafe::{is_decimal, types_equal},
+    utils::typesafe::{is_decimal, mangle_name, types_equal},
 };
 
 use crate::utils::typesafe::{is_integer, is_signed_integer, is_truthy_type, type_to_string};
@@ -725,7 +725,12 @@ impl<'ctx> LlvmBackend<'ctx> {
             Instruction::JumpIfFalse { cond, target } => self.compile_jumpiffalse(cond, target),
             Instruction::Extern { .. } => Ok(()),
             Instruction::Arg { value } => self.compile_arg(value),
-            Instruction::Call { dest, name, argc } => self.compile_call(dest, name, *argc),
+            Instruction::Call {
+                dest,
+                name,
+                generic_args,
+                argc,
+            } => self.compile_call(dest, name, generic_args, *argc),
             Instruction::Param { p } => self.compile_param(p),
             Instruction::Unary { dst, op, value } => self.compile_unary(dst, op, value),
             Instruction::Load { dst, ptr, ty } => self.compile_load(dst, ptr, ty),
@@ -924,8 +929,10 @@ impl<'ctx> LlvmBackend<'ctx> {
         &mut self,
         dest: &Option<String>,
         name: &str,
+        generic_args: &Vec<Type>,
         argc: usize,
     ) -> Result<(), String> {
+        // The LLVM function itself keeps its unmangled name.
         let function = self
             .functions
             .get(name)
@@ -942,6 +949,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         let split_at = self.pending_args.len() - argc;
+
         let args: Vec<inkwell::values::BasicMetadataValueEnum> = self
             .pending_args
             .split_off(split_at)
@@ -950,6 +958,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             .collect();
 
         let call_name = dest.as_deref().unwrap_or("");
+
         let call_site = self
             .builder
             .build_call(function, &args, call_name)
@@ -960,10 +969,19 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .try_as_basic_value()
                 .basic()
                 .ok_or_else(|| format!("call to '{}' used as a value but returns void", name))?;
+
+            // The actual LLVM symbol remains unmangled, but the compiler
+            // signature is looked up using the concrete generic instantiation.
+            let sig_name = if generic_args.is_empty() {
+                name.to_string()
+            } else {
+                mangle_name(name, generic_args)
+            };
+
             let sig = self
                 .func_defs
-                .get(name)
-                .ok_or_else(|| format!("unknown function signature '{}'", name))?;
+                .get(&sig_name)
+                .ok_or_else(|| format!("unknown function signature '{}'", sig_name))?;
 
             self.temps.insert(dst.clone(), ret_val);
             self.temp_types.insert(dst.clone(), sig.return_type.clone());
@@ -1147,6 +1165,17 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         if matches!(&from_type, Type::Ptr(inner) if matches!(inner.as_ref(), Type::Char))
             && matches!(to_type, Type::Str)
+        {
+            let value = self.llvm_value(value)?.into_pointer_value();
+
+            self.temps.insert(dst.to_string(), value.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+
+            return Ok(());
+        }
+
+        if matches!(&from_type, Type::Str)
+            && matches!(to_type, Type::Ptr(inner) if matches!(inner.as_ref(), Type::Char))
         {
             let value = self.llvm_value(value)?.into_pointer_value();
 

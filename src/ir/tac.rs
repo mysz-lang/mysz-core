@@ -104,6 +104,7 @@ pub enum Instruction {
     Call {
         dest: Option<String>,
         name: String,
+        generic_args: Vec<Type>,
         argc: usize,
     },
 
