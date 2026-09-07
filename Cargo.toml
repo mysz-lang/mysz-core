@@ -1,6 +1,6 @@
 [package]
 name = "mysz-core"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 license = "Apache-2.0"
 description = "The main compiler for the Mysz language project"
@@ -11,12 +11,6 @@ categories = ["compilers", "parser-implementations"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-cranelift = "0.105.0"
-cranelift-codegen = "0.105.0"
-cranelift-frontend = "0.105.0"
-cranelift-module = "0.105.0"
-cranelift-object = "0.105.0"
-cranelift-native = "0.105.0"
 target-lexicon = "0.12"
 regex = "1.10"
 serde = "1.0.228"

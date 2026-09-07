@@ -98,6 +98,8 @@ pub struct IRGen {
     pub deferred_instantiations: Vec<(String, Vec<Type>, Vec<Type>)>, // (callee_name, generic_args, variadic_arg_types)
     pub current_substitutions: HashMap<String, Type>,
 
+    pub externs: Vec<String>,
+
     pub var_aliases: Vec<HashMap<String, String>>,
 }
 
@@ -122,6 +124,8 @@ impl IRGen {
             instantiated_fns: std::collections::HashSet::new(),
             deferred_instantiations: Vec::new(),
             current_substitutions: HashMap::new(),
+
+            externs: Vec::new(),
 
             var_aliases: vec![HashMap::new()],
         }
@@ -714,10 +718,6 @@ impl IRGen {
         Value::Temp(temp)
     }
 
-    fn is_string_valued(&self, value: &Value) -> bool {
-        matches!(value, Value::Str(_))
-    }
-
     pub fn expr_type(&mut self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
             ExprKind::Cast { left: _, right } => Some(right.clone()),
@@ -875,7 +875,7 @@ impl IRGen {
             variadic_values.push(v);
         }
 
-        let resolved_func_name = if blueprint.is_some() {
+        let resolved_func_name = if !generic_args.is_empty() {
             self.mangle_call_name(
                 &callee.value,
                 &substituted_generic_args,
@@ -968,28 +968,50 @@ impl IRGen {
             }
         }
 
-        let return_ty = self
-            .var_types
-            .get(&resolved_func_name)
-            .cloned()
-            .unwrap_or(Type::Int);
+        let return_ty = if let Some(Stmt::Function { rttype, .. }) = &blueprint {
+            let substitutions: HashMap<String, Type> = generic_params
+                .iter()
+                .cloned()
+                .zip(substituted_generic_args.iter().cloned())
+                .collect();
+
+            let unres_ty = rttype.clone().unwrap_or(Type::Void);
+            let sub_ty = self.substitute_type(&unres_ty, &substitutions);
+
+            let old_subs = self.current_substitutions.clone();
+            self.current_substitutions = substitutions;
+
+            let resolved = self.resolve_type(&sub_ty);
+
+            self.current_substitutions = old_subs;
+
+            resolved
+        } else {
+            self.var_types
+                .get(&resolved_func_name)
+                .cloned()
+                .unwrap_or(Type::Int)
+        };
 
         if want_result {
             let dst = self.next_temp_with_type(return_ty);
+
             self.code.push(Instruction::Call {
                 dest: Some(dst.clone()),
-                name: resolved_func_name,
-                generic_args: generic_args.into(),
+                name: callee.value.clone(),
+                signature: resolved_func_name,
                 argc: arg_values.len(),
             });
+
             Some(Value::Temp(dst))
         } else {
             self.code.push(Instruction::Call {
                 dest: None,
-                name: resolved_func_name,
-                generic_args: generic_args.into(),
+                name: callee.value.clone(),
+                signature: resolved_func_name,
                 argc: arg_values.len(),
             });
+
             None
         }
     }
@@ -2225,10 +2247,12 @@ impl IRGen {
                 }
             }
             Stmt::Extern { name, rttype, .. } => {
+                let name = name.value.clone();
                 let return_type = rttype.clone().unwrap_or(Type::Void);
-                self.var_types.insert(name.value.clone(), return_type);
+                self.var_types.insert(name.clone(), return_type);
+                self.externs.push(name.clone());
                 self.code.push(Instruction::Extern {
-                    fnname: name.value.clone(),
+                    fnname: name.clone(),
                 });
             }
             Stmt::DerefReassignment { target, expr } => {
@@ -2526,14 +2550,14 @@ impl IRGen {
                 Instruction::Call {
                     dest,
                     name,
-                    generic_args,
+                    signature,
                     argc,
                 } => println!(
-                    "call {:?} @ {:?} [arg_count: {}, generics: {:?}]",
+                    "call {:?} @ {:?} [arg_count: {}, realised_as: {:?}]",
                     name,
                     dest.clone().unwrap_or("n/a".to_string()),
                     argc,
-                    generic_args
+                    signature
                 ),
                 Instruction::Extern { fnname } => println!("extern {}", fnname),
                 Instruction::Store { ptr, source } => println!("store {:?} to *{:?}", source, ptr),

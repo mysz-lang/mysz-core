@@ -17,7 +17,7 @@ use crate::{
     },
     parse::parsing::Type,
     semantics::analysis::FunctionSignature,
-    utils::typesafe::{is_decimal, mangle_name, types_equal},
+    utils::typesafe::{is_decimal, types_equal},
 };
 
 use crate::utils::typesafe::{is_integer, is_signed_integer, is_truthy_type, type_to_string};
@@ -42,6 +42,8 @@ pub struct LlvmBackend<'ctx> {
     struct_defs: HashMap<String, StructLayout>,
     func_defs: HashMap<String, FunctionSignature>,
 
+    externs: Vec<String>,
+
     next_block_id: usize,
 }
 
@@ -53,6 +55,7 @@ impl<'ctx> LlvmBackend<'ctx> {
         var_types: ScopedMap,
         struct_defs: HashMap<String, StructLayout>,
         func_defs: HashMap<String, FunctionSignature>,
+        externs: Vec<String>,
     ) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
@@ -76,6 +79,8 @@ impl<'ctx> LlvmBackend<'ctx> {
             var_types,
             struct_defs,
             func_defs,
+
+            externs,
 
             next_block_id: 0,
         }
@@ -728,9 +733,9 @@ impl<'ctx> LlvmBackend<'ctx> {
             Instruction::Call {
                 dest,
                 name,
-                generic_args,
+                signature,
                 argc,
-            } => self.compile_call(dest, name, generic_args, *argc),
+            } => self.compile_call(dest, name, signature, *argc),
             Instruction::Param { p } => self.compile_param(p),
             Instruction::Unary { dst, op, value } => self.compile_unary(dst, op, value),
             Instruction::Load { dst, ptr, ty } => self.compile_load(dst, ptr, ty),
@@ -929,15 +934,15 @@ impl<'ctx> LlvmBackend<'ctx> {
         &mut self,
         dest: &Option<String>,
         name: &str,
-        generic_args: &Vec<Type>,
+        signature: &str,
         argc: usize,
     ) -> Result<(), String> {
-        // The LLVM function itself keeps its unmangled name.
         let function = self
             .functions
-            .get(name)
+            .get(signature)
+            .or_else(|| self.functions.get(name))
             .copied()
-            .ok_or_else(|| format!("unknown function '{}'", name))?;
+            .ok_or_else(|| format!("unknown function '{}' (signature '{}')", name, signature))?;
 
         if self.pending_args.len() < argc {
             return Err(format!(
@@ -970,18 +975,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .basic()
                 .ok_or_else(|| format!("call to '{}' used as a value but returns void", name))?;
 
-            // The actual LLVM symbol remains unmangled, but the compiler
-            // signature is looked up using the concrete generic instantiation.
-            let sig_name = if generic_args.is_empty() {
-                name.to_string()
-            } else {
-                mangle_name(name, generic_args)
-            };
-
             let sig = self
                 .func_defs
-                .get(&sig_name)
-                .ok_or_else(|| format!("unknown function signature '{}'", sig_name))?;
+                .get(signature)
+                .ok_or_else(|| format!("unknown function signature '{}'", signature))?;
 
             self.temps.insert(dst.clone(), ret_val);
             self.temp_types.insert(dst.clone(), sig.return_type.clone());
@@ -1741,7 +1738,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 })
                 .unwrap_or(Linkage::Internal);
 
-            let function = self.module.add_function(&name, fn_type, Some(linkage));
+            let llvm_name = self
+                .externs
+                .iter()
+                .find(|ext| name == **ext || name.starts_with(&format!("{}__", ext)))
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+
+            let function = if let Some(function) = self.module.get_function(&llvm_name) {
+                function
+            } else {
+                self.module.add_function(&llvm_name, fn_type, Some(linkage))
+            };
 
             self.functions.insert(name, function);
         }
@@ -1765,7 +1773,18 @@ impl<'ctx> LlvmBackend<'ctx> {
                 ty => self.llvm_type(ty).fn_type(&param_types, sig.is_variadic),
             };
 
-            let function = self.module.add_function(name, fn_type, None);
+            let llvm_name = self
+                .externs
+                .iter()
+                .find(|ext| name == *ext || name.starts_with(&format!("{}__", ext)))
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+
+            let function = if let Some(function) = self.module.get_function(&llvm_name) {
+                function
+            } else {
+                self.module.add_function(&llvm_name, fn_type, None)
+            };
 
             self.functions.insert(name.clone(), function);
         }
@@ -1790,6 +1809,7 @@ mod tests {
             ScopedMap::new(HashMap::new()),
             HashMap::new(),
             HashMap::new(),
+            Vec::new(),
         );
 
         let function = backend.module.add_function(

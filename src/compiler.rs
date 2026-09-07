@@ -1469,6 +1469,7 @@ fn compile_with_llvm(
         irgen.var_types,
         irgen.struct_defs,
         concrete_functions,
+        irgen.externs,
     );
 
     backend.compile(&tac_instructions)?;
