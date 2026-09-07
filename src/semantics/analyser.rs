@@ -5,7 +5,7 @@ use crate::semantics::analysis::{
     EnumSignature, FunctionSignature, Scope, StructSignature, Symbol,
 };
 use crate::utils::location::Location;
-use crate::utils::typesafe::{self, *};
+use crate::utils::typesafe::*;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -57,6 +57,7 @@ pub struct Analyser {
     current_return_type: Option<Type>,
     loop_depth: usize,
     pub current_generic_params: Vec<String>,
+    pub current_substitutions: HashMap<String, Type>,
 }
 
 impl Analyser {
@@ -75,6 +76,7 @@ impl Analyser {
             current_return_type: None,
             loop_depth: 0,
             current_generic_params: Vec::new(),
+            current_substitutions: HashMap::new(),
         }
     }
 
@@ -727,7 +729,7 @@ impl Analyser {
                 generic_args,
                 args,
             } => {
-                let template = self
+                let template: FunctionSignature = self
                     .resolve_function(&callee.value)
                     .ok_or_else(|| {
                         AnalyserError::semantic_error(
@@ -755,7 +757,16 @@ impl Analyser {
                     let mut inst_args = Vec::new();
 
                     for g_arg in generic_args {
-                        inst_args.push(self.instantiate_generic_types(g_arg, &callee.location)?);
+                        let instantiated =
+                            self.instantiate_generic_types(g_arg, &callee.location)?;
+
+                        let substituted =
+                            self.substitute_type(&instantiated, &self.current_substitutions);
+
+                        let fully_resolved =
+                            self.instantiate_generic_types(&substituted, &callee.location)?;
+
+                        inst_args.push(fully_resolved);
                     }
 
                     resolved_func_name = mangle_name(&callee.value, &inst_args);
@@ -767,6 +778,7 @@ impl Analyser {
                             template.generic_params.iter().zip(&inst_args)
                         {
                             mapping.insert(param_name.clone(), concrete_type.clone());
+
                             mapping
                                 .insert(format!("gparam__{}", param_name), concrete_type.clone());
                         }
@@ -792,14 +804,59 @@ impl Analyser {
                             resolved_func_name.clone(),
                             FunctionSignature {
                                 generic_params: Vec::new(),
-                                param_types: fresh_params,
+                                param_types: fresh_params.clone(),
                                 public: template.public,
                                 is_variadic: template.is_variadic,
                                 variadic_param_name: template.variadic_param_name.clone(),
-                                return_type: fresh_return,
+                                return_type: fresh_return.clone(),
                                 location: template.location.clone(),
                             },
                         );
+
+                        if let Some((params, body)) =
+                            self.function_bodies.get(&callee.value).cloned()
+                        {
+                            let previous_substitutions =
+                                std::mem::replace(&mut self.current_substitutions, mapping);
+
+                            self.enter_scope();
+
+                            for (param, param_type) in params
+                                .iter()
+                                .filter(|p| !p.is_variadic)
+                                .zip(fresh_params.iter())
+                            {
+                                self.declare_variable(
+                                    &param.name.value,
+                                    param_type.clone(),
+                                    param.name.location.clone(),
+                                )?;
+                            }
+
+                            if let Some(variadic_param) = params.iter().find(|p| p.is_variadic) {
+                                self.declare_variable(
+                                    &variadic_param.name.value,
+                                    Type::VariadicPack {
+                                        name: variadic_param.name.value.clone(),
+                                        types: Vec::new(),
+                                    },
+                                    variadic_param.name.location.clone(),
+                                )?;
+                            }
+
+                            let previous_return_type =
+                                self.current_return_type.replace(fresh_return.clone());
+
+                            for stmt in &body {
+                                self.check_stmt(stmt, TypeCheckMode::Strict)?;
+                            }
+
+                            self.current_return_type = previous_return_type;
+
+                            self.leave_scope();
+
+                            self.current_substitutions = previous_substitutions;
+                        }
                     }
                 }
 
@@ -910,7 +967,6 @@ impl Analyser {
 
                 if sig.is_variadic {
                     let variadic_args = &args[fixed_arg_count..];
-
                     let mut variadic_types = Vec::new();
 
                     for arg in variadic_args {
@@ -926,9 +982,7 @@ impl Analyser {
                             FunctionSignature {
                                 generic_params: Vec::new(),
                                 param_types: param_types.clone(),
-
                                 public: sig.public,
-
                                 is_variadic: true,
                                 variadic_param_name: sig.variadic_param_name.clone(),
                                 return_type: return_type.clone(),
@@ -968,6 +1022,7 @@ impl Analyser {
 
                                 fixed_index += 1;
                             }
+
                             self.declare_variable(
                                 variadic_name,
                                 Type::VariadicPack {
@@ -988,7 +1043,6 @@ impl Analyser {
 
                 Ok(return_type)
             }
-
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;
@@ -1510,13 +1564,12 @@ impl Analyser {
                     return Ok(());
                 }
 
-                let elements = typesafe::iterable_elements(&target_type, &self.structs)
-                    .ok_or_else(|| {
-                        AnalyserError::type_error(
-                            target_expr.span.clone(),
-                            format!("Type '{}' is not iterable.", type_to_string(&target_type)),
-                        )
-                    })?;
+                let elements = iterable_elements(&target_type, &self.structs).ok_or_else(|| {
+                    AnalyserError::type_error(
+                        target_expr.span.clone(),
+                        format!("Type '{}' is not iterable.", type_to_string(&target_type)),
+                    )
+                })?;
 
                 self.enter_scope();
 
