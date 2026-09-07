@@ -1200,15 +1200,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Ok(());
         }
 
-        if matches!(from_type, Type::Nil) {
-            let llvm_to_type = self.llvm_type(to_type).into_pointer_type();
-            let result = llvm_to_type.const_null();
-
-            self.temps.insert(dst.to_string(), result.into());
-            self.temp_types.insert(dst.to_string(), to_type.clone());
-            return Ok(());
-        }
-
         Err(format!(
             "ICE: unsupported cast from {} to {}",
             type_to_string(&from_type),
