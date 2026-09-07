@@ -1,13 +1,7 @@
 use std::collections::HashMap;
 
 use inkwell::{
-    IntPredicate,
-    basic_block::BasicBlock,
-    builder::Builder,
-    context::Context,
-    module::{Linkage, Module},
-    types::{BasicType, BasicTypeEnum, StructType},
-    values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
+    FloatPredicate, IntPredicate, basic_block::BasicBlock, builder::Builder, context::Context, module::{Linkage, Module}, types::{BasicType, BasicTypeEnum, StructType}, values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
 
 use crate::{
@@ -1398,123 +1392,170 @@ impl<'ctx> LlvmBackend<'ctx> {
         Ok(())
     }
 
-    fn compile_binary_comparison(
-        &mut self,
-        dst: &str,
-        op: &IrOp,
-        lhs: &Value,
-        rhs: &Value,
-    ) -> Result<(), String> {
-        let result_type = self.value_type(lhs)?;
+fn compile_binary_comparison(
+    &mut self,
+    dst: &str,
+    op: &IrOp,
+    lhs: &Value,
+    rhs: &Value,
+) -> Result<(), String> {
+    let result_type = self.value_type(lhs)?;
+    let rhs_type = self.value_type(rhs)?;
 
-        if !types_equal(&result_type, &self.value_type(rhs)?) {
-            return Err(format!(
-                "cannot compare {} with {}",
-                type_to_string(&result_type),
-                type_to_string(&self.value_type(rhs)?)
-            ));
-        }
+    if !types_equal(&result_type, &rhs_type) {
+        return Err(format!(
+            "cannot compare {} with {}",
+            type_to_string(&result_type),
+            type_to_string(&rhs_type)
+        ));
+    }
 
-        if result_type == Type::Str {
-            let lhs_value = self.llvm_value(lhs)?.into_pointer_value();
-            let rhs_value = self.llvm_value(rhs)?.into_pointer_value();
-
-            let result = match op {
-                IrOp::Eq => self.build_string_eq(lhs_value, rhs_value, dst, false)?,
-                IrOp::NEq => self.build_string_eq(lhs_value, rhs_value, dst, true)?,
-
-                _ => {
-                    return Err(format!("string operation {:?} not implemented", op));
-                }
-            };
-
-            self.temps.insert(dst.to_string(), result.into());
-            self.temp_types.insert(dst.to_string(), Type::Bool);
-
-            return Ok(());
-        }
-
-        if !is_truthy_type(&result_type) {
-            return Err(format!(
-                "ICE: non-truthy type {} reached comparison binary operation",
-                type_to_string(&result_type)
-            ));
-        }
-
-        let lhs_value = self.llvm_value(lhs)?.into_int_value();
-        let rhs_value = self.llvm_value(rhs)?.into_int_value();
+    if result_type == Type::Str {
+        let lhs_value = self.llvm_value(lhs)?.into_pointer_value();
+        let rhs_value = self.llvm_value(rhs)?.into_pointer_value();
 
         let result = match op {
-            IrOp::Eq => self.build_int_compare(IntPredicate::EQ, lhs_value, rhs_value, dst)?,
-
-            IrOp::NEq => self.build_int_compare(IntPredicate::NE, lhs_value, rhs_value, dst)?,
-
-            IrOp::Gt => self.build_int_compare(
-                if is_signed_integer(&result_type) {
-                    IntPredicate::SGT
-                } else {
-                    IntPredicate::UGT
-                },
-                lhs_value,
-                rhs_value,
-                dst,
-            )?,
-
-            IrOp::GtE => self.build_int_compare(
-                if is_signed_integer(&result_type) {
-                    IntPredicate::SGE
-                } else {
-                    IntPredicate::UGE
-                },
-                lhs_value,
-                rhs_value,
-                dst,
-            )?,
-
-            IrOp::Lt => self.build_int_compare(
-                if is_signed_integer(&result_type) {
-                    IntPredicate::SLT
-                } else {
-                    IntPredicate::ULT
-                },
-                lhs_value,
-                rhs_value,
-                dst,
-            )?,
-
-            IrOp::LtE => self.build_int_compare(
-                if is_signed_integer(&result_type) {
-                    IntPredicate::SLE
-                } else {
-                    IntPredicate::ULE
-                },
-                lhs_value,
-                rhs_value,
-                dst,
-            )?,
-
-            IrOp::And => self
-                .builder
-                .build_and(lhs_value, rhs_value, dst)
-                .map_err(|e| e.to_string())?
-                .into(),
-
-            IrOp::Or => self
-                .builder
-                .build_or(lhs_value, rhs_value, dst)
-                .map_err(|e| e.to_string())?
-                .into(),
-
+            IrOp::Eq => self.build_string_eq(lhs_value, rhs_value, dst, false)?,
+            IrOp::NEq => self.build_string_eq(lhs_value, rhs_value, dst, true)?,
             _ => {
-                return Err(format!("binary operation {:?} not implemented yet", op));
+                return Err(format!(
+                    "string operation {:?} not implemented",
+                    op
+                ));
             }
         };
 
-        self.temps.insert(dst.to_string(), result);
+        self.temps.insert(dst.to_string(), result.into());
         self.temp_types.insert(dst.to_string(), Type::Bool);
 
-        Ok(())
+        return Ok(());
     }
+
+    if is_decimal(&result_type) {
+        let lhs_value = self.llvm_value(lhs)?.into_float_value();
+        let rhs_value = self.llvm_value(rhs)?.into_float_value();
+
+        let predicate = match op {
+            IrOp::Eq => FloatPredicate::OEQ,
+            IrOp::NEq => FloatPredicate::ONE,
+            IrOp::Gt => FloatPredicate::OGT,
+            IrOp::GtE => FloatPredicate::OGE,
+            IrOp::Lt => FloatPredicate::OLT,
+            IrOp::LtE => FloatPredicate::OLE,
+
+            IrOp::And | IrOp::Or => {
+                return Err(format!(
+                    "logical operation {:?} is not valid for floating-point values",
+                    op
+                ));
+            }
+
+            _ => {
+                return Err(format!(
+                    "binary operation {:?} not implemented yet",
+                    op
+                ));
+            }
+        };
+
+        let result = self
+            .builder
+            .build_float_compare(predicate, lhs_value, rhs_value, dst)
+            .map_err(|e| e.to_string())?;
+
+        self.temps.insert(dst.to_string(), result.into());
+        self.temp_types.insert(dst.to_string(), Type::Bool);
+
+        return Ok(());
+    }
+
+    if !is_truthy_type(&result_type) {
+        return Err(format!(
+            "ICE: non-truthy type {} reached comparison binary operation",
+            type_to_string(&result_type)
+        ));
+    }
+
+    let lhs_value = self.llvm_value(lhs)?.into_int_value();
+    let rhs_value = self.llvm_value(rhs)?.into_int_value();
+
+    let result = match op {
+        IrOp::Eq => self.build_int_compare(
+            IntPredicate::EQ,
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::NEq => self.build_int_compare(
+            IntPredicate::NE,
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::Gt => self.build_int_compare(
+            if is_signed_integer(&result_type) {
+                IntPredicate::SGT
+            } else {
+                IntPredicate::UGT
+            },
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::GtE => self.build_int_compare(
+            if is_signed_integer(&result_type) {
+                IntPredicate::SGE
+            } else {
+                IntPredicate::UGE
+            },
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::Lt => self.build_int_compare(
+            if is_signed_integer(&result_type) {
+                IntPredicate::SLT
+            } else {
+                IntPredicate::ULT
+            },
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::LtE => self.build_int_compare(
+            if is_signed_integer(&result_type) {
+                IntPredicate::SLE
+            } else {
+                IntPredicate::ULE
+            },
+            lhs_value,
+            rhs_value,
+            dst,
+        )?,
+        IrOp::And => self
+            .builder
+            .build_and(lhs_value, rhs_value, dst)
+            .map_err(|e| e.to_string())?
+            .into(),
+        IrOp::Or => self
+            .builder
+            .build_or(lhs_value, rhs_value, dst)
+            .map_err(|e| e.to_string())?
+            .into(),
+        _ => {
+            return Err(format!(
+                "binary operation {:?} not implemented yet",
+                op
+            ));
+        }
+    };
+
+    self.temps.insert(dst.to_string(), result);
+    self.temp_types.insert(dst.to_string(), Type::Bool);
+
+    Ok(())
+}
+
     fn compile_assign(&mut self, dst: &str, src: &Value) -> Result<(), String> {
         let dst_ty = self
             .var_types

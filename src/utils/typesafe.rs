@@ -120,6 +120,8 @@ pub fn is_truthy_type(ty: &Type) -> bool {
             | Type::Enum(..)
             | Type::Nil
             | Type::Char
+            | Type::Double
+            | Type::Float
     )
 }
 
