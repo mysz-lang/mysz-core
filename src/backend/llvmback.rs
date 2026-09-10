@@ -1282,7 +1282,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 Type::VariadicPack { .. } => unreachable!(),
             };
 
-            self.temps.insert(dst.to_string(), result.into());
+            self.temps.insert(dst.to_string(), result);
             self.temp_types.insert(dst.to_string(), to_type.clone());
             return Ok(());
         }

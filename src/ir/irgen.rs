@@ -310,7 +310,7 @@ impl IRGen {
 
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&arg.to_string());
+                            mangled_name.push_str(&arg.ttos());
                         }
 
                         mangled_name
@@ -411,14 +411,14 @@ impl IRGen {
         let mut name = base.to_string();
         for arg in generic_args {
             name.push_str("__");
-            name.push_str(&arg.to_string());
+            name.push_str(&arg.ttos());
         }
         if is_variadic_capable {
             name.push('.');
             name.push_str(
                 &variadic_args
                     .iter()
-                    .map(|t| t.to_string())
+                    .map(|t| t.ttos())
                     .collect::<Vec<_>>()
                     .join("__"),
             );
@@ -494,7 +494,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in &resolved_args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&arg.to_string());
+                    mangled_name.push_str(&arg.ttos());
                 }
 
                 if !self.struct_defs.contains_key(&mangled_name)
@@ -622,7 +622,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&arg.to_string());
+                    mangled_name.push_str(&arg.ttos());
                 }
                 self.get_struct_layout(&mangled_name)
                     .map(|l| l.total_size)
@@ -665,7 +665,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&arg.to_string());
+                    mangled_name.push_str(&arg.ttos());
                 }
                 self.get_struct_layout(&mangled_name)
                     .map(|l| l.alignment)
@@ -823,7 +823,7 @@ impl IRGen {
                             let mut mangled_name = name;
                             for arg in args {
                                 mangled_name.push_str("__");
-                                mangled_name.push_str(&arg.to_string());
+                                mangled_name.push_str(&arg.ttos());
                             }
                             Some(mangled_name)
                         }
@@ -1071,7 +1071,7 @@ impl IRGen {
                         let mut mangled_name = name;
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&arg.to_string());
+                            mangled_name.push_str(&arg.ttos());
                         }
                         mangled_name
                     }
@@ -1314,7 +1314,7 @@ impl IRGen {
                         let mut mangled_name = name;
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&arg.to_string());
+                            mangled_name.push_str(&arg.ttos());
                         }
                         mangled_name
                     }
@@ -2306,7 +2306,7 @@ impl IRGen {
                                 let mut mangled_name = name;
                                 for arg in args {
                                     mangled_name.push_str("__");
-                                    mangled_name.push_str(&arg.to_string());
+                                    mangled_name.push_str(&arg.ttos());
                                 }
                                 mangled_name
                             }

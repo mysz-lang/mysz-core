@@ -76,7 +76,7 @@ impl From<&Type> for Type {
 }
 
 impl Type {
-    pub fn to_string(&self) -> String {
+    pub fn ttos(&self) -> String {
         match self {
             Type::Int => "int".to_string(),
             Type::UInt => "uint".to_string(),
@@ -92,15 +92,15 @@ impl Type {
             Type::Nil => "nil".to_string(),
             Type::Struct(name) => name.clone(),
             Type::Enum(name) => name.clone(),
-            Type::Ptr(inner) => format!("ptr__{}", inner.to_string()),
+            Type::Ptr(inner) => format!("ptr__{}", inner.ttos()),
             Type::Array { element_type, size } => {
-                format!("arr__{}__{}", element_type.to_string(), size)
+                format!("arr__{}__{}", element_type.ttos(), size)
             }
             Type::GenericInstance { name, args } => {
                 let mut base = name.clone();
                 for arg in args {
                     base.push_str("__");
-                    base.push_str(&arg.to_string());
+                    base.push_str(&arg.ttos());
                 }
                 base
             }
@@ -119,7 +119,7 @@ pub fn mangle_name(base_name: &str, args: &[Type]) -> String {
     let mut name = base_name.to_string();
     for arg in args {
         name.push_str("__");
-        name.push_str(&arg.to_string());
+        name.push_str(&arg.ttos());
     }
     name
 }
@@ -130,7 +130,7 @@ pub fn mangle_variadic(base_mangled_name: &str, variadic_types: &[Type]) -> Stri
     } else {
         let joined = variadic_types
             .iter()
-            .map(Type::to_string)
+            .map(Type::ttos)
             .collect::<Vec<_>>()
             .join("__");
         format!("{}.{}", base_mangled_name, joined)

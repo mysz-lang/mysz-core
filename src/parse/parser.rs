@@ -199,18 +199,26 @@ impl Parser {
                             },
                         );
                     } else {
-                        let ct: String;
-
-                        if other.is_none() {
-                            ct = "{eof}".to_string();
+                        let ct = if let Some(tk) = other {
+                            format!("{:?}", tk)
                         } else {
-                            ct = format!("{:?}", other.unwrap());
-                        }
+                            "{eof}".to_string()
+                        };
+
+                        let loc = if let Some(location) = possible_location {
+                            location
+                        } else {
+                            Location {
+                                line: 0,
+                                col: 0,
+                                file: Rc::from("nil"),
+                            }
+                        };
 
                         self.throw(
                             ParserErrorType::UnexpectedTokenTypeError,
                             format!("Expected ',' or '>', found {ct}"),
-                            possible_location.unwrap(),
+                            loc,
                         );
 
                         break;
@@ -1433,19 +1441,18 @@ impl Parser {
                             }
                         }
                         _ => {
-                            let tk = self.get_token();
-                            let ct: String;
+                            let possible_tk = self.get_token();
 
-                            if tk.is_none() {
-                                ct = "{eof}".to_string();
+                            let ct = if let Some(tk) = possible_tk {
+                                format!("{:?}", tk.ttype)
                             } else {
-                                ct = format!("{:?}", tk.unwrap().ttype);
-                            }
+                                "{eof}".to_string()
+                            };
 
                             self.throw(
                                 ParserErrorType::UnexpectedTokenTypeError,
                                 format!("Expected '(' or '{{' after generic arguments, found {ct}"),
-                                tk.unwrap().location.clone(),
+                                possible_tk.unwrap().location.clone(),
                             );
                             return None;
                         }
