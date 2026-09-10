@@ -1,52 +1,127 @@
 use std::collections::HashMap;
 
-use crate::{parse::parsing::Type, semantics::analysis::StructSignature};
+use crate::semantics::analysis::StructSignature;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Type {
+    Int,
+    UInt,
+    Int8,
+    UInt8,
+    Double,
+    Float,
+    Bool,
+    Str,
+    Char,
+    Void,
+    Ptr(Box<Type>),
+    Array {
+        element_type: Box<Type>,
+        size: usize,
+    },
+    Struct(String),
+    Enum(String),
+    // Generics
+    GenericInstance {
+        name: String,
+        args: Vec<Type>,
+    },
+    GenericParam(String),
+
+    VariadicPack {
+        name: String,
+        types: Vec<Type>,
+    },
+
+    Any,
+    Nil,
+}
+
+impl From<&str> for Type {
+    fn from(value: &str) -> Self {
+        match value {
+            "int" => Type::Int,
+            "uint" => Type::UInt,
+            "int8" | "i8" => Type::Int8,
+            "uint8" | "u8" => Type::UInt8,
+            "double" => Type::Double,
+            "float" => Type::Float,
+            "bool" => Type::Bool,
+            "str" => Type::Str,
+            "char" => Type::Char,
+            "void" => Type::Void,
+            "any" => Type::Any,
+            "nil" => Type::Nil,
+            _ => Type::Struct(value.to_string()),
+        }
+    }
+}
+
+impl From<String> for Type {
+    fn from(value: String) -> Self {
+        Type::from(value.as_str())
+    }
+}
+
+impl From<&String> for Type {
+    fn from(value: &String) -> Self {
+        Type::from(value.as_str())
+    }
+}
+
+impl From<&Type> for Type {
+    fn from(value: &Type) -> Self {
+        value.clone()
+    }
+}
+
+impl Type {
+    pub fn to_string(&self) -> String {
+        match self {
+            Type::Int => "int".to_string(),
+            Type::UInt => "uint".to_string(),
+            Type::Int8 => "int8".to_string(),
+            Type::UInt8 => "uint8".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Double => "double".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Str => "str".to_string(),
+            Type::Char => "char".to_string(),
+            Type::Void => "void".to_string(),
+            Type::Any => "any".to_string(),
+            Type::Nil => "nil".to_string(),
+            Type::Struct(name) => name.clone(),
+            Type::Enum(name) => name.clone(),
+            Type::Ptr(inner) => format!("ptr__{}", inner.to_string()),
+            Type::Array { element_type, size } => {
+                format!("arr__{}__{}", element_type.to_string(), size)
+            }
+            Type::GenericInstance { name, args } => {
+                let mut base = name.clone();
+                for arg in args {
+                    base.push_str("__");
+                    base.push_str(&arg.to_string());
+                }
+                base
+            }
+            Type::GenericParam(s) => format!("gparam__{}", s),
+            Type::VariadicPack { .. } => {
+                unreachable!(
+                    "VariadicPack is a symbolic placeholder and should never be mangled directly \
+                 — a concrete arg type was expected here. This indicates a compiler bug."
+                )
+            }
+        }
+    }
+}
 
 pub fn mangle_name(base_name: &str, args: &[Type]) -> String {
     let mut name = base_name.to_string();
     for arg in args {
         name.push_str("__");
-        name.push_str(&type_to_mangled_string(arg));
+        name.push_str(&arg.to_string());
     }
     name
-}
-
-pub fn type_to_mangled_string(ty: &Type) -> String {
-    match ty {
-        Type::Int => "int".to_string(),
-        Type::UInt => "uint".to_string(),
-        Type::Int8 => "int8".to_string(),
-        Type::UInt8 => "uint8".to_string(),
-        Type::Float => "float".to_string(),
-        Type::Double => "double".to_string(),
-        Type::Bool => "bool".to_string(),
-        Type::Str => "str".to_string(),
-        Type::Char => "char".to_string(),
-        Type::Void => "void".to_string(),
-        Type::Any => "any".to_string(),
-        Type::Nil => "nil".to_string(),
-        Type::Struct(name) => name.clone(),
-        Type::Enum(name) => name.clone(),
-        Type::Ptr(inner) => format!("ptr__{}", type_to_mangled_string(inner)),
-        Type::Array { element_type, size } => {
-            format!("arr__{}__{}", type_to_mangled_string(element_type), size)
-        }
-        Type::GenericInstance { name, args } => {
-            let mut base = name.clone();
-            for arg in args {
-                base.push_str("__");
-                base.push_str(&type_to_mangled_string(arg));
-            }
-            base
-        }
-        Type::GenericParam(s) => format!("gparam__{}", s),
-        Type::VariadicPack { .. } => {
-            unreachable!(
-                "VariadicPack is a symbolic placeholder and should never be mangled directly \
-                 — a concrete arg type was expected here. This indicates a compiler bug."
-            )
-        }
-    }
 }
 
 pub fn mangle_variadic(base_mangled_name: &str, variadic_types: &[Type]) -> String {
@@ -55,7 +130,7 @@ pub fn mangle_variadic(base_mangled_name: &str, variadic_types: &[Type]) -> Stri
     } else {
         let joined = variadic_types
             .iter()
-            .map(type_to_mangled_string)
+            .map(Type::to_string)
             .collect::<Vec<_>>()
             .join("__");
         format!("{}.{}", base_mangled_name, joined)

@@ -1,3 +1,4 @@
+use crate::utils::typesafe::Type;
 use indexmap::IndexMap;
 use std::{
     collections::{HashMap, HashSet},
@@ -6,7 +7,7 @@ use std::{
 
 use crate::{
     ir::irgen::StructLayout,
-    parse::parsing::{Expr, Parameter, Program, Stmt, Type},
+    parse::parsing::{Expr, Parameter, Program, Stmt},
 };
 
 #[derive(Debug, Clone)]

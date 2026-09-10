@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::parse::parsing::Type;
+use crate::utils::typesafe::Type;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrOp {

@@ -1,10 +1,13 @@
+use std::rc::Rc;
+
 use crate::lex::lexing::{Token, TokenType};
 use crate::parse::parsing::{
     BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType,
-    Program, Stmt, Type, UnaryOp,
+    Program, Stmt, UnaryOp,
 };
 use crate::utils::location::Location;
 use crate::utils::toident::to_ident;
+use crate::utils::typesafe::Type;
 
 pub struct Parser {
     pub tokens: Vec<Token>,
@@ -130,6 +133,95 @@ impl Parser {
             }
             self.expect(TokenType::GreaterThan);
         }
+        args
+    }
+    fn parse_generic_expr_args(&mut self) -> Vec<Expr> {
+        let mut args = Vec::new();
+
+        if !matches!(
+            self.get_token().map(|t| &t.ttype),
+            Some(TokenType::LessThan)
+        ) {
+            return args;
+        }
+
+        self.advance(); // consume '<'
+
+        loop {
+            if matches!(
+                self.get_token().map(|t| &t.ttype),
+                Some(TokenType::GreaterThan)
+            ) {
+                break;
+            }
+
+            let tk = match self.get_token().cloned() {
+                Some(tk) => tk,
+                None => break,
+            };
+
+            if tk.ttype != TokenType::Identifier {
+                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    format!("Expected generic argument, found {:?}", tk.ttype),
+                    tk.location,
+                );
+                break;
+            }
+
+            self.advance();
+
+            args.push(Expr {
+                kind: ExprKind::Identifier(tk.value),
+                span: tk.location,
+            });
+
+            match self.get_token().map(|t| &t.ttype) {
+                Some(TokenType::Comma) => {
+                    self.advance();
+                }
+
+                Some(TokenType::GreaterThan) => {
+                    break;
+                }
+
+                other => {
+                    let possible_location = self.get_token().map(|t| t.location.clone());
+
+                    if possible_location.is_none() {
+                        self.throw(
+                            ParserErrorType::MalformedStatementError,
+                            format!("Statment has no location, {:?}", other.clone()),
+                            Location {
+                                line: 0,
+                                col: 0,
+                                file: Rc::from("nil"),
+                            },
+                        );
+                    } else {
+
+                        let ct: String; 
+
+                        if other.is_none() {
+                            ct = "{eof}".to_string();
+                        } else {
+                            ct = format!("{:?}", other.unwrap());
+                        }
+
+                        self.throw(
+                            ParserErrorType::UnexpectedTokenTypeError,
+                            format!("Expected ',' or '>', found {ct}"),
+                            possible_location.unwrap(),
+                        );
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.expect(TokenType::GreaterThan);
+
         args
     }
 
@@ -882,6 +974,7 @@ impl Parser {
         {
             return None;
         }
+
         self.parse_andor()
     }
 
@@ -1234,7 +1327,7 @@ impl Parser {
                 }
                 Some(TokenType::DoubleColon) => {
                     self.advance();
-                    let generic_args = self.parse_generic_args();
+                    let generic_args = self.parse_generic_expr_args();
 
                     match self.get_token().map(|t| &t.ttype) {
                         Some(TokenType::Identifier) => {
@@ -1341,13 +1434,21 @@ impl Parser {
                             }
                         }
                         _ => {
+                            let tk = self.get_token();
+                            let ct: String; 
+
+                            if tk.is_none() {
+                                ct = "{eof}".to_string();
+                            } else {
+                                ct = format!("{:?}", tk.unwrap().ttype);
+                            }
+
                             self.throw(
                                 ParserErrorType::UnexpectedTokenTypeError,
                                 format!(
-                                    "Expected '(' or '{{' after generic arguments, found {:?}",
-                                    self.get_token()
+                                    "Expected '(' or '{{' after generic arguments, found {ct}"
                                 ),
-                                self.get_token().unwrap().location.clone(),
+                                tk.unwrap().location.clone(),
                             );
                             return None;
                         }

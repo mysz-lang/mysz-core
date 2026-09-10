@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::{parse::parsing::Type, utils::location::Location};
+use crate::utils::location::Location;
+use crate::utils::typesafe::Type;
 
 #[derive(Debug)]
 pub struct Symbol {

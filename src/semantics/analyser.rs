@@ -237,6 +237,30 @@ impl Analyser {
         }
     }
 
+    fn instantiate_generic_expr_type(&mut self, expr: &Expr) -> Result<Type, AnalyserError> {
+        match &expr.kind {
+            ExprKind::Identifier(_) => {
+                let expr_type = self.check_expr(expr, None)?;
+
+                let possible_type = self.instantiate_generic_types(&expr_type, &expr.span);
+
+                if let Ok(success) = possible_type {
+                    return Ok(success);
+                }
+
+                Ok(Type::Nil)
+            }
+
+            _ => Err(AnalyserError::TypeError {
+                location: expr.span.clone(),
+                message: format!(
+                    "failed to infer generic instantiation expression type: {:?}",
+                    expr.kind
+                ),
+            }),
+        }
+    }
+
     fn declare_variable(
         &mut self,
         name: &str,
@@ -610,10 +634,16 @@ impl Analyser {
                     }
                     Type::Struct(struct_name.clone())
                 } else {
+                    let resolved_args = generic_args
+                        .iter()
+                        .map(|arg| self.instantiate_generic_expr_type(arg))
+                        .collect::<Result<Vec<Type>, AnalyserError>>()?;
+
                     let generic_ty = Type::GenericInstance {
                         name: struct_name.clone(),
-                        args: generic_args.clone(),
+                        args: resolved_args,
                     };
+
                     self.validate_type_exists(&generic_ty, &expr.span)?;
                     self.instantiate_generic_types(&generic_ty, &expr.span)?
                 };
@@ -685,6 +715,7 @@ impl Analyser {
 
                 Ok(concrete_ty)
             }
+
             ExprKind::Index { base, index } => {
                 let base_type = self.check_expr(base, None)?;
                 let index_type = self.check_expr(index, Some(&Type::Int))?;
@@ -718,10 +749,8 @@ impl Analyser {
                 } else if let Some((const_type, _)) = self.constants.get(name) {
                     Ok(const_type.clone())
                 } else {
-                    Err(AnalyserError::semantic_error(
-                        expr.span.clone(),
-                        format!("Symbol '{}' is used before definition.", name),
-                    ))
+                    let ct = Type::from(name);
+                    Ok(ct)
                 }
             }
             ExprKind::Call {
@@ -757,8 +786,7 @@ impl Analyser {
                     let mut inst_args = Vec::new();
 
                     for g_arg in generic_args {
-                        let instantiated =
-                            self.instantiate_generic_types(g_arg, &callee.location)?;
+                        let instantiated = self.instantiate_generic_expr_type(g_arg)?;
 
                         let substituted =
                             self.substitute_type(&instantiated, &self.current_substitutions);

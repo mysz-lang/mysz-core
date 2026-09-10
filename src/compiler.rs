@@ -3,11 +3,12 @@ use crate::ir::irgen::IRGen;
 use crate::ir::tac::Instruction;
 use crate::lex::lexer::Lexer;
 use crate::parse::parser::Parser as myszparser;
-use crate::parse::parsing::{Expr, ExprKind, Identifier, Literal, Parameter, Program, Stmt, Type};
+use crate::parse::parsing::{Expr, ExprKind, Identifier, Literal, Parameter, Program, Stmt};
 use crate::semantics::analyser::{Analyser, AnalyserError};
 use crate::semantics::analysis::FunctionSignature;
 use crate::utils::ats::{ATEntry, ATFile, ATInfo, ExportInfo, ImportInfo, ParsedAT, SymbolType};
 use crate::utils::ctx::CompilerCtx;
+use crate::utils::typesafe::Type;
 use clap::builder::OsStr;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context as inkContext;
@@ -982,7 +983,7 @@ impl AtAliasRewriter {
                 fields,
             } => ExprKind::StructLiteral {
                 struct_name: self.qualify(&struct_name).unwrap_or(struct_name),
-                generic_args: generic_args.into_iter().map(|t| self.ty(t)).collect(),
+                generic_args: generic_args.into_iter().map(|t| self.expr(t)).collect(),
                 fields: fields.into_iter().map(|(n, e)| (n, self.expr(e))).collect(),
             },
             ExprKind::Binary { left, op, right } => ExprKind::Binary {
@@ -1008,7 +1009,7 @@ impl AtAliasRewriter {
                 }
                 ExprKind::Call {
                     callee,
-                    generic_args: generic_args.into_iter().map(|t| self.ty(t)).collect(),
+                    generic_args: generic_args.into_iter().map(|t| self.expr(t)).collect(),
                     args: args.into_iter().map(|a| self.expr(a)).collect(),
                 }
             }

@@ -1,6 +1,7 @@
 use crate::utils::location::Location;
+use crate::utils::typesafe::Type;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
     String(String),
@@ -22,42 +23,7 @@ impl Literal {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Type {
-    Int,
-    UInt,
-    Int8,
-    UInt8,
-    Double,
-    Float,
-    Bool,
-    Str,
-    Char,
-    Void,
-    Ptr(Box<Type>),
-    Array {
-        element_type: Box<Type>,
-        size: usize,
-    },
-    Struct(String),
-    Enum(String),
-    // Generics
-    GenericInstance {
-        name: String,
-        args: Vec<Type>,
-    },
-    GenericParam(String),
-
-    VariadicPack {
-        name: String,
-        types: Vec<Type>,
-    },
-
-    Any,
-    Nil,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -74,7 +40,7 @@ pub enum BinaryOp {
     And,
     Or,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Positive,
     Negative,
@@ -83,13 +49,13 @@ pub enum UnaryOp {
     Not,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Identifier {
     pub value: String,
     pub location: Location,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Literal(Literal),
     Identifier(String),
@@ -107,7 +73,7 @@ pub enum ExprKind {
     },
     StructLiteral {
         struct_name: String,
-        generic_args: Vec<Type>,
+        generic_args: Vec<Expr>,
         fields: Vec<(String, Expr)>,
     },
 
@@ -130,7 +96,7 @@ pub enum ExprKind {
 
     Call {
         callee: Identifier,
-        generic_args: Vec<Type>,
+        generic_args: Vec<Expr>,
         args: Vec<Expr>,
     },
     Sizeof {
@@ -141,7 +107,7 @@ pub enum ExprKind {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Location,

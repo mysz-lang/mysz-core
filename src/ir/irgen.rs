@@ -2,12 +2,10 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::{
-    ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value},
-    parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, Type, UnaryOp},
-    utils::location::Location,
-    utils::typesafe::type_to_string,
-};
+use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
+use crate::parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, UnaryOp};
+use crate::utils::location::Location;
+use crate::utils::typesafe::{Type, type_to_string};
 
 use crate::utils::typesafe;
 use crate::utils::typesafe::variadic;
@@ -247,6 +245,10 @@ impl IRGen {
             },
 
             ExprKind::Identifier(name) => {
+                if let Some(ty) = self.current_substitutions.get(name) {
+                    return Some(ty.clone());
+                }
+
                 let resolved = self.resolve_var_name(name);
 
                 if let Some(ty) = self.var_types.get(&resolved) {
@@ -308,7 +310,7 @@ impl IRGen {
 
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&self.mangle_type(&arg));
+                            mangled_name.push_str(&arg.to_string());
                         }
 
                         mangled_name
@@ -399,10 +401,6 @@ impl IRGen {
         }
     }
 
-    fn mangle_type(&self, ty: &Type) -> String {
-        crate::utils::typesafe::type_to_mangled_string(ty)
-    }
-
     fn mangle_call_name(
         &self,
         base: &str,
@@ -413,14 +411,14 @@ impl IRGen {
         let mut name = base.to_string();
         for arg in generic_args {
             name.push_str("__");
-            name.push_str(&self.mangle_type(arg));
+            name.push_str(&arg.to_string());
         }
         if is_variadic_capable {
             name.push('.');
             name.push_str(
                 &variadic_args
                     .iter()
-                    .map(|t| self.mangle_type(t))
+                    .map(|t| t.to_string())
                     .collect::<Vec<_>>()
                     .join("__"),
             );
@@ -496,7 +494,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in &resolved_args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&self.mangle_type(arg));
+                    mangled_name.push_str(&arg.to_string());
                 }
 
                 if !self.struct_defs.contains_key(&mangled_name)
@@ -572,6 +570,21 @@ impl IRGen {
         None
     }
 
+    fn resolve_generic_args(&self, generic_args: &[Expr]) -> Vec<Type> {
+        generic_args
+            .iter()
+            .map(|expr| {
+                self.type_of_expr(expr).unwrap_or_else(|| match &expr.kind {
+                    ExprKind::Identifier(name) => Type::from(name.as_str()),
+                    _ => panic!(
+                        "ICE: Failed to resolve generic argument expression: {:?}",
+                        expr.kind
+                    ),
+                })
+            })
+            .collect()
+    }
+
     fn get_value_type(&self, value: &Value) -> Type {
         match value {
             Value::Temp(name) | Value::Var(name) => {
@@ -609,7 +622,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&self.mangle_type(arg));
+                    mangled_name.push_str(&arg.to_string());
                 }
                 self.get_struct_layout(&mangled_name)
                     .map(|l| l.total_size)
@@ -652,7 +665,7 @@ impl IRGen {
                 let mut mangled_name = name.clone();
                 for arg in args {
                     mangled_name.push_str("__");
-                    mangled_name.push_str(&self.mangle_type(arg));
+                    mangled_name.push_str(&arg.to_string());
                 }
                 self.get_struct_layout(&mangled_name)
                     .map(|l| l.alignment)
@@ -744,20 +757,28 @@ impl IRGen {
                     })
                 }
             }
-            ExprKind::Identifier(name) => {
-                let local_mangled = format!("{}::{}", self.current_function, name);
-                if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
-                    return Some(self.resolve_type(&ty));
-                }
-                if let Some((ty, _)) = self.analyser_constants.get(name) {
-                    let ty = ty.clone();
-                    return Some(self.resolve_type(&ty));
-                }
-                if let Some(ty) = self.var_types.get(name).cloned() {
-                    return Some(self.resolve_type(&ty));
-                }
-                None
-            }
+ExprKind::Identifier(name) => {
+    if let Some(ty) = self.current_substitutions.get(name).cloned() {
+        return Some(self.resolve_type(&ty));
+    }
+
+    let local_mangled = format!("{}::{}", self.current_function, name);
+
+    if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
+        return Some(self.resolve_type(&ty));
+    }
+
+    if let Some((ty, _)) = self.analyser_constants.get(name) {
+        let ty = ty.clone();
+        return Some(self.resolve_type(&ty));
+    }
+
+    if let Some(ty) = self.var_types.get(name).cloned() {
+        return Some(self.resolve_type(&ty));
+    }
+
+    None
+}
             ExprKind::Binary { left, op, .. } => match op {
                 BinaryOp::Eq
                 | BinaryOp::NEq
@@ -802,7 +823,7 @@ impl IRGen {
                             let mut mangled_name = name;
                             for arg in args {
                                 mangled_name.push_str("__");
-                                mangled_name.push_str(&self.mangle_type(&arg));
+                                mangled_name.push_str(&arg.to_string());
                             }
                             Some(mangled_name)
                         }
@@ -980,7 +1001,6 @@ impl IRGen {
 
             let old_subs = self.current_substitutions.clone();
             self.current_substitutions = substitutions;
-
             let resolved = self.resolve_type(&sub_ty);
 
             self.current_substitutions = old_subs;
@@ -1055,7 +1075,7 @@ impl IRGen {
                         let mut mangled_name = name;
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&self.mangle_type(&arg));
+                            mangled_name.push_str(&arg.to_string());
                         }
                         mangled_name
                     }
@@ -1140,16 +1160,16 @@ impl IRGen {
                 let size = self.type_size(&resolved_ty);
                 Value::Const(size)
             }
-            ExprKind::Typeof { expr } => {
-                let resolved_expr = self.expr_type(expr);
-                if let Some(rexpr) = resolved_expr {
-                    let etype = typesafe::typeof_string(&rexpr);
-                    return Value::Str(etype);
-                }
+ExprKind::Typeof { expr } => {
+    let resolved_expr = self.expr_type(expr);
 
-                panic!("ICE: typeof statement cannot resolve expression.")
-            }
+    if let Some(rexpr) = resolved_expr {
+        let etype = typesafe::typeof_string(&rexpr);
+        return Value::Str(etype);
+    }
 
+    panic!("ICE: typeof statement cannot resolve expression.")
+}
             ExprKind::Cast { left, right } => {
                 let val_to_cast = self.gen_expr(left, None);
 
@@ -1298,7 +1318,7 @@ impl IRGen {
                         let mut mangled_name = name;
                         for arg in args {
                             mangled_name.push_str("__");
-                            mangled_name.push_str(&self.mangle_type(&arg));
+                            mangled_name.push_str(&arg.to_string());
                         }
                         mangled_name
                     }
@@ -1357,10 +1377,13 @@ impl IRGen {
                 let concrete_type = if generic_args.is_empty() {
                     Type::Struct(struct_name.clone())
                 } else {
+                    let generic_types = self.resolve_generic_args(generic_args);
+
                     let generic_ty = Type::GenericInstance {
                         name: struct_name.clone(),
-                        args: generic_args.clone(),
+                        args: generic_types,
                     };
+
                     self.resolve_type(&generic_ty)
                 };
 
@@ -1638,9 +1661,12 @@ impl IRGen {
                 callee,
                 generic_args,
                 args,
-            } => self
-                .gen_call(callee, generic_args, args, true)
-                .unwrap_or(Value::Void),
+            } => {
+                let generic_types = self.resolve_generic_args(generic_args);
+
+                self.gen_call(callee, &generic_types, args, true)
+                    .unwrap_or(Value::Void)
+            }
         }
     }
 
@@ -1791,7 +1817,9 @@ impl IRGen {
                     args,
                 } = &expr.kind
                 {
-                    self.gen_call(callee, generic_args, args, false);
+                    let generic_types = self.resolve_generic_args(generic_args);
+
+                    self.gen_call(callee, &generic_types, args, false);
                 } else {
                     self.gen_expr(expr, None);
                 }
@@ -2282,7 +2310,7 @@ impl IRGen {
                                 let mut mangled_name = name;
                                 for arg in args {
                                     mangled_name.push_str("__");
-                                    mangled_name.push_str(&self.mangle_type(&arg));
+                                    mangled_name.push_str(&arg.to_string());
                                 }
                                 mangled_name
                             }
@@ -2464,7 +2492,6 @@ impl IRGen {
 
                 let old_subs = self.current_substitutions.clone();
                 self.current_substitutions = substitutions;
-
                 let old_func = self.current_function.clone();
                 self.current_function = resolved_func_name.clone();
 

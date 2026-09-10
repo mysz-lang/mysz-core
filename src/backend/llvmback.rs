@@ -10,17 +10,12 @@ use inkwell::{
     values::{BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
 
-use crate::{
-    ir::{
-        irgen::StructLayout,
-        tac::{CastType, Instruction, IrOp, ScopedMap, Value},
-    },
-    parse::parsing::Type,
-    semantics::analysis::FunctionSignature,
-    utils::typesafe::{is_decimal, types_equal},
+use crate::ir::irgen::StructLayout;
+use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
+use crate::semantics::analysis::FunctionSignature;
+use crate::utils::typesafe::{
+    Type, is_decimal, is_integer, is_signed_integer, is_truthy_type, type_to_string, types_equal,
 };
-
-use crate::utils::typesafe::{is_integer, is_signed_integer, is_truthy_type, type_to_string};
 
 pub struct LlvmBackend<'ctx> {
     context: &'ctx Context,
@@ -1200,8 +1195,51 @@ impl<'ctx> LlvmBackend<'ctx> {
             return Ok(());
         }
 
+        if matches!(from_type, Type::Nil) {
+            let result: BasicValueEnum = match to_type {
+                Type::Double | Type::Float => self
+                    .llvm_type(to_type)
+                    .into_float_type()
+                    .const_zero()
+                    .into(),
+
+                Type::Int
+                | Type::Int8
+                | Type::Char
+                | Type::UInt8
+                | Type::Bool
+                | Type::Enum(..)
+                | Type::UInt => self.llvm_type(to_type).into_int_type().const_zero().into(),
+
+                Type::Str | Type::Void | Type::Any | Type::Nil | Type::Ptr(..) => self
+                    .llvm_type(to_type)
+                    .into_pointer_type()
+                    .const_null()
+                    .into(),
+
+                Type::Array { .. } => self
+                    .llvm_type(to_type)
+                    .into_array_type()
+                    .const_zero()
+                    .into(),
+                Type::Struct(..) => self
+                    .llvm_type(to_type)
+                    .into_struct_type()
+                    .const_zero()
+                    .into(),
+
+                Type::GenericInstance { .. } => unreachable!(),
+                Type::GenericParam(..) => unreachable!(),
+                Type::VariadicPack { .. } => unreachable!(),
+            };
+
+            self.temps.insert(dst.to_string(), result.into());
+            self.temp_types.insert(dst.to_string(), to_type.clone());
+            return Ok(());
+        }
+
         Err(format!(
-            "ICE: unsupported cast from {} to {}",
+            "ICE: `unsuppo`rted cast from {} to {}",
             type_to_string(&from_type),
             type_to_string(to_type),
         ))
