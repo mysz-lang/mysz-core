@@ -757,28 +757,28 @@ impl IRGen {
                     })
                 }
             }
-ExprKind::Identifier(name) => {
-    if let Some(ty) = self.current_substitutions.get(name).cloned() {
-        return Some(self.resolve_type(&ty));
-    }
+            ExprKind::Identifier(name) => {
+                if let Some(ty) = self.current_substitutions.get(name).cloned() {
+                    return Some(self.resolve_type(&ty));
+                }
 
-    let local_mangled = format!("{}::{}", self.current_function, name);
+                let local_mangled = format!("{}::{}", self.current_function, name);
 
-    if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
-        return Some(self.resolve_type(&ty));
-    }
+                if let Some(ty) = self.var_types.get(&local_mangled).cloned() {
+                    return Some(self.resolve_type(&ty));
+                }
 
-    if let Some((ty, _)) = self.analyser_constants.get(name) {
-        let ty = ty.clone();
-        return Some(self.resolve_type(&ty));
-    }
+                if let Some((ty, _)) = self.analyser_constants.get(name) {
+                    let ty = ty.clone();
+                    return Some(self.resolve_type(&ty));
+                }
 
-    if let Some(ty) = self.var_types.get(name).cloned() {
-        return Some(self.resolve_type(&ty));
-    }
+                if let Some(ty) = self.var_types.get(name).cloned() {
+                    return Some(self.resolve_type(&ty));
+                }
 
-    None
-}
+                None
+            }
             ExprKind::Binary { left, op, .. } => match op {
                 BinaryOp::Eq
                 | BinaryOp::NEq
@@ -896,16 +896,12 @@ ExprKind::Identifier(name) => {
             variadic_values.push(v);
         }
 
-        let resolved_func_name = if !generic_args.is_empty() {
-            self.mangle_call_name(
-                &callee.value,
-                &substituted_generic_args,
-                &variadic_types,
-                is_variadic_capable,
-            )
-        } else {
-            callee.value.clone()
-        };
+        let resolved_func_name = self.mangle_call_name(
+            &callee.value,
+            &substituted_generic_args,
+            &variadic_types,
+            is_variadic_capable,
+        );
 
         if is_variadic_capable {
             let struct_name = format!("__variadic__{}", resolved_func_name);
@@ -1160,16 +1156,16 @@ ExprKind::Identifier(name) => {
                 let size = self.type_size(&resolved_ty);
                 Value::Const(size)
             }
-ExprKind::Typeof { expr } => {
-    let resolved_expr = self.expr_type(expr);
+            ExprKind::Typeof { expr } => {
+                let resolved_expr = self.expr_type(expr);
 
-    if let Some(rexpr) = resolved_expr {
-        let etype = typesafe::typeof_string(&rexpr);
-        return Value::Str(etype);
-    }
+                if let Some(rexpr) = resolved_expr {
+                    let etype = typesafe::typeof_string(&rexpr);
+                    return Value::Str(etype);
+                }
 
-    panic!("ICE: typeof statement cannot resolve expression.")
-}
+                panic!("ICE: typeof statement cannot resolve expression.")
+            }
             ExprKind::Cast { left, right } => {
                 let val_to_cast = self.gen_expr(left, None);
 

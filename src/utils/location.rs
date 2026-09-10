@@ -8,9 +8,12 @@ pub struct Location {
 }
 impl Location {
     pub fn new_with_file(line: usize, col: usize, file: Rc<str>) -> Self {
-        Self { line: Self::error_correct_line(file.clone(), line), col, file }
+        Self {
+            line: Self::error_correct_line(file.clone(), line),
+            col,
+            file,
+        }
     }
-
 
     fn error_correct_line(file: Rc<str>, line: usize) -> usize {
         let contents = match std::fs::read_to_string(&*file) {

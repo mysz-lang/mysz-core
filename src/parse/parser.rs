@@ -199,8 +199,7 @@ impl Parser {
                             },
                         );
                     } else {
-
-                        let ct: String; 
+                        let ct: String;
 
                         if other.is_none() {
                             ct = "{eof}".to_string();
@@ -1435,7 +1434,7 @@ impl Parser {
                         }
                         _ => {
                             let tk = self.get_token();
-                            let ct: String; 
+                            let ct: String;
 
                             if tk.is_none() {
                                 ct = "{eof}".to_string();
@@ -1445,9 +1444,7 @@ impl Parser {
 
                             self.throw(
                                 ParserErrorType::UnexpectedTokenTypeError,
-                                format!(
-                                    "Expected '(' or '{{' after generic arguments, found {ct}"
-                                ),
+                                format!("Expected '(' or '{{' after generic arguments, found {ct}"),
                                 tk.unwrap().location.clone(),
                             );
                             return None;

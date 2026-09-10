@@ -195,6 +195,20 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
     }
 
+    fn resolve_var_name(&self, name: &str) -> String {
+        if self.vars.contains_key(name) {
+            return name.to_string();
+        }
+
+        let qualified = format!("{}::{}", self.current_function_name().unwrap(), name);
+
+        if self.vars.contains_key(&qualified) {
+            return qualified;
+        }
+
+        name.to_string()
+    }
+
     fn llvm_value(&mut self, value: &Value) -> Result<BasicValueEnum<'ctx>, String> {
         let ty = self.value_type(value)?;
 
@@ -252,9 +266,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .ok_or_else(|| format!("unknown temporary '{}'", name)),
 
             Value::Var(name) => {
+                let resolved = self.resolve_var_name(name);
+
                 let ptr = self
                     .vars
-                    .get(name)
+                    .get(&resolved)
                     .copied()
                     .ok_or_else(|| format!("unknown variable '{}'", name))?;
 
@@ -639,7 +655,9 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn llvm_address_of(&mut self, value: &Value) -> Result<PointerValue<'ctx>, String> {
         match value {
             Value::Var(name) => {
-                if let Some(ptr) = self.vars.get(name).copied() {
+                let resolved = self.resolve_var_name(name);
+
+                if let Some(ptr) = self.vars.get(&resolved).copied() {
                     return Ok(ptr);
                 }
 
@@ -647,7 +665,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .var_types
                     .get(name)
                     .cloned()
-                    .ok_or_else(|| format!("unknown variable '{}'", name))?;
+                    .ok_or_else(|| format!("unknown variable '{}'", resolved))?;
 
                 let llvm_ty = self.llvm_type(&ty);
 
@@ -702,6 +720,37 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         Ok(())
+    }
+
+    fn build_entry_alloca(
+        &self,
+        llvm_type: BasicTypeEnum<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let current_block = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| "no current basic block".to_string())?;
+
+        let function = current_block
+            .get_parent()
+            .ok_or_else(|| "current block has no parent function".to_string())?;
+
+        let entry = function
+            .get_first_basic_block()
+            .ok_or_else(|| "current function has no entry block".to_string())?;
+
+        let alloca_builder = self.context.create_builder();
+
+        if let Some(first_instruction) = entry.get_first_instruction() {
+            alloca_builder.position_before(&first_instruction);
+        } else {
+            alloca_builder.position_at_end(entry);
+        }
+
+        alloca_builder
+            .build_alloca(llvm_type, name)
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -1592,9 +1641,12 @@ impl<'ctx> LlvmBackend<'ctx> {
     }
 
     fn compile_assign(&mut self, dst: &str, src: &Value) -> Result<(), String> {
+        let resolved_dst = self.resolve_var_name(dst);
+
         let dst_ty = self
             .var_types
             .get(dst)
+            .or_else(|| self.var_types.get(&resolved_dst))
             .cloned()
             .ok_or_else(|| format!("unknown variable '{}'", dst))?;
 
@@ -1612,16 +1664,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         let llvm_value = self.llvm_value(src)?;
         let llvm_type = self.llvm_type(&dst_ty);
 
-        let ptr = match self.vars.get(dst) {
-            Some(ptr) => *ptr,
-
+        let ptr = match self.vars.get(&resolved_dst).copied() {
+            Some(ptr) => ptr,
             None => {
-                let ptr = self
-                    .builder
-                    .build_alloca(llvm_type, dst)
-                    .map_err(|err| err.to_string())?;
-
-                self.vars.insert(dst.to_string(), ptr);
+                let ptr = self.build_entry_alloca(llvm_type, dst)?;
+                self.vars.insert(resolved_dst.clone(), ptr);
                 ptr
             }
         };

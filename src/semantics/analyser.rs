@@ -1071,6 +1071,7 @@ impl Analyser {
 
                 Ok(return_type)
             }
+
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;
