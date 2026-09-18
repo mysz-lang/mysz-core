@@ -1785,7 +1785,7 @@ impl IRGen {
                     args,
                 } = &expr.kind
                 {
-                    self.gen_call(callee, &generic_args, args, false);
+                    self.gen_call(callee, generic_args, args, false);
                 } else {
                     self.gen_expr(expr, None);
                 }
