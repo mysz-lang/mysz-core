@@ -353,6 +353,41 @@ impl IRGen {
         name.to_string()
     }
 
+    fn resolve_generic_arg(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Struct(name) => {
+                let unique_name = format!("{}::{}", self.current_function, name);
+
+                if let Some(resolved) = self.var_types.get(&unique_name) {
+                    return resolved.clone();
+                }
+
+                if let Some(resolved) = self.var_types.get(name) {
+                    return resolved.clone();
+                }
+
+                ty.clone()
+            }
+
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.resolve_generic_arg(inner))),
+
+            Type::Array { element_type, size } => Type::Array {
+                element_type: Box::new(self.resolve_generic_arg(element_type)),
+                size: *size,
+            },
+
+            Type::GenericInstance { name, args } => Type::GenericInstance {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| self.resolve_generic_arg(arg))
+                    .collect(),
+            },
+
+            _ => ty.clone(),
+        }
+    }
+
     fn substitute_type(&self, ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         match ty {
             Type::Struct(name) => substitutions
@@ -857,7 +892,11 @@ impl IRGen {
 
         let substituted_generic_args: Vec<Type> = generic_args
             .iter()
-            .map(|t| self.substitute_type(t, &self.current_substitutions))
+            .map(|t| {
+                let substituted = self.substitute_type(t, &self.current_substitutions);
+
+                self.resolve_generic_arg(&substituted)
+            })
             .collect();
 
         let split_at = fixed_param_count.min(args.len());
@@ -1927,10 +1966,20 @@ impl IRGen {
                             panic!("ICE: Struct layout not found for '{}'", struct_name)
                         });
 
+                        let is_variadic_pack = struct_name.starts_with("__variadic__");
+
                         let mut fields: Vec<(i64, Type)> = layout
                             .field_offsets
-                            .values()
-                            .map(|(offset, ty)| (*offset, ty.clone()))
+                            .iter()
+                            .filter(|(name, _)| {
+                                // A variadic pack's `il` length field is not an element; skip it.
+                                !is_variadic_pack
+                                    || matches!(
+                                        variadic::parse_field(name),
+                                        Some(variadic::PackField::Index(_))
+                                    )
+                            })
+                            .map(|(_, (offset, ty))| (*offset, ty.clone()))
                             .collect();
 
                         fields.sort_by_key(|(offset, _)| *offset);
@@ -2091,12 +2140,10 @@ impl IRGen {
                         let layout = self.get_struct_layout(&struct_name).unwrap_or_else(|| {
                             panic!("ICE: Variadic pack layout not found for '{}'", struct_name)
                         });
-
                         let mut fields: Vec<(String, i64, Type)> = layout
                             .field_offsets
                             .iter()
                             .map(|(name, (offset, ty))| (name.clone(), *offset, ty.clone()))
-                            .filter(|(name, _, _)| name != variadic::length_field())
                             .collect();
 
                         fields.sort_by_key(|(_, offset, _)| *offset);
@@ -2385,9 +2432,14 @@ impl IRGen {
                 } = blueprint
             {
                 let has_variadic = params.iter().any(|p| p.is_variadic);
+                let resolved_generic_args: Vec<Type> = generic_args
+                    .iter()
+                    .map(|arg| self.resolve_generic_arg(arg))
+                    .collect();
+
                 let resolved_func_name = self.mangle_call_name(
                     &name.value,
-                    &generic_args,
+                    &resolved_generic_args,
                     &variadic_types,
                     has_variadic,
                 );
@@ -2395,13 +2447,15 @@ impl IRGen {
                 let substitutions: HashMap<String, Type> = generic_params
                     .iter()
                     .cloned()
-                    .zip(generic_args.iter().cloned())
+                    .zip(resolved_generic_args.iter().cloned())
                     .collect();
 
                 let old_subs = self.current_substitutions.clone();
                 self.current_substitutions = substitutions;
                 let old_func = self.current_function.clone();
                 self.current_function = resolved_func_name.clone();
+
+                self.var_types.push_scope();
 
                 self.code
                     .push(Instruction::FunctionLabel(resolved_func_name.clone()));
@@ -2411,7 +2465,9 @@ impl IRGen {
                         let resolved_param_ty = self.resolve_type(param_ty);
                         let unique_param_name =
                             format!("{}::{}", resolved_func_name, param.name.value);
-                        self.var_types.insert(unique_param_name, resolved_param_ty);
+
+                        self.var_types
+                            .insert(unique_param_name.clone(), resolved_param_ty.clone());
                     }
                     self.code.push(Instruction::Param {
                         p: format!("{}::{}", resolved_func_name, param.name.value),
@@ -2437,6 +2493,8 @@ impl IRGen {
                 for stmt in &body {
                     self.gen_stmt(stmt);
                 }
+
+                self.var_types.pop_scope();
 
                 let base_return_ty = rttype.unwrap_or(Type::Void);
                 let resolved_return_ty = self.resolve_type(&base_return_ty);

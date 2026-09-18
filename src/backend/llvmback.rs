@@ -135,11 +135,11 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             Value::Temp(name) => Ok(self.temp_type(name)?.clone()),
 
-            Value::Var(name) => self
-                .var_types
-                .get(name)
-                .cloned()
-                .ok_or_else(|| format!("unknown variable '{}'", name)),
+            Value::Var(name) => {
+                let ty = self.var_types.get(name).cloned();
+
+                ty.ok_or_else(|| format!("unknown variable '{}'", name))
+            }
 
             Value::Void => Ok(Type::Void),
 
@@ -1841,6 +1841,7 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .func_defs
                 .get(&name)
                 .map(|sig| sig.return_type.clone())
+                .or_else(|| self.var_types.get(&name).cloned())
                 .unwrap_or(Type::Void);
 
             let is_variadic = self
@@ -1889,7 +1890,6 @@ impl<'ctx> LlvmBackend<'ctx> {
             if self.functions.contains_key(name) {
                 continue;
             }
-
             let param_types: Vec<_> = sig
                 .param_types
                 .iter()

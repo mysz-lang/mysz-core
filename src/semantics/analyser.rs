@@ -45,6 +45,17 @@ fn contains_generic_param(ty: &Type) -> bool {
     }
 }
 
+fn contains_unresolved_type(ty: &Type) -> bool {
+    match ty {
+        Type::Any => true,
+        Type::GenericParam(_) => true,
+        Type::Ptr(inner) => contains_unresolved_type(inner),
+        Type::Array { element_type, .. } => contains_unresolved_type(element_type),
+        Type::GenericInstance { args, .. } => args.iter().any(contains_unresolved_type),
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 pub struct Analyser {
     pub scopes: Vec<Scope>,
@@ -762,7 +773,46 @@ impl Analyser {
                     let mut inst_args = Vec::new();
 
                     for g_arg in generic_args {
-                        let instantiated = self.instantiate_generic_types(g_arg, &expr.span)?;
+                        /*
+                         * Explicit generic arguments can be identifiers referring to
+                         * values/types currently visible in the analyser.
+                         *
+                         * The parser represents an identifier such as `arg` as
+                         * Type::Struct("arg"), because at parse time it cannot know
+                         * whether `arg` is a type name or a symbol.
+                         *
+                         * If a variable with that name exists, its type wins here.
+                         *
+                         * Example:
+                         *
+                         *     fn sform<T>(arg: T) { ... }
+                         *     sform::<arg>(arg)
+                         *
+                         * During generic-template checking:
+                         *
+                         *     arg -> Any
+                         *
+                         * During a concrete instantiation:
+                         *
+                         *     arg -> Char
+                         *     arg -> Str
+                         *
+                         * etc.
+                         */
+                        let resolved_generic_arg = match g_arg {
+                            Type::Struct(name) => {
+                                if let Some(symbol) = self.resolve_variable(name) {
+                                    symbol.ty.clone()
+                                } else {
+                                    g_arg.clone()
+                                }
+                            }
+
+                            _ => g_arg.clone(),
+                        };
+
+                        let instantiated =
+                            self.instantiate_generic_types(&resolved_generic_arg, &expr.span)?;
 
                         let substituted =
                             self.substitute_type(&instantiated, &self.current_substitutions);
@@ -771,6 +821,40 @@ impl Analyser {
                             self.instantiate_generic_types(&substituted, &callee.location)?;
 
                         inst_args.push(fully_resolved);
+                    }
+
+                    /*
+                     * A generic argument can still be unresolved while checking
+                     * a generic/variadic template.
+                     *
+                     * For example:
+                     *
+                     *     sform::<arg>(arg)
+                     *
+                     * while checking:
+                     *
+                     *     print(..., args: ...)
+                     *
+                     * may currently resolve `arg` to `Any`.
+                     *
+                     * Do not create a concrete specialization such as
+                     * `sform__Any`. The call will be instantiated again once
+                     * the enclosing function has concrete argument types.
+                     */
+                    if inst_args.iter().any(contains_unresolved_type) {
+                        let mut mapping = HashMap::new();
+
+                        for (param_name, arg_type) in template.generic_params.iter().zip(&inst_args)
+                        {
+                            mapping.insert(param_name.clone(), arg_type.clone());
+
+                            mapping.insert(format!("gparam__{}", param_name), arg_type.clone());
+                        }
+
+                        let unresolved_return =
+                            self.substitute_type(&template.return_type, &mapping);
+
+                        return Ok(unresolved_return);
                     }
 
                     resolved_func_name = mangle_name(&callee.value, &inst_args);
