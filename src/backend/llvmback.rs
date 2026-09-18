@@ -825,6 +825,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         let pointee_ty = match &ptr_ty {
             Type::Ptr(inner) => inner.as_ref(),
+
+            Type::Str => &Type::Str,
             _ => {
                 return Err(format!(
                     "cannot load through non-pointer type {}",
@@ -1327,8 +1329,11 @@ impl<'ctx> LlvmBackend<'ctx> {
         rhs: &Value,
     ) -> Result<(), String> {
         let result_type = self.value_type(lhs)?;
+        let rhs_type = self.value_type(rhs)?;
 
-        if matches!(result_type, Type::Ptr(_)) && is_integer(&self.value_type(rhs)?) {
+        if (matches!(result_type, Type::Ptr(_)) || matches!(result_type, Type::Str))
+            && is_integer(&rhs_type)
+        {
             return self.compile_pointer_arithmetic(dst, op, lhs, rhs);
         }
 
@@ -1436,6 +1441,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         Ok(())
     }
+
     fn compile_pointer_arithmetic(
         &mut self,
         dst: &str,
@@ -1457,6 +1463,8 @@ impl<'ctx> LlvmBackend<'ctx> {
 
                 other => other.clone(),
             },
+
+            Type::Str => Type::Char,
 
             _ => unreachable!(),
         };

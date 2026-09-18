@@ -40,6 +40,27 @@ pub enum BinaryOp {
     And,
     Or,
 }
+impl BinaryOp {
+    pub fn otos(&self) -> &str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Mod => "%",
+
+            Self::Eq => "==",
+            Self::NEq => "!=",
+            Self::Gt => ">",
+            Self::GtE => ">=",
+            Self::Lt => "<",
+            Self::LtE => "<=",
+            Self::And => "&&",
+            Self::Or => "||",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Positive,
@@ -73,7 +94,7 @@ pub enum ExprKind {
     },
     StructLiteral {
         struct_name: String,
-        generic_args: Vec<Expr>,
+        generic_args: Vec<Type>,
         fields: Vec<(String, Expr)>,
     },
 
@@ -96,7 +117,7 @@ pub enum ExprKind {
 
     Call {
         callee: Identifier,
-        generic_args: Vec<Expr>,
+        generic_args: Vec<Type>,
         args: Vec<Expr>,
     },
     Sizeof {

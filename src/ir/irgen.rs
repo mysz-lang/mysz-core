@@ -570,21 +570,6 @@ impl IRGen {
         None
     }
 
-    fn resolve_generic_args(&self, generic_args: &[Expr]) -> Vec<Type> {
-        generic_args
-            .iter()
-            .map(|expr| {
-                self.type_of_expr(expr).unwrap_or_else(|| match &expr.kind {
-                    ExprKind::Identifier(name) => Type::from(name.as_str()),
-                    _ => panic!(
-                        "ICE: Failed to resolve generic argument expression: {:?}",
-                        expr.kind
-                    ),
-                })
-            })
-            .collect()
-    }
-
     fn get_value_type(&self, value: &Value) -> Type {
         match value {
             Value::Temp(name) | Value::Var(name) => {
@@ -1108,23 +1093,72 @@ impl IRGen {
             }
 
             ExprKind::Index { base, index } => {
-                let base_addr = self.gen_lvalue_addr(base);
                 let index_val = self.gen_expr(index, None);
-
                 let base_type = self.expr_type(base);
-                let element_type = match &base_type {
-                    Some(Type::Array { element_type, .. }) => *element_type.clone(),
-                    Some(Type::Ptr(inner)) => match &**inner {
-                        Type::Array { element_type, .. } => *element_type.clone(),
-                        other => other.clone(),
-                    },
-                    Some(Type::Str) => Type::Char,
-                    _ => Type::Int,
+
+                let (base_ptr, element_type) = match &base_type {
+                    Some(Type::Array { element_type, .. }) => {
+                        let base_addr = self.gen_lvalue_addr(base);
+                        (base_addr, *element_type.clone())
+                    }
+
+                    Some(Type::Ptr(inner)) => {
+                        let element_type = match &**inner {
+                            Type::Array { element_type, .. } => *element_type.clone(),
+                            other => other.clone(),
+                        };
+
+                        let base_value = self.gen_expr(base, None);
+
+                        let base_ptr = match base_value {
+                            Value::Var(name) => {
+                                let temp = self
+                                    .next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
+
+                                self.code.push(Instruction::Load {
+                                    dst: temp.clone(),
+                                    ptr: Value::Var(name),
+                                    ty: Type::Ptr(Box::new(element_type.clone())),
+                                });
+
+                                Value::Temp(temp)
+                            }
+
+                            other => other,
+                        };
+
+                        (base_ptr, element_type)
+                    }
+
+                    Some(Type::Str) => {
+                        let base_value = self.gen_expr(base, None);
+
+                        let base_ptr = match base_value {
+                            Value::Var(name) => {
+                                let temp = self.next_temp_with_type(Type::Str);
+
+                                self.code.push(Instruction::Load {
+                                    dst: temp.clone(),
+                                    ptr: Value::Var(name),
+                                    ty: Type::Str,
+                                });
+
+                                Value::Temp(temp)
+                            }
+
+                            other => other,
+                        };
+
+                        (base_ptr, Type::Char)
+                    }
+
+                    _ => panic!("Cannot index value of type: {:?}", base_type),
                 };
 
                 let stride = self.element_size(&element_type);
 
                 let offset_temp = self.next_temp_with_type(Type::Int);
+
                 self.code.push(Instruction::Binary {
                     dst: offset_temp.clone(),
                     op: IrOp::Mul,
@@ -1133,16 +1167,16 @@ impl IRGen {
                 });
 
                 let elem_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(element_type)));
+
                 self.code.push(Instruction::Binary {
                     dst: elem_addr_temp.clone(),
                     op: IrOp::Add,
-                    lhs: base_addr,
+                    lhs: base_ptr,
                     rhs: Value::Temp(offset_temp),
                 });
 
                 Value::Temp(elem_addr_temp)
             }
-
             _ => {
                 panic!("Cannot take address of: {:?}", expr.kind);
             }
@@ -1373,11 +1407,9 @@ impl IRGen {
                 let concrete_type = if generic_args.is_empty() {
                     Type::Struct(struct_name.clone())
                 } else {
-                    let generic_types = self.resolve_generic_args(generic_args);
-
                     let generic_ty = Type::GenericInstance {
                         name: struct_name.clone(),
-                        args: generic_types,
+                        args: generic_args.to_vec(),
                     };
 
                     self.resolve_type(&generic_ty)
@@ -1438,76 +1470,18 @@ impl IRGen {
                 target_val
             }
 
-            ExprKind::Index { base, index } => {
-                let base_val = self.gen_expr(base, None);
-                let index_val = self.gen_expr(index, None);
+            ExprKind::Index { .. } => {
+                let element_type = self
+                    .expr_type(expr)
+                    .unwrap_or_else(|| panic!("Cannot determine index result type"));
 
-                let base_type = self.expr_type(base);
-                let element_type = match &base_type {
-                    Some(Type::Array { element_type, .. }) => *element_type.clone(),
-                    Some(Type::Ptr(inner)) => match &**inner {
-                        Type::Array { element_type, .. } => *element_type.clone(),
-                        other => other.clone(),
-                    },
-                    Some(Type::Str) => Type::Char,
-                    _ => Type::Int,
-                };
-
-                let stride = self.element_size(&element_type);
-                let offset_temp = self.next_temp_with_type(Type::Int);
-                self.code.push(Instruction::Binary {
-                    dst: offset_temp.clone(),
-                    op: IrOp::Mul,
-                    lhs: index_val,
-                    rhs: Value::Const(stride),
-                });
-
-                let target_addr_temp =
-                    self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-                let is_base_variable_a_pointer = match &base_val {
-                    Value::Var(name) => matches!(self.var_types.get(name), Some(Type::Ptr(_))),
-                    _ => false,
-                };
-
-                if is_base_variable_a_pointer || matches!(base_type, Some(Type::Ptr(_))) {
-                    self.code.push(Instruction::Binary {
-                        dst: target_addr_temp.clone(),
-                        op: IrOp::Add,
-                        lhs: base_val,
-                        rhs: Value::Temp(offset_temp),
-                    });
-                } else {
-                    match base_val {
-                        Value::Var(_) => {
-                            let base_addr_temp =
-                                self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-                            self.code.push(Instruction::Unary {
-                                dst: base_addr_temp.clone(),
-                                op: IrOp::Ref,
-                                value: base_val,
-                            });
-                            self.code.push(Instruction::Binary {
-                                dst: target_addr_temp.clone(),
-                                op: IrOp::Add,
-                                lhs: Value::Temp(base_addr_temp),
-                                rhs: Value::Temp(offset_temp),
-                            });
-                        }
-                        _ => {
-                            self.code.push(Instruction::Binary {
-                                dst: target_addr_temp.clone(),
-                                op: IrOp::Add,
-                                lhs: base_val,
-                                rhs: Value::Temp(offset_temp),
-                            });
-                        }
-                    }
-                }
+                let target_addr = self.gen_lvalue_addr(expr);
 
                 let result_temp = self.next_temp_with_type(element_type.clone());
+
                 self.code.push(Instruction::Load {
                     dst: result_temp.clone(),
-                    ptr: Value::Temp(target_addr_temp),
+                    ptr: target_addr,
                     ty: element_type,
                 });
 
@@ -1543,12 +1517,13 @@ impl IRGen {
                 }
                 UnaryOp::Deref => {
                     let value = self.gen_expr(expr, None);
-                    let inner_type = self.expr_type(expr).unwrap_or(Type::Void);
+                    let inner_type = self.expr_type(expr).unwrap();
                     let value_type = match inner_type {
                         Type::Ptr(inner) => *inner,
                         _ => {
                             unreachable!(
-                                "non-pointer type dereferenced (this should be handled by analyser)"
+                                "non-pointer type dereferenced (this should be handled by analyser): {}",
+                                inner_type.ttos()
                             )
                         }
                     };
@@ -1657,12 +1632,9 @@ impl IRGen {
                 callee,
                 generic_args,
                 args,
-            } => {
-                let generic_types = self.resolve_generic_args(generic_args);
-
-                self.gen_call(callee, &generic_types, args, true)
-                    .unwrap_or(Value::Void)
-            }
+            } => self
+                .gen_call(callee, generic_args, args, true)
+                .unwrap_or(Value::Void),
         }
     }
 
@@ -1813,9 +1785,7 @@ impl IRGen {
                     args,
                 } = &expr.kind
                 {
-                    let generic_types = self.resolve_generic_args(generic_args);
-
-                    self.gen_call(callee, &generic_types, args, false);
+                    self.gen_call(callee, &generic_args, args, false);
                 } else {
                     self.gen_expr(expr, None);
                 }
@@ -2354,69 +2324,11 @@ impl IRGen {
                         });
                     }
 
-                    ExprKind::Index { base, index } => {
-                        let base_val = self.gen_expr(base, None);
-                        let index_val = self.gen_expr(index, None);
-
-                        let base_type = self.expr_type(base);
-                        let element_type = match &base_type {
-                            Some(Type::Array { element_type, .. }) => *element_type.clone(),
-                            Some(Type::Ptr(inner)) => match &**inner {
-                                Type::Array { element_type, .. } => *element_type.clone(),
-                                other => other.clone(),
-                            },
-                            Some(Type::Str) => Type::Char,
-                            _ => Type::Int,
-                        };
-
-                        let stride = self.element_size(&element_type);
-
-                        let offset_temp = self.next_temp_with_type(Type::Int);
-                        self.code.push(Instruction::Binary {
-                            dst: offset_temp.clone(),
-                            op: IrOp::Mul,
-                            lhs: index_val,
-                            rhs: Value::Const(stride),
-                        });
-
-                        let is_base_pointer = match &base.kind {
-                            ExprKind::Identifier(name) => {
-                                matches!(self.var_types.get(name), Some(Type::Ptr(_)))
-                            }
-                            ExprKind::Unary {
-                                op: UnaryOp::Deref, ..
-                            } => true,
-                            _ => false,
-                        };
-
-                        let target_addr_temp =
-                            self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-
-                        if is_base_pointer || matches!(base_type, Some(Type::Ptr(_))) {
-                            self.code.push(Instruction::Binary {
-                                dst: target_addr_temp.clone(),
-                                op: IrOp::Add,
-                                lhs: base_val,
-                                rhs: Value::Temp(offset_temp),
-                            });
-                        } else {
-                            let base_addr_temp =
-                                self.next_temp_with_type(Type::Ptr(Box::new(element_type.clone())));
-                            self.code.push(Instruction::Unary {
-                                dst: base_addr_temp.clone(),
-                                op: IrOp::Ref,
-                                value: base_val,
-                            });
-                            self.code.push(Instruction::Binary {
-                                dst: target_addr_temp.clone(),
-                                op: IrOp::Add,
-                                lhs: Value::Temp(base_addr_temp),
-                                rhs: Value::Temp(offset_temp),
-                            });
-                        }
+                    ExprKind::Index { .. } => {
+                        let target_addr = self.gen_lvalue_addr(target);
 
                         self.code.push(Instruction::Store {
-                            ptr: Value::Temp(target_addr_temp),
+                            ptr: target_addr,
                             source: value_to_store,
                         });
                     }

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::lex::lexing::{Token, TokenType};
 use crate::parse::parsing::{
     BinaryOp, Expr, ExprKind, Identifier, Literal, Parameter, ParserError, ParserErrorType,
@@ -15,6 +13,7 @@ pub struct Parser {
     pub ast: Program,
     pub parser_errs: Vec<ParserError>,
     pub generic_params: Vec<String>,
+    generic_depth: usize,
 }
 
 impl Parser {
@@ -27,6 +26,7 @@ impl Parser {
             },
             parser_errs: Vec::new(),
             generic_params: Vec::new(),
+            generic_depth: 0,
         }
     }
 
@@ -135,99 +135,28 @@ impl Parser {
         }
         args
     }
-    fn parse_generic_expr_args(&mut self) -> Vec<Expr> {
+
+    fn parse_generic_expr_args(&mut self) -> Vec<Type> {
         let mut args = Vec::new();
 
-        if !matches!(
+        if matches!(
             self.get_token().map(|t| &t.ttype),
             Some(TokenType::LessThan)
         ) {
-            return args;
-        }
+            self.advance(); // consume '<'
 
-        self.advance(); // consume '<'
+            while let Some(ty) = self.parse_type() {
+                args.push(ty);
 
-        loop {
-            if matches!(
-                self.get_token().map(|t| &t.ttype),
-                Some(TokenType::GreaterThan)
-            ) {
-                break;
-            }
-
-            let tk = match self.get_token().cloned() {
-                Some(tk) => tk,
-                None => break,
-            };
-
-            if tk.ttype != TokenType::Identifier {
-                self.throw(
-                    ParserErrorType::UnexpectedTokenTypeError,
-                    format!("Expected generic argument, found {:?}", tk.ttype),
-                    tk.location,
-                );
-                break;
-            }
-
-            self.advance();
-
-            args.push(Expr {
-                kind: ExprKind::Identifier(tk.value),
-                span: tk.location,
-            });
-
-            match self.get_token().map(|t| &t.ttype) {
-                Some(TokenType::Comma) => {
+                if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
                     self.advance();
-                }
-
-                Some(TokenType::GreaterThan) => {
+                } else {
                     break;
                 }
-
-                other => {
-                    let possible_location = self.get_token().map(|t| t.location.clone());
-
-                    if possible_location.is_none() {
-                        self.throw(
-                            ParserErrorType::MalformedStatementError,
-                            format!("Statment has no location, {:?}", other.clone()),
-                            Location {
-                                line: 0,
-                                col: 0,
-                                file: Rc::from("nil"),
-                            },
-                        );
-                    } else {
-                        let ct = if let Some(tk) = other {
-                            format!("{:?}", tk)
-                        } else {
-                            "{eof}".to_string()
-                        };
-
-                        let loc = if let Some(location) = possible_location {
-                            location
-                        } else {
-                            Location {
-                                line: 0,
-                                col: 0,
-                                file: Rc::from("nil"),
-                            }
-                        };
-
-                        self.throw(
-                            ParserErrorType::UnexpectedTokenTypeError,
-                            format!("Expected ',' or '>', found {ct}"),
-                            loc,
-                        );
-
-                        break;
-                    }
-                }
             }
-        }
 
-        self.expect(TokenType::GreaterThan);
+            self.expect(TokenType::GreaterThan);
+        }
 
         args
     }
@@ -1059,7 +988,19 @@ impl Parser {
                     | TokenType::GreaterThanEquals
             )
         ) {
+            // A '>' inside generic arguments closes the current
+            // generic argument list. It is not a comparison.
+            if self.generic_depth > 0
+                && matches!(
+                    self.get_token().map(|t| &t.ttype),
+                    Some(TokenType::GreaterThan)
+                )
+            {
+                break;
+            }
+
             let op_token = self.get_token()?.clone();
+
             self.advance();
 
             let op = match op_token.ttype {
@@ -1067,10 +1008,13 @@ impl Parser {
                 TokenType::LessThanEquals => BinaryOp::LtE,
                 TokenType::GreaterThan => BinaryOp::Gt,
                 TokenType::GreaterThanEquals => BinaryOp::GtE,
+
                 _ => unreachable!(),
             };
 
             let right = self.parse_addsub()?;
+
+            let span = left.span.clone();
 
             left = Expr {
                 kind: ExprKind::Binary {
@@ -1078,7 +1022,7 @@ impl Parser {
                     op,
                     right: Box::new(right),
                 },
-                span: op_token.location,
+                span,
             };
         }
 
@@ -1333,7 +1277,13 @@ impl Parser {
                     }
                 }
                 Some(TokenType::DoubleColon) => {
-                    self.advance();
+                    if matches!(
+                        self.get_token().map(|t| &t.ttype),
+                        Some(TokenType::DoubleColon)
+                    ) {
+                        self.advance(); // consume ::
+                    }
+
                     let generic_args = self.parse_generic_expr_args();
 
                     match self.get_token().map(|t| &t.ttype) {
@@ -1368,11 +1318,15 @@ impl Parser {
                                 return None;
                             }
                         }
+
                         Some(TokenType::LParen) => {
                             self.advance();
+
                             let args = self.parse_args();
+
                             if let ExprKind::Identifier(name) = &expr.kind {
                                 let callee_loc = expr.span.clone();
+
                                 expr = Expr {
                                     kind: ExprKind::Call {
                                         callee: Identifier {
@@ -1394,21 +1348,30 @@ impl Parser {
                                 return None;
                             }
                         }
+
                         Some(TokenType::LBrace) => {
                             self.advance();
+
                             let mut fields = Vec::new();
+
                             if !matches!(
                                 self.get_token().map(|t| &t.ttype),
                                 Some(TokenType::RBrace)
                             ) {
                                 loop {
                                     let field_name = self.expect(TokenType::Identifier)?.value;
+
                                     self.expect(TokenType::Colon)?;
+
                                     let value_expr = self.parse_expr()?;
+
                                     fields.push((field_name, value_expr));
+
                                     match self.get_token().map(|t| &t.ttype) {
                                         Some(TokenType::Comma) => self.advance(),
+
                                         Some(TokenType::RBrace) => break,
+
                                         _ => {
                                             self.throw(
                                                 ParserErrorType::UnexpectedTokenTypeError,
@@ -1421,7 +1384,9 @@ impl Parser {
                                     }
                                 }
                             }
+
                             self.expect(TokenType::RBrace)?;
+
                             if let ExprKind::Identifier(name) = &expr.kind {
                                 expr = Expr {
                                     kind: ExprKind::StructLiteral {
@@ -1433,13 +1398,15 @@ impl Parser {
                                 };
                             } else {
                                 self.throw(
-                    ParserErrorType::UnexpectedTokenTypeError,
-                    "Cannot apply generic arguments to non-identifier for struct literal".to_string(),
-                    expr.span.clone(),
-                );
+                                    ParserErrorType::UnexpectedTokenTypeError,
+                                    "Cannot apply generic arguments to non-identifier for struct literal"
+                                        .to_string(),
+                                    expr.span.clone(),
+                                );
                                 return None;
                             }
                         }
+
                         _ => {
                             let possible_tk = self.get_token();
 
@@ -1454,11 +1421,11 @@ impl Parser {
                                 format!("Expected '(' or '{{' after generic arguments, found {ct}"),
                                 possible_tk.unwrap().location.clone(),
                             );
+
                             return None;
                         }
                     }
                 }
-
                 _ => break,
             }
         }

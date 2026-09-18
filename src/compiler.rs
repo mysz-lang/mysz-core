@@ -983,7 +983,7 @@ impl AtAliasRewriter {
                 fields,
             } => ExprKind::StructLiteral {
                 struct_name: self.qualify(&struct_name).unwrap_or(struct_name),
-                generic_args: generic_args.into_iter().map(|t| self.expr(t)).collect(),
+                generic_args: generic_args.into_iter().map(|t| self.ty(t)).collect(),
                 fields: fields.into_iter().map(|(n, e)| (n, self.expr(e))).collect(),
             },
             ExprKind::Binary { left, op, right } => ExprKind::Binary {
@@ -1009,7 +1009,7 @@ impl AtAliasRewriter {
                 }
                 ExprKind::Call {
                     callee,
-                    generic_args: generic_args.into_iter().map(|t| self.expr(t)).collect(),
+                    generic_args: generic_args.into_iter().map(|t| self.ty(t)).collect(),
                     args: args.into_iter().map(|a| self.expr(a)).collect(),
                 }
             }
@@ -1352,6 +1352,8 @@ pub fn compile_ast_program(
         }
     }
 
+    // println!("AST: {:#?}", program);
+
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
 
@@ -1382,7 +1384,7 @@ pub fn compile_ast_program(
 
     irgen.gen_program(program);
 
-    // irgen.dump();
+    irgen.dump();
 
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();

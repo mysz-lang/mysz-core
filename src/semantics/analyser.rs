@@ -237,30 +237,6 @@ impl Analyser {
         }
     }
 
-    fn instantiate_generic_expr_type(&mut self, expr: &Expr) -> Result<Type, AnalyserError> {
-        match &expr.kind {
-            ExprKind::Identifier(_) => {
-                let expr_type = self.check_expr(expr, None)?;
-
-                let possible_type = self.instantiate_generic_types(&expr_type, &expr.span);
-
-                if let Ok(success) = possible_type {
-                    return Ok(success);
-                }
-
-                Ok(Type::Nil)
-            }
-
-            _ => Err(AnalyserError::TypeError {
-                location: expr.span.clone(),
-                message: format!(
-                    "failed to infer generic instantiation expression type: {:?}",
-                    expr.kind
-                ),
-            }),
-        }
-    }
-
     fn declare_variable(
         &mut self,
         name: &str,
@@ -636,7 +612,7 @@ impl Analyser {
                 } else {
                     let resolved_args = generic_args
                         .iter()
-                        .map(|arg| self.instantiate_generic_expr_type(arg))
+                        .map(|arg| self.instantiate_generic_types(arg, &expr.span))
                         .collect::<Result<Vec<Type>, AnalyserError>>()?;
 
                     let generic_ty = Type::GenericInstance {
@@ -653,7 +629,7 @@ impl Analyser {
                     _ => {
                         return Err(AnalyserError::type_error(
                             expr.span.clone(),
-                            format!("Expected concrete struct type, got {:?}", concrete_ty),
+                            format!("Expected concrete struct type, got {}", concrete_ty.ttos()),
                         ));
                     }
                 };
@@ -786,7 +762,7 @@ impl Analyser {
                     let mut inst_args = Vec::new();
 
                     for g_arg in generic_args {
-                        let instantiated = self.instantiate_generic_expr_type(g_arg)?;
+                        let instantiated = self.instantiate_generic_types(g_arg, &expr.span)?;
 
                         let substituted =
                             self.substitute_type(&instantiated, &self.current_substitutions);
@@ -1148,8 +1124,8 @@ impl Analyser {
                             Err(AnalyserError::type_error(
                                 expr.span.clone(),
                                 format!(
-                                    "Operator '{:?}' expects {}, but found '{}' and '{}'",
-                                    op,
+                                    "Operator '{}' expects {}, but found '{}' and '{}'",
+                                    op.otos(),
                                     expected,
                                     type_to_string(&left_type),
                                     type_to_string(&right_type)
