@@ -1225,7 +1225,7 @@ pub fn compile_at_graph<'a, P: AsRef<Path>>(
     };
 
     let root = &ats[entry.info].entry_file;
-    compile_ast_program(&program, output_filename, &sources, root, ctx.output_json)
+    compile_ast_program(&program, output_filename, &sources, root, ctx)
 }
 
 fn resolve_imports(
@@ -1298,12 +1298,12 @@ fn resolve_imports(
     Ok(parsed_ats)
 }
 
-pub fn compile_ast_program(
+pub fn compile_ast_program<'a, P: AsRef<Path>>(
     program: &Program,
     output_filename: &str,
     sources: &SourceMap,
     file_path: &Path,
-    json_output: bool,
+    ctx: &CompilerCtx<'a, P>
 ) -> Result<(), String> {
     let root_source = sources
         .get(&file_path.display().to_string())
@@ -1320,7 +1320,7 @@ pub fn compile_ast_program(
     let mut analyser = Analyser::new();
 
     if let Err(err) = analyser.analyse(program) {
-        if json_output {
+        if ctx.output_json {
             let location = match err.clone() {
                 AnalyserError::SemanticError { location, .. }
                 | AnalyserError::OverDefinitionError { location, .. }
@@ -1384,7 +1384,9 @@ pub fn compile_ast_program(
 
     irgen.gen_program(program);
 
-    // irgen.dump();
+    if ctx.debug {
+        irgen.dump();
+    }
 
     let mut tac_instructions = Vec::new();
     let mut seen_labels = HashSet::new();

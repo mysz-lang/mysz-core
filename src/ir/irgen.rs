@@ -2466,6 +2466,7 @@ impl IRGen {
     }
 
     pub fn dump(&self) {
+        println!("[DUMP_START]");
         for inst in &self.code {
             match inst {
                 Instruction::Assign { dst, src } => println!("{dst} = {:?}", src),

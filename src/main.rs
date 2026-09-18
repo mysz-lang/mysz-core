@@ -32,6 +32,7 @@ fn main() {
         input_path: "./interntest/main.mysz",
         search_paths: &["./interntest".into()],
         output_json: false,
+        debug: true,
     };
     let res = compile_at_graph(&ctx, &ats, &entry, "./interntest/main.o");
 
