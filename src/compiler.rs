@@ -1303,7 +1303,7 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
     output_filename: &str,
     sources: &SourceMap,
     file_path: &Path,
-    ctx: &CompilerCtx<'a, P>
+    ctx: &CompilerCtx<'a, P>,
 ) -> Result<(), String> {
     let root_source = sources
         .get(&file_path.display().to_string())
