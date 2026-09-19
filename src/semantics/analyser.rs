@@ -65,6 +65,7 @@ pub struct Analyser {
     pub structs: HashMap<String, StructSignature>,
     pub enums: HashMap<String, EnumSignature>,
     pub constants: HashMap<String, (Type, Expr)>,
+    pub externalconstants: HashMap<String, (Type, Location)>,
     current_return_type: Option<Type>,
     loop_depth: usize,
     pub current_generic_params: Vec<String>,
@@ -84,6 +85,7 @@ impl Analyser {
             structs: HashMap::new(),
             enums: HashMap::new(),
             constants: HashMap::new(),
+            externalconstants: HashMap::new(),
             current_return_type: None,
             loop_depth: 0,
             current_generic_params: Vec::new(),
@@ -327,6 +329,27 @@ impl Analyser {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn declare_externalconstant(
+        &mut self,
+        name: &Identifier,
+        ctype: &Type,
+    ) -> Result<(), AnalyserError> {
+        if let Some((_, existingloc)) = self.externalconstants.get(&name.value) {
+            return Err(AnalyserError::overdef_error(
+                name.location.clone(),
+                format!(
+                    "External symbol '{}' is already defined at [{}]",
+                    name.value, existingloc
+                ),
+            ));
+        }
+
+        self.externalconstants
+            .insert(name.value.clone(), (ctype.clone(), name.location.clone()));
+
         Ok(())
     }
 
@@ -735,6 +758,8 @@ impl Analyser {
                     Ok(symbol.ty.clone())
                 } else if let Some((const_type, _)) = self.constants.get(name) {
                     Ok(const_type.clone())
+                } else if let Some((external_type, _)) = self.externalconstants.get(name) {
+                    Ok(external_type.clone())
                 } else {
                     let ct = Type::from(name);
                     Ok(ct)
@@ -803,6 +828,10 @@ impl Analyser {
                             Type::Struct(name) => {
                                 if let Some(symbol) = self.resolve_variable(name) {
                                     symbol.ty.clone()
+                                } else if let Some((external_type, _)) =
+                                    self.externalconstants.get(name)
+                                {
+                                    external_type.clone()
                                 } else {
                                     g_arg.clone()
                                 }
@@ -1351,7 +1380,7 @@ impl Analyser {
                 Ok(())
             }
 
-            Stmt::Extern {
+            Stmt::ExternFn {
                 name,
                 rttype,
                 generic_params,
@@ -1405,6 +1434,8 @@ impl Analyser {
                 )?;
                 Ok(())
             }
+
+            Stmt::ExternConst { name, ctype } => self.declare_externalconstant(name, ctype),
 
             Stmt::Constant { name, vtype, expr } => {
                 if self.current_return_type.is_some() {

@@ -207,11 +207,15 @@ pub enum Stmt {
         params: Vec<Parameter>,
         body: Vec<Stmt>,
     },
-    Extern {
+    ExternFn {
         name: Identifier,
         rttype: Option<Type>,
         generic_params: Vec<String>,
         params: Vec<Parameter>,
+    },
+    ExternConst {
+        name: Identifier,
+        ctype: Type,
     },
     Break {
         location: Location,

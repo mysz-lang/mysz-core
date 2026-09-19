@@ -119,8 +119,13 @@ pub enum Instruction {
         ty: Type,
     },
 
-    Extern {
+    ExternFn {
         fnname: String,
+    },
+
+    ExternConst {
+        cnname: String,
+        ty: Type,
     },
 }
 

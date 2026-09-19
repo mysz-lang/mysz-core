@@ -1705,6 +1705,14 @@ impl IRGen {
             Stmt::Constant { .. } => {
                 // Constants are generated at use sites
             }
+            Stmt::ExternConst { name, ctype } => {
+                let resolved_type = self.resolve_type(ctype);
+                self.var_types.insert(name.value.clone(), resolved_type);
+                self.code.push(Instruction::ExternConst {
+                    cnname: name.value.clone(),
+                    ty: ctype.clone(),
+                });
+            }
             Stmt::Assignment { ident, vtype, expr } => {
                 let mangled_name = format!("{}::{}", self.current_function, ident.value);
 
@@ -2287,12 +2295,12 @@ impl IRGen {
                     self.code.push(Instruction::Return { value: Value::Void })
                 }
             }
-            Stmt::Extern { name, rttype, .. } => {
+            Stmt::ExternFn { name, rttype, .. } => {
                 let name = name.value.clone();
                 let return_type = rttype.clone().unwrap_or(Type::Void);
                 self.var_types.insert(name.clone(), return_type);
                 self.externs.push(name.clone());
-                self.code.push(Instruction::Extern {
+                self.code.push(Instruction::ExternFn {
                     fnname: name.clone(),
                 });
             }
@@ -2405,10 +2413,11 @@ impl IRGen {
     pub fn gen_program(&mut self, program: &Program) {
         for stmt in &program.statements {
             if !matches!(stmt, Stmt::Function { .. })
-                && !matches!(stmt, Stmt::Extern { .. })
+                && !matches!(stmt, Stmt::ExternFn { .. })
                 && !matches!(stmt, Stmt::Struct { .. })
                 && !matches!(stmt, Stmt::Constant { .. })
                 && !matches!(stmt, Stmt::Enum { .. })
+                && !matches!(stmt, Stmt::ExternConst { .. })
             {
                 println!(
                     "Codegen Error: top-level statement outside of a function is not supported."
@@ -2553,10 +2562,13 @@ impl IRGen {
                     argc,
                     signature
                 ),
-                Instruction::Extern { fnname } => println!("extern {}", fnname),
+                Instruction::ExternFn { fnname } => println!("extern fn {}", fnname),
                 Instruction::Store { ptr, source } => println!("store {:?} to *{:?}", source, ptr),
                 Instruction::Load { dst, ptr, ty } => {
-                    println!("load {:?} [{:?}] from *{:?}", dst, ty, ptr)
+                    println!("load {:?} [{}] from *{:?}", dst, type_to_string(ty), ptr)
+                }
+                Instruction::ExternConst { cnname, ty } => {
+                    println!("extern const {}: {}", cnname, type_to_string(ty))
                 }
                 Instruction::Cast {
                     dst,
@@ -2564,8 +2576,10 @@ impl IRGen {
                     value,
                     to_type,
                 } => println!(
-                    "{dst} = {:?} as {:?} [casttype: {:?}]",
-                    value, to_type, cast_ty
+                    "{dst} = {:?} as {} [casttype: {:?}]",
+                    value,
+                    type_to_string(to_type),
+                    cast_ty
                 ),
             }
         }

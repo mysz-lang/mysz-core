@@ -266,6 +266,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .ok_or_else(|| format!("unknown temporary '{}'", name)),
 
             Value::Var(name) => {
+                let llvm_ty = self.llvm_type(&ty);
+
+                if let Some(global) = self.module.get_global(name) {
+                    return self
+                        .builder
+                        .build_load(llvm_ty, global.as_pointer_value(), name)
+                        .map_err(|err| err.to_string());
+                }
+
                 let resolved = self.resolve_var_name(name);
 
                 let ptr = self
@@ -273,8 +282,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .get(&resolved)
                     .copied()
                     .ok_or_else(|| format!("unknown variable '{}'", name))?;
-
-                let llvm_ty = self.llvm_type(&ty);
 
                 self.builder
                     .build_load(llvm_ty, ptr, name)
@@ -655,6 +662,10 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn llvm_address_of(&mut self, value: &Value) -> Result<PointerValue<'ctx>, String> {
         match value {
             Value::Var(name) => {
+                if let Some(global) = self.module.get_global(name) {
+                    return Ok(global.as_pointer_value());
+                }
+
                 let resolved = self.resolve_var_name(name);
 
                 if let Some(ptr) = self.vars.get(&resolved).copied() {
@@ -772,7 +783,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             } => self.compile_cast(dst, cast_ty, value, to_type),
             Instruction::Jump(label) => self.compile_jump(label),
             Instruction::JumpIfFalse { cond, target } => self.compile_jumpiffalse(cond, target),
-            Instruction::Extern { .. } => Ok(()),
+            Instruction::ExternFn { .. } => Ok(()),
             Instruction::Arg { value } => self.compile_arg(value),
             Instruction::Call {
                 dest,
@@ -784,8 +795,21 @@ impl<'ctx> LlvmBackend<'ctx> {
             Instruction::Unary { dst, op, value } => self.compile_unary(dst, op, value),
             Instruction::Load { dst, ptr, ty } => self.compile_load(dst, ptr, ty),
             Instruction::Store { ptr, source } => self.compile_store(ptr, source),
-            _ => Err("unimplemented instruction, check back later :>".to_string()),
+            Instruction::ExternConst { cnname, ty } => self.compile_externconst(cnname, ty),
         }
+    }
+
+    fn compile_externconst(&mut self, cnname: &String, ty: &Type) -> Result<(), String> {
+        let global = self
+            .module
+            .add_global(self.llvm_type(ty), None, &cnname.to_string());
+
+        global.set_linkage(Linkage::External);
+        global.set_constant(true);
+
+        self.var_types.insert(cnname.clone(), ty.clone());
+
+        Ok(())
     }
 
     fn compile_store(&mut self, ptr: &Value, source: &Value) -> Result<(), String> {

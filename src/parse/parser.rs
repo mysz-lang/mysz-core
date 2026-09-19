@@ -389,8 +389,7 @@ impl Parser {
         Some(Stmt::Use { path })
     }
 
-    fn parse_extern(&mut self) -> Option<Stmt> {
-        self.advance(); // consume 'extern'
+    fn parse_externfn(&mut self) -> Option<Stmt> {
         self.expect(TokenType::FnKeyword)?;
 
         let ident = self.expect(TokenType::Identifier)?;
@@ -415,12 +414,43 @@ impl Parser {
             self.generic_params.pop();
         }
 
-        Some(Stmt::Extern {
+        Some(Stmt::ExternFn {
             name: to_ident(Some(ident))?,
             rttype,
             generic_params,
             params,
         })
+    }
+
+    fn parse_externconst(&mut self) -> Option<Stmt> {
+        self.expect(TokenType::ConstKeyword)?;
+
+        let ident = self.expect(TokenType::Identifier)?;
+        self.expect(TokenType::Colon)?;
+
+        let ctype = self.parse_type()?;
+
+        Some(Stmt::ExternConst {
+            name: to_ident(Some(ident))?,
+            ctype,
+        })
+    }
+
+    fn parse_extern(&mut self) -> Option<Stmt> {
+        self.advance(); // consume 'extern'
+
+        match self.get_token() {
+            Some(tk) => match tk.ttype {
+                TokenType::FnKeyword => {
+                    return self.parse_externfn();
+                }
+                TokenType::ConstKeyword => {
+                    return self.parse_externconst();
+                }
+                _ => return None,
+            },
+            None => return None,
+        }
     }
 
     fn parse_params(&mut self, ending: TokenType) -> Vec<Parameter> {

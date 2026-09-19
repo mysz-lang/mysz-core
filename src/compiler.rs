@@ -904,6 +904,7 @@ impl AtAliasRewriter {
                 step: Box::new(self.stmt(*step)),
                 body: self.stmts(body),
             },
+            Stmt::ExternConst { name, ctype } => Stmt::ExternConst { name, ctype },
             Stmt::ForIn {
                 field_ident,
                 target_expr,
@@ -946,12 +947,12 @@ impl AtAliasRewriter {
                 params: self.params(params),
                 body: self.stmts(body),
             },
-            Stmt::Extern {
+            Stmt::ExternFn {
                 name,
                 rttype,
                 generic_params,
                 params,
-            } => Stmt::Extern {
+            } => Stmt::ExternFn {
                 name,
                 rttype: rttype.map(|t| self.ty(t)),
                 generic_params,
@@ -1351,8 +1352,6 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
             return Err(format!("Semantic error:\n{}", formatted));
         }
     }
-
-    // println!("AST: {:#?}", program);
 
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();

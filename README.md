@@ -7,11 +7,11 @@ This is the core repository, which holds the rust source code for the Lexer, Par
 
 # Support
 
-| OS | architecture | Supported (cranelift) | Supported (llvm) |
-|---|---|---|---|
-| Linux (generic) | x86_64 | Supported | Supported |
-| Windows msvc | x86_64 | Planned | Supported |
-| MacOs | ARM_64 | Unsupported | Supported |
+| OS | architecture | Supported |
+|---|---|---|
+| Linux (generic) | x86_64 | Supported |
+| Windows msvc | x86_64 | Supported |
+| MacOs | ARM_64 | Supported |
 
 ## Embedding the Core Engine
 
