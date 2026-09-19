@@ -441,12 +441,8 @@ impl Parser {
 
         match self.get_token() {
             Some(tk) => match tk.ttype {
-                TokenType::FnKeyword => {
-                    self.parse_externfn()
-                }
-                TokenType::ConstKeyword => {
-                    self.parse_externconst()
-                }
+                TokenType::FnKeyword => self.parse_externfn(),
+                TokenType::ConstKeyword => self.parse_externconst(),
                 _ => None,
             },
             None => None,
