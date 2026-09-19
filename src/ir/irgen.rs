@@ -1662,6 +1662,10 @@ impl IRGen {
                     BinaryOp::Lt => IrOp::Lt,
                     BinaryOp::LtE => IrOp::LtE,
                     BinaryOp::Mod => IrOp::Mod,
+                    BinaryOp::BitwiseAnd => IrOp::BitAnd,
+                    BinaryOp::BitwiseOr => IrOp::BitOr,
+                    BinaryOp::BitshiftLeft => IrOp::BitsLeft,
+                    BinaryOp::BitshiftRight => IrOp::BitsRight,
                 };
 
                 self.emit_binary(ir_op, lhs, rhs)

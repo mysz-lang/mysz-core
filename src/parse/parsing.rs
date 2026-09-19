@@ -39,6 +39,11 @@ pub enum BinaryOp {
     LtE,
     And,
     Or,
+
+    BitwiseAnd,
+    BitwiseOr,
+    BitshiftLeft,
+    BitshiftRight,
 }
 impl BinaryOp {
     pub fn otos(&self) -> &str {
@@ -57,6 +62,11 @@ impl BinaryOp {
             Self::LtE => "<=",
             Self::And => "&&",
             Self::Or => "||",
+
+            Self::BitwiseAnd => "#&",
+            Self::BitwiseOr => "#|",
+            Self::BitshiftLeft => "#<",
+            Self::BitshiftRight => "#>",
         }
     }
 }

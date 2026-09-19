@@ -442,14 +442,14 @@ impl Parser {
         match self.get_token() {
             Some(tk) => match tk.ttype {
                 TokenType::FnKeyword => {
-                    return self.parse_externfn();
+                    self.parse_externfn()
                 }
                 TokenType::ConstKeyword => {
-                    return self.parse_externconst();
+                    self.parse_externconst()
                 }
-                _ => return None,
+                _ => None,
             },
-            None => return None,
+            None => None,
         }
     }
 
@@ -949,7 +949,14 @@ impl Parser {
 
         while matches!(
             self.get_token().map(|t| t.ttype.clone()),
-            Some(TokenType::And | TokenType::Or)
+            Some(
+                TokenType::And
+                    | TokenType::Or
+                    | TokenType::BitAnd
+                    | TokenType::BitOr
+                    | TokenType::BitLeft
+                    | TokenType::BitRight
+            )
         ) {
             let op_token = self.get_token()?.clone();
             self.advance();
@@ -957,6 +964,10 @@ impl Parser {
             let op = match op_token.ttype {
                 TokenType::And => BinaryOp::And,
                 TokenType::Or => BinaryOp::Or,
+                TokenType::BitAnd => BinaryOp::BitwiseAnd,
+                TokenType::BitOr => BinaryOp::BitwiseOr,
+                TokenType::BitLeft => BinaryOp::BitshiftLeft,
+                TokenType::BitRight => BinaryOp::BitshiftRight,
                 _ => unreachable!(),
             };
 

@@ -26,23 +26,19 @@ impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LexError::UnexpectedEof { context, location } => {
-                write!(
-                    f,
-                    "Unexpected EOF while lexing {} at {:?}",
-                    context, location
-                )
+                write!(f, "Unexpected EOF while lexing {} at {location}", context)
             }
             LexError::UnknownEscapeSequence { ch, location } => {
-                write!(f, "Unknown escape sequence '\\{}' at {:?}", ch, location)
+                write!(f, "Unknown escape sequence '\\{}' at {location}", ch)
             }
             LexError::UnterminatedCharLiteral { location } => {
-                write!(f, "Unterminated character literal at {:?}", location)
+                write!(f, "Unterminated character literal at {location}")
             }
             LexError::UnterminatedComment { location } => {
-                write!(f, "Unterminated multi-line comment at {:?}", location)
+                write!(f, "Unterminated multi-line comment at {location}")
             }
             LexError::UnknownCharacter { location } => {
-                write!(f, "Unknown Character at {:?}", location)
+                write!(f, "Unknown Character at {location}")
             }
         }
     }
@@ -134,6 +130,10 @@ impl Lexer {
             } else {
                 match ch {
                     ' ' | '\n' | '\r' | '\t' => self.advance(),
+                    '#' => {
+                        let t = self.lex_bitop()?;
+                        self.add_token(t);
+                    }
                     '=' => {
                         let t = self.lex_assign()?;
                         self.add_token(t);
@@ -437,6 +437,61 @@ impl Lexer {
             location: loc,
             value: current.to_string(),
         })
+    }
+
+    fn lex_bitop(&mut self) -> Result<Token, LexError> {
+        let loc = self.current_location();
+        let current = self.get_char().ok_or(LexError::UnexpectedEof {
+            context: "'#'",
+            location: loc.clone(),
+        })?;
+
+        match self.peek(1) {
+            Some('|') => {
+                let next = self.peek(1).unwrap();
+                self.advance();
+                self.advance();
+                Ok(Token {
+                    ttype: TokenType::BitOr,
+                    location: loc,
+                    value: format!("{}{}", current, next),
+                })
+            }
+            Some('&') => {
+                let next = self.peek(1).unwrap();
+                self.advance();
+                self.advance();
+                Ok(Token {
+                    ttype: TokenType::BitAnd,
+                    location: loc,
+                    value: format!("{}{}", current, next),
+                })
+            }
+            Some('<') => {
+                let next = self.peek(1).unwrap();
+                self.advance();
+                self.advance();
+                Ok(Token {
+                    ttype: TokenType::BitLeft,
+                    location: loc,
+                    value: format!("{}{}", current, next),
+                })
+            }
+            Some('>') => {
+                let next = self.peek(1).unwrap();
+                self.advance();
+                self.advance();
+                Ok(Token {
+                    ttype: TokenType::BitRight,
+                    location: loc,
+                    value: format!("{}{}", current, next),
+                })
+            }
+            _ => {
+                self.advance();
+                Err(LexError::UnknownCharacter { location: loc })
+            }
+        }
     }
 
     fn lex_assign(&mut self) -> Result<Token, LexError> {

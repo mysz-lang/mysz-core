@@ -11,6 +11,11 @@ pub enum TokenType {
     GreaterThanEquals,
     Or,
     And,
+    // #| #& #< #>
+    BitOr,
+    BitAnd,
+    BitLeft,
+    BitRight,
 
     // generic signs
     Assign,

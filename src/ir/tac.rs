@@ -25,6 +25,12 @@ pub enum IrOp {
     Pos, // unary plus
     Ref, // unary &
     Not, // unary !
+
+    // Bitwise
+    BitAnd,
+    BitOr,
+    BitsLeft,
+    BitsRight,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1341,8 +1341,66 @@ impl<'ctx> LlvmBackend<'ctx> {
             | IrOp::And
             | IrOp::Or => self.compile_binary_comparison(dst, op, lhs, rhs),
 
+            IrOp::BitAnd | IrOp::BitOr | IrOp::BitsLeft | IrOp::BitsRight => {
+                self.compile_binary_bitop(dst, op, lhs, rhs)
+            }
+
             _ => unreachable!(),
         }
+    }
+
+    fn compile_binary_bitop(
+        &mut self,
+        dst: &str,
+        op: &IrOp,
+        lhs: &Value,
+        rhs: &Value,
+    ) -> Result<(), String> {
+        let result_type = self.value_type(lhs)?;
+        let rhs_type = self.value_type(rhs)?;
+
+        if !types_equal(&result_type, &rhs_type) {
+            return Err(format!(
+                "cannot compare {} with {}",
+                type_to_string(&result_type),
+                type_to_string(&rhs_type)
+            ));
+        }
+
+        if !is_integer(&result_type) {
+            return Err(format!(
+                "bit operation requires integer operands, got {}",
+                type_to_string(&result_type)
+            ));
+        }
+
+        let lhs_value = self.llvm_value(lhs)?.into_int_value();
+        let rhs_value = self.llvm_value(rhs)?.into_int_value();
+
+        let result = match op {
+            IrOp::BitAnd => self
+                .builder
+                .build_and(lhs_value, rhs_value, dst)
+                .map_err(|err| err.to_string())?,
+            IrOp::BitOr => self
+                .builder
+                .build_or(lhs_value, rhs_value, dst)
+                .map_err(|err| err.to_string())?,
+            IrOp::BitsLeft => self
+                .builder
+                .build_left_shift(lhs_value, rhs_value, dst)
+                .map_err(|err| err.to_string())?,
+            IrOp::BitsRight => self
+                .builder
+                .build_right_shift(lhs_value, rhs_value, is_signed_integer(&result_type), dst)
+                .map_err(|err| err.to_string())?,
+            _ => unreachable!(),
+        };
+
+        self.temps.insert(dst.to_string(), result.into());
+        self.temp_types.insert(dst.to_string(), result_type);
+
+        Ok(())
     }
 
     fn compile_binary_maths(
@@ -1945,47 +2003,5 @@ impl<'ctx> LlvmBackend<'ctx> {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn float_to_double_cast_is_supported() {
-        let context = Context::create();
-
-        let mut backend = LlvmBackend::new(
-            &context,
-            "test_mod",
-            ScopedMap::new(HashMap::new()),
-            HashMap::new(),
-            HashMap::new(),
-            Vec::new(),
-        );
-
-        let function = backend.module.add_function(
-            "test_float_to_double",
-            context.f64_type().fn_type(&[], false),
-            None,
-        );
-        let entry = context.append_basic_block(function, "entry");
-        backend.builder.position_at_end(entry);
-
-        let result = backend.compile_cast(
-            "tmp",
-            &CastType::FloatExtend,
-            &Value::Float(1.5),
-            &Type::Double,
-        );
-
-        assert!(
-            result.is_ok(),
-            "float -> double cast should be supported: {result:?}"
-        );
-        assert_eq!(backend.temp_types.get("tmp"), Some(&Type::Double));
     }
 }

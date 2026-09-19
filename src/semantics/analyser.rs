@@ -1196,6 +1196,25 @@ impl Analyser {
                             ))
                         }
                     }
+
+                    BinaryOp::BitshiftLeft
+                    | BinaryOp::BitshiftRight
+                    | BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr => {
+                        if !is_integer(&left_type) || !is_integer(&right_type) {
+                            return Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot operate bitwise on types: {} and {}",
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
+                            ));
+                        }
+
+                        Ok(left_type)
+                    }
+
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                         let is_float_op =
                             matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div);
