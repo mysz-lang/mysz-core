@@ -1057,6 +1057,7 @@ impl<'ctx> LlvmBackend<'ctx> {
             let sig = self
                 .func_defs
                 .get(signature)
+                .or_else(|| self.func_defs.get(name))
                 .ok_or_else(|| format!("unknown function signature '{}'", signature))?;
 
             self.temps.insert(dst.clone(), ret_val);

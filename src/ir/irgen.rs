@@ -751,6 +751,41 @@ impl IRGen {
         Value::Temp(temp)
     }
 
+    fn call_return_type(
+        &mut self,
+        callee: &crate::parse::parsing::Identifier,
+        generic_args: &[Type],
+    ) -> Option<Type> {
+        let Some(Stmt::Function {
+            generic_params,
+            rttype,
+            ..
+        }) = self.fn_blueprints.get(&callee.value).cloned()
+        else {
+            return self.var_types.get(&callee.value).cloned();
+        };
+
+        let concrete_args: Vec<Type> = generic_args
+            .iter()
+            .map(|t| {
+                let substituted = self.substitute_type(t, &self.current_substitutions);
+                self.resolve_generic_arg(&substituted)
+            })
+            .collect();
+
+        let substitutions: HashMap<String, Type> =
+            generic_params.iter().cloned().zip(concrete_args).collect();
+
+        let unresolved = rttype.unwrap_or(Type::Void);
+        let substituted = self.substitute_type(&unresolved, &substitutions);
+
+        let old_subs = std::mem::replace(&mut self.current_substitutions, substitutions);
+        let resolved = self.resolve_type(&substituted);
+        self.current_substitutions = old_subs;
+
+        Some(resolved)
+    }
+
     pub fn expr_type(&mut self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
             ExprKind::Cast { left: _, right } => Some(right.clone()),
@@ -808,7 +843,11 @@ impl IRGen {
                 | BinaryOp::LtE => Some(Type::Bool),
                 _ => self.expr_type(left),
             },
-            ExprKind::Call { .. } => None,
+            ExprKind::Call {
+                callee,
+                generic_args,
+                ..
+            } => self.call_return_type(callee, generic_args),
 
             ExprKind::Index { base, .. } => match self.expr_type(base)? {
                 Type::Array { element_type, .. } => Some(*element_type),
@@ -1984,7 +2023,6 @@ impl IRGen {
                             .field_offsets
                             .iter()
                             .filter(|(name, _)| {
-                                // A variadic pack's `il` length field is not an element; skip it.
                                 !is_variadic_pack
                                     || matches!(
                                         variadic::parse_field(name),
