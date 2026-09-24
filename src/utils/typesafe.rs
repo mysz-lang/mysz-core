@@ -152,6 +152,19 @@ pub fn normalise_type(ty: &Type) -> Type {
     }
 }
 
+fn comparable_type(ty: &Type) -> Type {
+    match ty {
+        Type::GenericInstance { name, args } => Type::Struct(mangle_name(name, args)),
+        Type::Enum(name) => Type::Struct(name.clone()),
+        Type::Ptr(inner) => Type::Ptr(Box::new(comparable_type(inner))),
+        Type::Array { element_type, size } => Type::Array {
+            element_type: Box::new(comparable_type(element_type)),
+            size: *size,
+        },
+        _ => ty.clone(),
+    }
+}
+
 pub fn both_way_allow(found: &Type, expected: &Type, a: Type, b: Type) -> bool {
     (found == &a && expected == &b)
         || (found == &b && expected == &a)
@@ -163,7 +176,7 @@ pub fn both_way_allow(found: &Type, expected: &Type, a: Type, b: Type) -> bool {
 pub fn is_integer(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char
+        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(_)
     )
 }
 
@@ -216,13 +229,17 @@ pub fn types_match(expected: &Type, found: &Type, mode: TypeCheckMode) -> bool {
         return true;
     }
 
-    if both_way_allow(found, expected, Type::Int, Type::Enum("".to_string())) {
-        return true;
-    };
-
-    if matches!(expected, _found) {
+    if matches!(
+        (expected, found),
+        (Type::Int, Type::Enum(_)) | (Type::Enum(_), Type::Int)
+    ) {
         return true;
     }
+
+    if comparable_type(expected) == comparable_type(found) {
+        return true;
+    }
+
     match mode {
         TypeCheckMode::Strict => false,
         TypeCheckMode::Coercive => {

@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
 use crate::parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, UnaryOp};
 use crate::utils::location::Location;
-use crate::utils::typesafe::{Type, type_to_string};
+use crate::utils::typesafe::{Type, is_decimal, type_to_string};
 
 use crate::utils::typesafe;
 use crate::utils::typesafe::variadic;
@@ -715,6 +715,8 @@ impl IRGen {
             IrOp::Add | IrOp::Sub | IrOp::Mul | IrOp::Div | IrOp::Mod => {
                 if lhs_ty == Type::Str || rhs_ty == Type::Str {
                     Type::Str
+                } else if is_decimal(&lhs_ty) || is_decimal(&rhs_ty) {
+                    lhs_ty
                 } else {
                     Type::Int
                 }
@@ -751,20 +753,37 @@ impl IRGen {
         Value::Temp(temp)
     }
 
+    fn extern_return_type(&mut self, name: &str, concrete_args: &[Type]) -> Option<Type> {
+        let Some(Stmt::ExternFn {
+            generic_params,
+            rttype,
+            ..
+        }) = self.fn_blueprints.get(&format!("extern::{}", name)).cloned()
+        else {
+            return None;
+        };
+
+        let substitutions: HashMap<String, Type> = generic_params
+            .iter()
+            .cloned()
+            .zip(concrete_args.iter().cloned())
+            .collect();
+
+        let unresolved = rttype.unwrap_or(Type::Void);
+        let substituted = self.substitute_type(&unresolved, &substitutions);
+
+        let old_subs = std::mem::replace(&mut self.current_substitutions, substitutions);
+        let resolved = self.resolve_type(&substituted);
+        self.current_substitutions = old_subs;
+
+        Some(resolved)
+    }
+
     fn call_return_type(
         &mut self,
         callee: &crate::parse::parsing::Identifier,
         generic_args: &[Type],
     ) -> Option<Type> {
-        let Some(Stmt::Function {
-            generic_params,
-            rttype,
-            ..
-        }) = self.fn_blueprints.get(&callee.value).cloned()
-        else {
-            return self.var_types.get(&callee.value).cloned();
-        };
-
         let concrete_args: Vec<Type> = generic_args
             .iter()
             .map(|t| {
@@ -773,8 +792,22 @@ impl IRGen {
             })
             .collect();
 
-        let substitutions: HashMap<String, Type> =
-            generic_params.iter().cloned().zip(concrete_args).collect();
+        let Some(Stmt::Function {
+            generic_params,
+            rttype,
+            ..
+        }) = self.fn_blueprints.get(&callee.value).cloned()
+        else {
+            return self
+                .extern_return_type(&callee.value, &concrete_args)
+                .or_else(|| self.var_types.get(&callee.value).cloned());
+        };
+
+        let substitutions: HashMap<String, Type> = generic_params
+            .iter()
+            .cloned()
+            .zip(concrete_args)
+            .collect();
 
         let unresolved = rttype.unwrap_or(Type::Void);
         let substituted = self.substitute_type(&unresolved, &substitutions);
@@ -1066,9 +1099,8 @@ impl IRGen {
 
             resolved
         } else {
-            self.var_types
-                .get(&resolved_func_name)
-                .cloned()
+            self.extern_return_type(&callee.value, &substituted_generic_args)
+                .or_else(|| self.var_types.get(&resolved_func_name).cloned())
                 .unwrap_or(Type::Int)
         };
 
@@ -1292,8 +1324,8 @@ impl IRGen {
                     }
 
                     (
-                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
-                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char,
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(..),
+                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(..),
                     ) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
@@ -1595,7 +1627,12 @@ impl IRGen {
                 }
                 UnaryOp::Deref => {
                     let value = self.gen_expr(expr, None);
-                    let inner_type = self.expr_type(expr).unwrap();
+                    let inner_type = self.expr_type(expr).unwrap_or_else(|| {
+                        panic!(
+                            "ICE: cannot determine the type of a dereferenced expression in '{}'",
+                            self.current_function
+                        )
+                    });
                     let value_type = match inner_type {
                         Type::Ptr(inner) => *inner,
                         _ => {
@@ -2341,6 +2378,8 @@ impl IRGen {
                 let name = name.value.clone();
                 let return_type = rttype.clone().unwrap_or(Type::Void);
                 self.var_types.insert(name.clone(), return_type);
+                self.fn_blueprints
+                    .insert(format!("extern::{}", name), stmt.clone());
                 self.externs.push(name.clone());
                 self.code.push(Instruction::ExternFn {
                     fnname: name.clone(),

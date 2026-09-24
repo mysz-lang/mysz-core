@@ -112,6 +112,18 @@ impl Analyser {
         self.current_scope = parent;
     }
 
+    fn resolve_enum_type(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Struct(name) if self.enums.contains_key(name) => Type::Enum(name.clone()),
+            Type::Ptr(inner) => Type::Ptr(Box::new(self.resolve_enum_type(inner))),
+            Type::Array { element_type, size } => Type::Array {
+                element_type: Box::new(self.resolve_enum_type(element_type)),
+                size: *size,
+            },
+            _ => ty.clone(),
+        }
+    }
+
     fn evaluates_statically_to_false(&mut self, cond: &Expr) -> Result<bool, AnalyserError> {
         match &cond.kind {
             ExprKind::Binary { left, op, right } => match op {
@@ -463,15 +475,21 @@ impl Analyser {
             ExprKind::Typeof { .. } => Ok(Type::Str),
             ExprKind::Cast { left, right } => {
                 let leftty = self.check_expr(left.as_ref(), None)?;
-                if types_compatible(&leftty, right) {
-                    return Ok(right.clone());
+
+                // Declared types name enums as `Struct(..)`; resolve both sides.
+                let leftty = self.resolve_enum_type(&leftty);
+                let target = self.resolve_enum_type(right);
+
+                if types_compatible(&leftty, &target) {
+                    return Ok(target);
                 }
+
                 Err(AnalyserError::type_error(
                     expr.span.clone(),
                     format!(
                         "Cannot cast '{}' to '{}'",
                         type_to_string(&leftty),
-                        type_to_string(right)
+                        type_to_string(&target)
                     ),
                 ))
             }
@@ -1183,7 +1201,13 @@ impl Analyser {
                                     ),
                                 ))
                             }
-                        } else if Type::Str != left_type && Type::Str != right_type {
+                        } else if is_decimal(&left_type) && is_decimal(&right_type) {
+                            if left_type == right_type {
+                                Ok(left_type)
+                            } else {
+                                Err(AnalyserError::type_error(expr.span.clone(), format!("Cannot add mismatched float types '{}' and '{}'", type_to_string(&left_type), type_to_string(&right_type))))
+                            }
+                        } else if Type::Str == left_type && Type::Str == right_type {
                             Ok(Type::Str)
                         } else {
                             Err(AnalyserError::type_error(

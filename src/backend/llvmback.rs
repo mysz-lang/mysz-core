@@ -847,23 +847,27 @@ impl<'ctx> LlvmBackend<'ctx> {
     fn compile_load(&mut self, dst: &str, ptr: &Value, ty: &Type) -> Result<(), String> {
         let ptr_ty = self.value_type(ptr)?;
 
-        let pointee_ty = match &ptr_ty {
-            Type::Ptr(inner) => inner.as_ref(),
-
-            Type::Str => &Type::Str,
-            _ => {
-                return Err(format!(
-                    "cannot load through non-pointer type {}",
-                    type_to_string(&ptr_ty)
-                ));
-            }
+        let pointee_ty = match ptr {
+            // A Var operand denotes the variable's own storage (llvm_ptr returns
+            // its alloca), so the pointee is the variable's declared type.
+            Value::Var(_) => ptr_ty.clone(),
+            _ => match &ptr_ty {
+                Type::Ptr(inner) => inner.as_ref().clone(),
+                Type::Str => Type::Str,
+                _ => {
+                    return Err(format!(
+                        "cannot load through non-pointer type {}",
+                        type_to_string(&ptr_ty)
+                    ));
+                }
+            },
         };
 
-        if !types_equal(pointee_ty, ty) {
+        if !types_equal(&pointee_ty, ty) {
             return Err(format!(
                 "cannot load {} from pointer to {}",
                 type_to_string(ty),
-                type_to_string(pointee_ty)
+                type_to_string(&pointee_ty)
             ));
         }
 
