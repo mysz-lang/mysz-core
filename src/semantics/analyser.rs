@@ -134,16 +134,12 @@ impl Analyser {
                         // Compile-time union variant comparison.
                         if let (ExprKind::Identifier(name), ExprKind::Field { base, field }) =
                             (&left.kind, &right.kind)
+                            && let ExprKind::Identifier(union_name) = &base.kind
+                            && self.unions.contains_key(union_name)
+                            && let Some(symbol) = self.resolve_variable(name)
+                            && let Some(active_variant) = &symbol.active_union_variant
                         {
-                            if let ExprKind::Identifier(union_name) = &base.kind {
-                                if self.unions.contains_key(union_name) {
-                                    if let Some(symbol) = self.resolve_variable(name) {
-                                        if let Some(active_variant) = &symbol.active_union_variant {
-                                            return Ok(active_variant != field);
-                                        }
-                                    }
-                                }
-                            }
+                            return Ok(active_variant != field);
                         }
 
                         // Constant boolean comparison.
@@ -186,16 +182,12 @@ impl Analyser {
                         // Compile-time union variant comparison.
                         if let (ExprKind::Identifier(name), ExprKind::Field { base, field }) =
                             (&left.kind, &right.kind)
+                            && let ExprKind::Identifier(union_name) = &base.kind
+                            && self.unions.contains_key(union_name)
+                            && let Some(symbol) = self.resolve_variable(name)
+                            && let Some(active_variant) = &symbol.active_union_variant
                         {
-                            if let ExprKind::Identifier(union_name) = &base.kind {
-                                if self.unions.contains_key(union_name) {
-                                    if let Some(symbol) = self.resolve_variable(name) {
-                                        if let Some(active_variant) = &symbol.active_union_variant {
-                                            return Ok(active_variant == field);
-                                        }
-                                    }
-                                }
-                            }
+                            return Ok(active_variant == field);
                         }
 
                         if let (
@@ -785,8 +777,7 @@ impl Analyser {
                         tag,
                         ..
                     } = &base.kind
-                    {
-                        if init_union == &union_name && tag != field {
+                    && init_union == &union_name && tag != field {
                             return Err(AnalyserError::semantic_error(
                                 expr.span.clone(),
                                 format!(
@@ -795,23 +786,19 @@ impl Analyser {
                                 ),
                             ));
                         }
-                    }
 
-                    if let ExprKind::Identifier(name) = &base.kind {
-                        if let Some(symbol) = self.resolve_variable(name) {
-                            if let Some(active_variant) = &symbol.active_union_variant {
-                                if active_variant != field {
-                                    return Err(AnalyserError::semantic_error(
-                                        expr.span.clone(),
-                                        format!(
-                                            "Cannot access variant '{}' of union '{}': active variant is '{}'.",
-                                            field, union_name, active_variant
-                                        ),
-                                    ));
-                                }
-                            }
+                    if let ExprKind::Identifier(name) = &base.kind
+                        && let Some(symbol) = self.resolve_variable(name)
+                        && let Some(active_variant) = &symbol.active_union_variant
+                        && active_variant != field {
+                            return Err(AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot access variant '{}' of union '{}': active variant is '{}'.",
+                                    field, union_name, active_variant
+                                ),
+                            ));
                         }
-                    }
 
                     Ok(variant_type.clone())
                     }
