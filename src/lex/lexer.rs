@@ -705,6 +705,7 @@ impl Lexer {
             "break" => TokenType::BreakKeyword,
             "const" => TokenType::ConstKeyword,
             "as" => TokenType::AsKeyword,
+            "union" => TokenType::UnionKeyword,
             _ => TokenType::Identifier,
         };
 

@@ -89,6 +89,8 @@ pub struct IRGen {
     pub struct_defs: HashMap<String, StructLayout>,
     pub struct_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
     pub enum_defs: HashMap<String, IndexMap<String, i64>>,
+    pub union_tags: HashMap<String, IndexMap<String, i64>>,
+    pub union_blueprints: HashMap<String, (Vec<String>, Vec<Parameter>)>,
     pub current_function: String,
 
     pub fn_blueprints: HashMap<String, Stmt>,
@@ -112,6 +114,8 @@ impl IRGen {
             struct_defs: HashMap::new(),
             struct_blueprints: HashMap::new(),
             enum_defs: HashMap::new(),
+            union_tags: HashMap::new(),
+            union_blueprints: HashMap::new(),
             var_types: ScopedMap::new(HashMap::new()),
             current_function: String::new(),
 
@@ -395,6 +399,11 @@ impl IRGen {
                 .cloned()
                 .unwrap_or(Type::Struct(name.clone())),
 
+            Type::Union(name) => substitutions
+                .get(name)
+                .cloned()
+                .unwrap_or(Type::Union(name.clone())),
+
             Type::Ptr(inner) => Type::Ptr(Box::new(self.substitute_type(inner, substitutions))),
 
             Type::Array { element_type, size } => Type::Array {
@@ -522,6 +531,15 @@ impl IRGen {
         match substituted {
             Type::Struct(name) if self.enum_defs.contains_key(&name) => Type::Enum(name),
 
+            Type::Union(name) => {
+                if !self.struct_defs.contains_key(&name)
+                    && let Some((_, variants)) = self.struct_blueprints.get(&name).cloned()
+                {
+                    self.instantiate_union_layout(name.clone(), &variants, &HashMap::new());
+                }
+                Type::Struct(name)
+            }
+
             Type::GenericInstance { name, args } => {
                 let resolved_args: Vec<Type> =
                     args.iter().map(|arg| self.resolve_type(arg)).collect();
@@ -549,6 +567,57 @@ impl IRGen {
             },
             _ => substituted,
         }
+    }
+
+    fn instantiate_union_layout(
+        &mut self,
+        mangled_name: String,
+        variants: &[Parameter],
+        substitutions: &HashMap<String, Type>,
+    ) {
+        let tag_type = Type::Int;
+        let tag_size = self.type_size(&tag_type);
+        let tag_align = self.type_alignment(&tag_type);
+
+        let mut field_offsets = IndexMap::new();
+        field_offsets.insert("__tag".to_string(), (0i64, tag_type));
+
+        let payload_offset = (tag_size + tag_align - 1) & !(tag_align - 1);
+
+        let mut max_payload_size: i64 = 0;
+        let mut max_alignment: i64 = tag_align;
+
+        for variant in variants {
+            let variant_name = variant.name.value.clone();
+            let base_type = variant.ptype.clone().unwrap_or(Type::Int);
+
+            let substituted = self.substitute_type(&base_type, substitutions);
+            let variant_type = self.resolve_type(&substituted);
+
+            let variant_size = self.type_size(&variant_type);
+            let variant_align = self.type_alignment(&variant_type);
+
+            if variant_align > max_alignment {
+                max_alignment = variant_align;
+            }
+            if variant_size > max_payload_size {
+                max_payload_size = variant_size;
+            }
+
+            field_offsets.insert(variant_name, (payload_offset, variant_type));
+        }
+
+        let total_size =
+            (payload_offset + max_payload_size + max_alignment - 1) & !(max_alignment - 1);
+
+        self.struct_defs.insert(
+            mangled_name,
+            StructLayout {
+                total_size,
+                alignment: max_alignment,
+                field_offsets,
+            },
+        );
     }
 
     fn instantiate_struct_layout(
@@ -633,6 +702,11 @@ impl IRGen {
             Type::GenericParam(name) => {
                 panic!("Cannot get size of unresolved generic parameter: {}", name)
             }
+            Type::Union(..) => {
+                panic!(
+                    "Union reached type_size: it should have been resolved to a concrete struct via resolve_type() first."
+                )
+            }
             Type::Char => 1,
             Type::Struct(name) => self
                 .get_struct_layout(name)
@@ -671,6 +745,11 @@ impl IRGen {
                 panic!(
                     "Cannot get alignment of unresolved generic parameter: {}",
                     name
+                )
+            }
+            Type::Union(..) => {
+                panic!(
+                    "Union reached type_size: it should have been resolved to a concrete struct via resolve_type() first."
                 )
             }
             Type::Char => 1,
@@ -758,7 +837,10 @@ impl IRGen {
             generic_params,
             rttype,
             ..
-        }) = self.fn_blueprints.get(&format!("extern::{}", name)).cloned()
+        }) = self
+            .fn_blueprints
+            .get(&format!("extern::{}", name))
+            .cloned()
         else {
             return None;
         };
@@ -803,11 +885,8 @@ impl IRGen {
                 .or_else(|| self.var_types.get(&callee.value).cloned());
         };
 
-        let substitutions: HashMap<String, Type> = generic_params
-            .iter()
-            .cloned()
-            .zip(concrete_args)
-            .collect();
+        let substitutions: HashMap<String, Type> =
+            generic_params.iter().cloned().zip(concrete_args).collect();
 
         let unresolved = rttype.unwrap_or(Type::Void);
         let substituted = self.substitute_type(&unresolved, &substitutions);
@@ -824,6 +903,7 @@ impl IRGen {
             ExprKind::Cast { left: _, right } => Some(right.clone()),
             ExprKind::Sizeof { .. } => Some(Type::Int),
             ExprKind::Typeof { .. } => Some(Type::Str),
+            ExprKind::Any => Some(Type::Any),
             ExprKind::Literal(Literal::String(_)) => Some(Type::Str),
             ExprKind::Literal(Literal::Int(_)) => Some(Type::Int),
             ExprKind::Literal(Literal::Float(_)) => Some(Type::Float),
@@ -867,6 +947,9 @@ impl IRGen {
 
                 None
             }
+            ExprKind::UnionInit { union_name, .. } => Some(Type::Union(union_name.clone())),
+
+            ExprKind::UnionPatternCall { .. } => None,
             ExprKind::Binary { left, op, .. } => match op {
                 BinaryOp::Eq
                 | BinaryOp::NEq
@@ -1132,13 +1215,13 @@ impl IRGen {
             ExprKind::Identifier(name) => {
                 let resolved_name = self.resolve_var_name(name);
 
-                let ty = self
-                    .var_types
-                    .get(&resolved_name)
-                    .cloned()
-                    .unwrap_or(Type::Int);
+                let ty = self.var_types.get(&resolved_name).cloned();
 
-                let temp = self.next_temp_with_type(Type::Ptr(Box::new(ty)));
+                if ty.is_none() {
+                    panic!("Cannot find variable: {resolved_name}");
+                }
+
+                let temp = self.next_temp_with_type(Type::Ptr(Box::new(ty.unwrap())));
 
                 self.code.push(Instruction::Unary {
                     dst: temp.clone(),
@@ -1287,6 +1370,96 @@ impl IRGen {
 
                 Value::Temp(elem_addr_temp)
             }
+            ExprKind::UnionInit {
+                union_name,
+                tag,
+                generic_args,
+                args,
+            } => {
+                let concrete_type = if generic_args.is_empty() {
+                    self.resolve_type(&Type::Union(union_name.clone()))
+                } else {
+                    self.resolve_type(&Type::GenericInstance {
+                        name: union_name.clone(),
+                        args: generic_args.clone(),
+                    })
+                };
+
+                let concrete_name = match &concrete_type {
+                    Type::Struct(name) => name.clone(),
+                    _ => panic!("ICE: Expected concrete struct type after union resolution"),
+                };
+
+                let temp_name = format!("_anon_union_{}", self.temps.next_temp());
+
+                self.var_types
+                    .insert(temp_name.clone(), concrete_type.clone());
+
+                let target_val = Value::Var(temp_name.clone());
+
+                let base_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(concrete_type.clone())));
+
+                self.code.push(Instruction::Unary {
+                    dst: base_addr_temp.clone(),
+                    op: IrOp::Ref,
+                    value: target_val.clone(),
+                });
+
+                let discriminant = *self
+                    .union_tags
+                    .get(union_name)
+                    .and_then(|tags| tags.get(tag))
+                    .unwrap_or_else(|| panic!("ICE: unknown union tag '{}::{}'", union_name, tag));
+
+                let tag_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Int)));
+
+                self.code.push(Instruction::Binary {
+                    dst: tag_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: Value::Temp(base_addr_temp.clone()),
+                    rhs: Value::Const(0),
+                });
+
+                self.code.push(Instruction::Store {
+                    ptr: Value::Temp(tag_addr_temp),
+                    source: Value::Const(discriminant),
+                });
+
+                let (offset, field_type) = self
+                    .struct_defs
+                    .get(&concrete_name)
+                    .expect("ICE: Union initialization on untracked layout.")
+                    .field_offsets
+                    .get(tag)
+                    .expect("ICE: Union variant lookup failure.")
+                    .clone();
+
+                let field_type = self.resolve_type(&field_type);
+
+                let slot_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+
+                self.code.push(Instruction::Binary {
+                    dst: slot_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: Value::Temp(base_addr_temp.clone()),
+                    rhs: Value::Const(offset),
+                });
+
+                let payload = if args.is_empty() {
+                    Value::Const(0)
+                } else {
+                    self.gen_expr(&args[0], None)
+                };
+
+                self.code.push(Instruction::Store {
+                    ptr: Value::Temp(slot_addr_temp),
+                    source: payload,
+                });
+
+                Value::Temp(base_addr_temp)
+            }
             _ => {
                 panic!("Cannot take address of: {:?}", expr.kind);
             }
@@ -1310,6 +1483,11 @@ impl IRGen {
 
                 panic!("ICE: typeof statement cannot resolve expression.")
             }
+            ExprKind::UnionPatternCall { .. } => {
+                panic!(
+                    "ICE: UnionPatternCall reached gen_expr directly; it should only be consumed by ExprKind::Binary's Eq/NEq handling."
+                )
+            }
             ExprKind::Cast { left, right } => {
                 let val_to_cast = self.gen_expr(left, None);
 
@@ -1324,8 +1502,18 @@ impl IRGen {
                     }
 
                     (
-                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(..),
-                        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(..),
+                        Type::Int
+                        | Type::UInt
+                        | Type::Int8
+                        | Type::UInt8
+                        | Type::Char
+                        | Type::Enum(..),
+                        Type::Int
+                        | Type::UInt
+                        | Type::Int8
+                        | Type::UInt8
+                        | Type::Char
+                        | Type::Enum(..),
                     ) => {
                         let from_size = self.type_size(&from_type);
                         let to_size = self.type_size(&to_type);
@@ -1509,6 +1697,89 @@ impl IRGen {
                 Value::Temp(result_temp)
             }
 
+            ExprKind::UnionInit {
+                union_name,
+                tag,
+                generic_args,
+                args,
+            } => {
+                let concrete_type = if generic_args.is_empty() {
+                    self.resolve_type(&Type::Union(union_name.clone()))
+                } else {
+                    self.resolve_type(&Type::GenericInstance {
+                        name: union_name.clone(),
+                        args: generic_args.to_vec(),
+                    })
+                };
+
+                let concrete_name = match &concrete_type {
+                    Type::Struct(name) => name.clone(),
+                    _ => panic!("ICE: Expected concrete struct type after union resolution"),
+                };
+
+                let target_val = match target_dest {
+                    Some(dest) => dest,
+                    None => {
+                        let anon_name = format!("_anon_union_{}", self.temps.next_temp());
+                        self.var_types
+                            .insert(anon_name.clone(), concrete_type.clone());
+                        Value::Var(anon_name)
+                    }
+                };
+
+                let base_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(concrete_type.clone())));
+                self.code.push(Instruction::Unary {
+                    dst: base_addr_temp.clone(),
+                    op: IrOp::Ref,
+                    value: target_val.clone(),
+                });
+
+                let discriminant = *self
+                    .union_tags
+                    .get(union_name)
+                    .and_then(|tags| tags.get(tag))
+                    .unwrap_or_else(|| panic!("ICE: unknown union tag '{}::{}'", union_name, tag));
+
+                let tag_addr_temp = self.next_temp_with_type(Type::Ptr(Box::new(Type::Int)));
+                self.code.push(Instruction::Binary {
+                    dst: tag_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: Value::Temp(base_addr_temp.clone()),
+                    rhs: Value::Const(0),
+                });
+                self.code.push(Instruction::Store {
+                    ptr: Value::Temp(tag_addr_temp),
+                    source: Value::Const(discriminant),
+                });
+
+                let (offset, _field_type) = self
+                    .struct_defs
+                    .get(&concrete_name)
+                    .expect("ICE: Union initialization on untracked layout.")
+                    .field_offsets
+                    .get(tag)
+                    .expect("ICE: Union variant lookup failure.")
+                    .clone();
+
+                let value = self.gen_expr(&args[0], None);
+
+                let slot_addr_temp =
+                    self.next_temp_with_type(Type::Ptr(Box::new(_field_type.clone())));
+                self.code.push(Instruction::Binary {
+                    dst: slot_addr_temp.clone(),
+                    op: IrOp::Add,
+                    lhs: Value::Temp(base_addr_temp),
+                    rhs: Value::Const(offset),
+                });
+                self.code.push(Instruction::Store {
+                    ptr: Value::Temp(slot_addr_temp),
+                    source: value,
+                });
+
+                target_val
+            }
+
             ExprKind::StructLiteral {
                 struct_name,
                 generic_args,
@@ -1616,6 +1887,8 @@ impl IRGen {
                 Value::Var(self.resolve_var_name(name))
             }
 
+            ExprKind::Any => Value::Nil,
+
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Positive => {
                     let value = self.gen_expr(expr, None);
@@ -1721,6 +1994,122 @@ impl IRGen {
             },
 
             ExprKind::Binary { left, op, right } => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::NEq) {
+                    if let ExprKind::Field { base, field } = &right.kind
+                        && let ExprKind::Identifier(union_name) = &base.kind
+                        && let Some(tags) = self.union_tags.get(union_name).cloned()
+                    {
+                        let base_addr = self.gen_lvalue_addr(left);
+
+                        let tag_addr_temp =
+                            self.next_temp_with_type(Type::Ptr(Box::new(Type::Int)));
+                        self.code.push(Instruction::Binary {
+                            dst: tag_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: base_addr,
+                            rhs: Value::Const(0),
+                        });
+
+                        let tag_load_temp = self.next_temp_with_type(Type::Int);
+                        self.code.push(Instruction::Load {
+                            dst: tag_load_temp.clone(),
+                            ptr: Value::Temp(tag_addr_temp),
+                            ty: Type::Int,
+                        });
+
+                        let discriminant = *tags.get(field).unwrap_or_else(|| {
+                            panic!("ICE: unknown union tag '{}::{}'", union_name, field)
+                        });
+
+                        let ir_op = if matches!(op, BinaryOp::Eq) {
+                            IrOp::Eq
+                        } else {
+                            IrOp::NEq
+                        };
+                        return self.emit_binary(
+                            ir_op,
+                            Value::Temp(tag_load_temp),
+                            Value::Const(discriminant),
+                        );
+                    }
+
+                    if let ExprKind::UnionPatternCall {
+                        union_name,
+                        tag,
+                        args,
+                    } = &right.kind
+                    {
+                        let base_addr = self.gen_lvalue_addr(left);
+
+                        let tag_addr_temp =
+                            self.next_temp_with_type(Type::Ptr(Box::new(Type::Int)));
+                        self.code.push(Instruction::Binary {
+                            dst: tag_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: base_addr.clone(),
+                            rhs: Value::Const(0),
+                        });
+                        let tag_load_temp = self.next_temp_with_type(Type::Int);
+                        self.code.push(Instruction::Load {
+                            dst: tag_load_temp.clone(),
+                            ptr: Value::Temp(tag_addr_temp),
+                            ty: Type::Int,
+                        });
+
+                        let discriminant = *self
+                            .union_tags
+                            .get(union_name)
+                            .and_then(|tags| tags.get(tag))
+                            .unwrap_or_else(|| {
+                                panic!("ICE: unknown union tag '{}::{}'", union_name, tag)
+                            });
+
+                        let tag_eq = self.emit_binary(
+                            IrOp::Eq,
+                            Value::Temp(tag_load_temp),
+                            Value::Const(discriminant),
+                        );
+
+                        let (offset, field_type) = self
+                            .struct_defs
+                            .get(union_name)
+                            .expect("ICE: Union pattern comparison on untracked layout.")
+                            .field_offsets
+                            .get(tag)
+                            .expect("ICE: Union variant lookup failure.")
+                            .clone();
+
+                        let field_type = self.resolve_type(&field_type);
+
+                        let val_addr_temp =
+                            self.next_temp_with_type(Type::Ptr(Box::new(field_type.clone())));
+                        self.code.push(Instruction::Binary {
+                            dst: val_addr_temp.clone(),
+                            op: IrOp::Add,
+                            lhs: base_addr,
+                            rhs: Value::Const(offset),
+                        });
+                        let val_load_temp = self.next_temp_with_type(field_type.clone());
+                        self.code.push(Instruction::Load {
+                            dst: val_load_temp.clone(),
+                            ptr: Value::Temp(val_addr_temp),
+                            ty: field_type,
+                        });
+
+                        let rhs_val = self.gen_expr(&args[0], None);
+                        let val_eq =
+                            self.emit_binary(IrOp::Eq, Value::Temp(val_load_temp), rhs_val);
+
+                        let combined = self.emit_binary(IrOp::And, tag_eq, val_eq);
+
+                        return if matches!(op, BinaryOp::NEq) {
+                            self.emit_unary(IrOp::Not, combined)
+                        } else {
+                            combined
+                        };
+                    }
+                }
+
                 let lhs = self.gen_expr(left, None);
                 let rhs = self.gen_expr(right, None);
 
@@ -1770,6 +2159,28 @@ impl IRGen {
                 self.enum_defs.insert(name.value.clone(), variants);
             }
 
+            Stmt::Union {
+                name,
+                generic_params,
+                variants,
+            } => {
+                let tags: IndexMap<String, i64> = variants
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (v.name.value.clone(), i as i64))
+                    .collect();
+                self.union_tags.insert(name.value.clone(), tags);
+
+                if !generic_params.is_empty() {
+                    self.struct_blueprints.insert(
+                        name.value.clone(),
+                        (generic_params.clone(), variants.clone()),
+                    );
+                } else {
+                    self.instantiate_union_layout(name.value.clone(), variants, &HashMap::new());
+                }
+            }
+
             Stmt::Struct {
                 name,
                 generic_params,
@@ -1812,6 +2223,7 @@ impl IRGen {
                         | Some(Type::Struct(_))
                         | Some(Type::GenericInstance { .. })
                         | Some(Type::VariadicPack { .. })
+                        | Some(Type::Union(..))
                 );
 
                 let target_var = Value::Var(mangled_name.clone());
@@ -1829,6 +2241,12 @@ impl IRGen {
                         if vtype.is_none() {
                             let computed_ty = self.get_value_type(&value);
                             let resolved_computed = self.resolve_type(&computed_ty);
+
+                            println!(
+                                "ASSIGN {}: value={:?}, computed_ty={:?}, resolved_ty={:?}",
+                                mangled_name, value, computed_ty, resolved_computed
+                            );
+
                             self.var_types
                                 .insert(mangled_name.clone(), resolved_computed);
                         }
@@ -2495,10 +2913,11 @@ impl IRGen {
         for stmt in &program.statements {
             if !matches!(stmt, Stmt::Function { .. })
                 && !matches!(stmt, Stmt::ExternFn { .. })
+                && !matches!(stmt, Stmt::ExternConst { .. })
                 && !matches!(stmt, Stmt::Struct { .. })
                 && !matches!(stmt, Stmt::Constant { .. })
                 && !matches!(stmt, Stmt::Enum { .. })
-                && !matches!(stmt, Stmt::ExternConst { .. })
+                && !matches!(stmt, Stmt::Union { .. })
             {
                 println!(
                     "Codegen Error: top-level statement outside of a function is not supported."

@@ -291,6 +291,7 @@ impl Parser {
             TokenType::ReturnKeyword => self.parse_return(),
             TokenType::BreakKeyword => self.parse_break(),
             TokenType::UseKeyword => self.parse_import(),
+            TokenType::UnionKeyword => self.parse_union(),
             TokenType::ExternKeyword => self.parse_extern(),
             TokenType::Identifier | TokenType::LParen | TokenType::Star | TokenType::Ampersand => {
                 self.parse_assignment_expression()
@@ -785,6 +786,58 @@ impl Parser {
         })
     }
 
+    fn parse_union(&mut self) -> Option<Stmt> {
+        self.advance();
+
+        let ident = self.expect(TokenType::Identifier)?;
+
+        let generic_params = self.parse_generic_params();
+
+        for param in &generic_params {
+            self.generic_params.push(param.clone());
+        }
+
+        self.expect(TokenType::LBrace)?;
+        let mut variants = Vec::new();
+
+        while !self.eof() && !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace))
+        {
+            let name = to_ident(self.get_token().cloned())?;
+            self.advance();
+            self.expect(TokenType::Colon)?;
+
+            let ptype = self.parse_type();
+            variants.push(Parameter {
+                name,
+                ptype,
+                is_variadic: false,
+            });
+
+            if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::Comma)) {
+                self.advance();
+            } else if !matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::RBrace)) {
+                self.throw(
+                    ParserErrorType::UnexpectedTokenTypeError,
+                    "Expected ',' or '}' after struct field".to_string(),
+                    self.get_token().unwrap().location.clone(),
+                );
+                return None;
+            }
+        }
+
+        self.expect(TokenType::RBrace)?;
+
+        for _ in &generic_params {
+            self.generic_params.pop();
+        }
+
+        Some(Stmt::Union {
+            name: to_ident(Some(ident))?,
+            generic_params,
+            variants,
+        })
+    }
+
     fn parse_struct(&mut self) -> Option<Stmt> {
         self.advance();
 
@@ -1262,6 +1315,34 @@ impl Parser {
                             },
                             span: callee_loc,
                         };
+                    } else if let ExprKind::Field { base, field } = &expr.kind {
+                        if let ExprKind::Identifier(union_name) = &base.kind {
+                            let callee_loc = expr.span.clone();
+                            self.advance();
+                            let mut args = self.parse_args();
+
+                            if args.is_empty() {
+                                args.push(Expr {
+                                    kind: ExprKind::Any,
+                                    span: callee_loc.clone(),
+                                });
+                            }
+                            expr = Expr {
+                                kind: ExprKind::UnionPatternCall {
+                                    union_name: union_name.clone(),
+                                    tag: field.clone(),
+                                    args,
+                                },
+                                span: callee_loc,
+                            };
+                        } else {
+                            self.throw(
+                                ParserErrorType::MalformedStatementError,
+                                "Expected function name before parenthesis".to_string(),
+                                self.get_token().unwrap().location.clone(),
+                            );
+                            return None;
+                        }
                     } else {
                         self.throw(
                             ParserErrorType::UnexpectedTokenTypeError,
@@ -1325,34 +1406,65 @@ impl Parser {
 
                     match self.get_token().map(|t| &t.ttype) {
                         Some(TokenType::Identifier) => {
-                            if !generic_args.is_empty() {
-                                self.throw(
-                                    ParserErrorType::UnexpectedTokenTypeError,
-                                    "Cannot apply generic arguments to an enum variant".to_string(),
-                                    expr.span.clone(),
-                                );
-                                return None;
-                            }
+                            let variant_token = self.expect(TokenType::Identifier)?;
+                            let field_span = expr.span.clone();
 
-                            if let ExprKind::Identifier(_) = &expr.kind {
-                                let variant_token = self.expect(TokenType::Identifier)?;
-                                let field_span = expr.span.clone();
+                            if matches!(self.get_token().map(|t| &t.ttype), Some(TokenType::LParen))
+                            {
+                                self.advance();
+                                let args = self.parse_args();
 
-                                expr = Expr {
-                                    kind: ExprKind::Field {
-                                        base: Box::new(expr.clone()),
-                                        field: variant_token.value,
-                                    },
-                                    span: field_span,
-                                };
+                                if let ExprKind::Identifier(union_name) = &expr.kind {
+                                    expr = Expr {
+                                        kind: ExprKind::UnionInit {
+                                            union_name: union_name.clone(),
+                                            tag: variant_token.value,
+                                            generic_args,
+                                            args,
+                                        },
+                                        span: field_span,
+                                    };
+                                } else {
+                                    self.throw(
+                                        ParserErrorType::UnexpectedTokenTypeError,
+                                        "Cannot initialize a union on a non-identifier expression"
+                                            .to_string(),
+                                        field_span,
+                                    );
+                                    return None;
+                                }
                             } else {
-                                self.throw(
-                                    ParserErrorType::UnexpectedTokenTypeError,
-                                    "Cannot access a member on a non-identifier expression"
-                                        .to_string(),
-                                    expr.span.clone(),
-                                );
-                                return None;
+                                if !generic_args.is_empty() {
+                                    self.throw(
+                                        ParserErrorType::UnexpectedTokenTypeError,
+                                        "Cannot apply generic arguments to a union pattern"
+                                            .to_string(),
+                                        field_span,
+                                    );
+                                    return None;
+                                }
+
+                                if let ExprKind::Identifier(union_name) = &expr.kind {
+                                    expr = Expr {
+                                        kind: ExprKind::UnionPatternCall {
+                                            union_name: union_name.clone(),
+                                            tag: variant_token.value,
+                                            args: vec![Expr {
+                                                kind: ExprKind::Any,
+                                                span: field_span.clone(),
+                                            }],
+                                        },
+                                        span: field_span,
+                                    };
+                                } else {
+                                    self.throw(
+            ParserErrorType::UnexpectedTokenTypeError,
+            "Cannot access a union variant on a non-identifier expression"
+                .to_string(),
+            field_span,
+        );
+                                    return None;
+                                }
                             }
                         }
 
@@ -1360,10 +1472,9 @@ impl Parser {
                             self.advance();
 
                             let args = self.parse_args();
+                            let callee_loc = expr.span.clone();
 
                             if let ExprKind::Identifier(name) = &expr.kind {
-                                let callee_loc = expr.span.clone();
-
                                 expr = Expr {
                                     kind: ExprKind::Call {
                                         callee: Identifier {
@@ -1375,6 +1486,18 @@ impl Parser {
                                     },
                                     span: callee_loc,
                                 };
+                            } else if let ExprKind::Field { base, field } = &expr.kind {
+                                if let ExprKind::Identifier(union_name) = &base.kind {
+                                    expr = Expr {
+                                        kind: ExprKind::UnionInit {
+                                            union_name: union_name.clone(),
+                                            tag: field.clone(),
+                                            generic_args,
+                                            args,
+                                        },
+                                        span: callee_loc,
+                                    };
+                                }
                             } else {
                                 self.throw(
                                     ParserErrorType::UnexpectedTokenTypeError,

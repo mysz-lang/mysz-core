@@ -21,6 +21,7 @@ pub enum Type {
     },
     Struct(String),
     Enum(String),
+    Union(String),
     // Generics
     GenericInstance {
         name: String,
@@ -90,8 +91,7 @@ impl Type {
             Type::Void => "void".to_string(),
             Type::Any => "any".to_string(),
             Type::Nil => "nil".to_string(),
-            Type::Struct(name) => name.clone(),
-            Type::Enum(name) => name.clone(),
+            Type::Struct(name) | Type::Union(name) | Type::Enum(name) => name.clone(),
             Type::Ptr(inner) => format!("ptr__{}", inner.ttos()),
             Type::Array { element_type, size } => {
                 format!("arr__{}__{}", element_type.ttos(), size)
@@ -311,8 +311,7 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::Void => "void".to_string(),
         Type::Any => "any".to_string(),
         Type::Nil => "nil".to_string(),
-        Type::Struct(s) => s.to_string(),
-        Type::Enum(s) => s.to_string(),
+        Type::Struct(s) | Type::Union(s) | Type::Enum(s) => s.to_string(),
         Type::Ptr(s) => format!("ptr<{}>", typeof_string(s.as_ref())),
         Type::Array { element_type, .. } => format!("[{}]", typeof_string(element_type.as_ref())),
         Type::GenericInstance { .. } => "generic_instance".to_string(),

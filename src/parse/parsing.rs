@@ -136,6 +136,18 @@ pub enum ExprKind {
     Typeof {
         expr: Box<Expr>,
     },
+    UnionInit {
+        union_name: String,
+        tag: String,
+        generic_args: Vec<Type>,
+        args: Vec<Expr>,
+    },
+    UnionPatternCall {
+        union_name: String,
+        tag: String,
+        args: Vec<Expr>,
+    },
+    Any,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -204,6 +216,11 @@ pub enum Stmt {
         name: Identifier,
         generic_params: Vec<String>,
         fields: Vec<Parameter>,
+    },
+    Union {
+        name: Identifier,
+        generic_params: Vec<String>,
+        variants: Vec<Parameter>,
     },
     Enum {
         name: Identifier,

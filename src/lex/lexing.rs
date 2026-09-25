@@ -68,6 +68,7 @@ pub enum TokenType {
     ConstKeyword,
     AsKeyword,
     ElseIfKeyword,
+    UnionKeyword,
 
     CurrentATSymbol, // @
 

@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 
 use crate::parse::parsing::*;
 use crate::semantics::analysis::{
-    EnumSignature, FunctionSignature, Scope, StructSignature, Symbol,
+    EnumSignature, FunctionSignature, Scope, StructSignature, Symbol, UnionSignature,
 };
 use crate::utils::location::Location;
 use crate::utils::typesafe::*;
@@ -63,6 +63,7 @@ pub struct Analyser {
     pub functions: HashMap<String, FunctionSignature>,
     pub function_bodies: HashMap<String, (Vec<Parameter>, Vec<Stmt>)>,
     pub structs: HashMap<String, StructSignature>,
+    pub unions: HashMap<String, UnionSignature>,
     pub enums: HashMap<String, EnumSignature>,
     pub constants: HashMap<String, (Type, Expr)>,
     pub externalconstants: HashMap<String, (Type, Location)>,
@@ -83,6 +84,7 @@ impl Analyser {
             functions: HashMap::new(),
             function_bodies: HashMap::new(),
             structs: HashMap::new(),
+            unions: HashMap::new(),
             enums: HashMap::new(),
             constants: HashMap::new(),
             externalconstants: HashMap::new(),
@@ -126,28 +128,177 @@ impl Analyser {
 
     fn evaluates_statically_to_false(&mut self, cond: &Expr) -> Result<bool, AnalyserError> {
         match &cond.kind {
-            ExprKind::Binary { left, op, right } => match op {
-                BinaryOp::Eq => {
-                    if let (ExprKind::Typeof { expr }, ExprKind::Literal(Literal::String(target))) =
-                        (&left.kind, &right.kind)
-                    {
-                        let actual_type = self.check_expr(expr, None)?;
-                        return Ok(type_to_string(&actual_type) != *target);
+            ExprKind::Binary { left, op, right } => {
+                match op {
+                    BinaryOp::Eq => {
+                        // Compile-time union variant comparison.
+                        if let (ExprKind::Identifier(name), ExprKind::Field { base, field }) =
+                            (&left.kind, &right.kind)
+                        {
+                            if let ExprKind::Identifier(union_name) = &base.kind {
+                                if self.unions.contains_key(union_name) {
+                                    if let Some(symbol) = self.resolve_variable(name) {
+                                        if let Some(active_variant) = &symbol.active_union_variant {
+                                            return Ok(active_variant != field);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Constant boolean comparison.
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a != b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::Char(a)),
+                            ExprKind::Literal(Literal::Char(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a != b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::Bool(a)),
+                            ExprKind::Literal(Literal::Bool(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a != b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::String(a)),
+                            ExprKind::Literal(Literal::String(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a != b);
+                        }
+
+                        Ok(false)
                     }
-                    Ok(false)
+
+                    BinaryOp::NEq => {
+                        // Compile-time union variant comparison.
+                        if let (ExprKind::Identifier(name), ExprKind::Field { base, field }) =
+                            (&left.kind, &right.kind)
+                        {
+                            if let ExprKind::Identifier(union_name) = &base.kind {
+                                if self.unions.contains_key(union_name) {
+                                    if let Some(symbol) = self.resolve_variable(name) {
+                                        if let Some(active_variant) = &symbol.active_union_variant {
+                                            return Ok(active_variant == field);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a == b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::Char(a)),
+                            ExprKind::Literal(Literal::Char(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a == b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::Bool(a)),
+                            ExprKind::Literal(Literal::Bool(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a == b);
+                        }
+
+                        if let (
+                            ExprKind::Literal(Literal::String(a)),
+                            ExprKind::Literal(Literal::String(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a == b);
+                        }
+
+                        Ok(false)
+                    }
+
+                    BinaryOp::Gt => {
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a <= b);
+                        }
+
+                        Ok(false)
+                    }
+
+                    BinaryOp::GtE => {
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a < b);
+                        }
+
+                        Ok(false)
+                    }
+
+                    BinaryOp::Lt => {
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a >= b);
+                        }
+
+                        Ok(false)
+                    }
+
+                    BinaryOp::LtE => {
+                        if let (
+                            ExprKind::Literal(Literal::Int(a)),
+                            ExprKind::Literal(Literal::Int(b)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            return Ok(a > b);
+                        }
+
+                        Ok(false)
+                    }
+
+                    BinaryOp::And => {
+                        let left_false = self.evaluates_statically_to_false(left)?;
+                        let right_false = self.evaluates_statically_to_false(right)?;
+
+                        Ok(left_false || right_false)
+                    }
+
+                    BinaryOp::Or => {
+                        let left_false = self.evaluates_statically_to_false(left)?;
+                        let right_false = self.evaluates_statically_to_false(right)?;
+
+                        Ok(left_false && right_false)
+                    }
+
+                    _ => Ok(false),
                 }
-                BinaryOp::Or => {
-                    let left_false = self.evaluates_statically_to_false(left)?;
-                    let right_false = self.evaluates_statically_to_false(right)?;
-                    Ok(left_false && right_false)
-                }
-                BinaryOp::And => {
-                    let left_false = self.evaluates_statically_to_false(left)?;
-                    let right_false = self.evaluates_statically_to_false(right)?;
-                    Ok(left_false || right_false)
-                }
-                _ => Ok(false),
-            },
+            }
+
             _ => Ok(false),
         }
     }
@@ -283,6 +434,7 @@ impl Analyser {
             Symbol {
                 name: name.to_string(),
                 ty: data_type,
+                active_union_variant: None,
             },
         );
         Ok(())
@@ -387,6 +539,33 @@ impl Analyser {
         Ok(())
     }
 
+    fn declare_union(
+        &mut self,
+        name: &str,
+        generic_params: Vec<String>,
+        variants: IndexMap<String, Type>,
+        location: Location,
+    ) -> Result<(), AnalyserError> {
+        if let Some(existing) = self.unions.get(name) {
+            return Err(AnalyserError::overdef_error(
+                location,
+                format!(
+                    "Union '{}' is already defined at [{}]",
+                    name, existing.location
+                ),
+            ));
+        }
+        self.unions.insert(
+            name.to_string(),
+            UnionSignature {
+                generic_params,
+                variants,
+                location,
+            },
+        );
+        Ok(())
+    }
+
     fn declare_struct(
         &mut self,
         name: &str,
@@ -473,6 +652,7 @@ impl Analyser {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
             ExprKind::Typeof { .. } => Ok(Type::Str),
+            ExprKind::Any => Ok(Type::Any),
             ExprKind::Cast { left, right } => {
                 let leftty = self.check_expr(left.as_ref(), None)?;
 
@@ -582,6 +762,59 @@ impl Analyser {
 
                         Ok(field_type.clone())
                     }
+                    Type::Union(union_name) => {
+                        let signature = self.unions.get(&union_name).ok_or_else(|| {
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Attempted to access field '{}' on undefined union '{}'.",
+                                    field, union_name
+                                ),
+                            )
+                        })?;
+
+                    let variant_type = signature.variants.get(field).ok_or_else(|| {
+                        AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!("Union '{}' has no variant named '{}'.", union_name, field),
+                        )
+                    })?;
+
+                    if let ExprKind::UnionInit {
+                        union_name: init_union,
+                        tag,
+                        ..
+                    } = &base.kind
+                    {
+                        if init_union == &union_name && tag != field {
+                            return Err(AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot access variant '{}' of union '{}': active variant is '{}'.",
+                                    field, union_name, tag
+                                ),
+                            ));
+                        }
+                    }
+
+                    if let ExprKind::Identifier(name) = &base.kind {
+                        if let Some(symbol) = self.resolve_variable(name) {
+                            if let Some(active_variant) = &symbol.active_union_variant {
+                                if active_variant != field {
+                                    return Err(AnalyserError::semantic_error(
+                                        expr.span.clone(),
+                                        format!(
+                                            "Cannot access variant '{}' of union '{}': active variant is '{}'.",
+                                            field, union_name, active_variant
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    Ok(variant_type.clone())
+                    }
                     Type::GenericInstance { name, args } => {
                         let signature = self.structs.get(&name).ok_or_else(|| {
                             AnalyserError::semantic_error(
@@ -642,6 +875,7 @@ impl Analyser {
                     )),
                 }
             }
+
             ExprKind::StructLiteral {
                 struct_name,
                 generic_args,
@@ -816,32 +1050,6 @@ impl Analyser {
                     let mut inst_args = Vec::new();
 
                     for g_arg in generic_args {
-                        /*
-                         * Explicit generic arguments can be identifiers referring to
-                         * values/types currently visible in the analyser.
-                         *
-                         * The parser represents an identifier such as `arg` as
-                         * Type::Struct("arg"), because at parse time it cannot know
-                         * whether `arg` is a type name or a symbol.
-                         *
-                         * If a variable with that name exists, its type wins here.
-                         *
-                         * Example:
-                         *
-                         *     fn sform<T>(arg: T) { ... }
-                         *     sform::<arg>(arg)
-                         *
-                         * During generic-template checking:
-                         *
-                         *     arg -> Any
-                         *
-                         * During a concrete instantiation:
-                         *
-                         *     arg -> Char
-                         *     arg -> Str
-                         *
-                         * etc.
-                         */
                         let resolved_generic_arg = match g_arg {
                             Type::Struct(name) => {
                                 if let Some(symbol) = self.resolve_variable(name) {
@@ -870,24 +1078,6 @@ impl Analyser {
                         inst_args.push(fully_resolved);
                     }
 
-                    /*
-                     * A generic argument can still be unresolved while checking
-                     * a generic/variadic template.
-                     *
-                     * For example:
-                     *
-                     *     sform::<arg>(arg)
-                     *
-                     * while checking:
-                     *
-                     *     print(..., args: ...)
-                     *
-                     * may currently resolve `arg` to `Any`.
-                     *
-                     * Do not create a concrete specialization such as
-                     * `sform__Any`. The call will be instantiated again once
-                     * the enclosing function has concrete argument types.
-                     */
                     if inst_args.iter().any(contains_unresolved_type) {
                         let mut mapping = HashMap::new();
 
@@ -1180,6 +1370,63 @@ impl Analyser {
             }
 
             ExprKind::Binary { left, op, right } => {
+                if matches!(op, BinaryOp::Eq | BinaryOp::NEq) {
+                    if let ExprKind::Field { base, .. } = &right.kind
+                        && let ExprKind::Identifier(name) = &base.kind
+                        && self.unions.contains_key(name)
+                    {
+                        self.check_expr(left, None)?;
+                        return Ok(Type::Bool);
+                    }
+
+                    if let ExprKind::UnionPatternCall { union_name, tag, args } = &right.kind {
+                        self.check_expr(left, None)?;
+
+                        let signature = self.unions.get(union_name).ok_or_else(|| {
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!("Undefined union '{}'.", union_name),
+                            )
+                        })?;
+
+                        let variant_type = signature.variants.get(tag).cloned().ok_or_else(|| {
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!("Union '{}' has no variant named '{}'.", union_name, tag),
+                            )
+                        })?;
+
+                        if args.len() != 1 {
+                            return Err(AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Union pattern '{}.{}' expects exactly 1 value, found {}.",
+                                    union_name,
+                                    tag,
+                                    args.len()
+                                ),
+                            ));
+                        }
+
+                        let arg_type = self.check_expr(&args[0], Some(&variant_type))?;
+
+                        if !types_match(&variant_type, &arg_type, TypeCheckMode::Coercive) {
+                            return Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot compare union variant '{}.{}' (type '{}') against value of type '{}'.",
+                                    union_name,
+                                    tag,
+                                    type_to_string(&variant_type),
+                                    type_to_string(&arg_type)
+                                ),
+                            ));
+                        }
+
+                        return Ok(Type::Bool);
+                    }
+                }
+
                 let left_type = self.check_expr(left, None)?;
                 let right_type = self.check_expr(right, Some(&left_type))?;
 
@@ -1205,7 +1452,14 @@ impl Analyser {
                             if left_type == right_type {
                                 Ok(left_type)
                             } else {
-                                Err(AnalyserError::type_error(expr.span.clone(), format!("Cannot add mismatched float types '{}' and '{}'", type_to_string(&left_type), type_to_string(&right_type))))
+                                Err(AnalyserError::type_error(
+                                    expr.span.clone(),
+                                    format!(
+                                        "Cannot add mismatched float types '{}' and '{}'",
+                                        type_to_string(&left_type),
+                                        type_to_string(&right_type)
+                                    ),
+                                ))
                             }
                         } else if Type::Str == left_type && Type::Str == right_type {
                             Ok(Type::Str)
@@ -1289,9 +1543,23 @@ impl Analyser {
                             ))
                         }
                     }
-                    BinaryOp::Eq
-                    | BinaryOp::NEq
-                    | BinaryOp::Gt
+
+                    BinaryOp::Eq | BinaryOp::NEq => {
+                        if types_equal(&left_type, &right_type) {
+                            Ok(Type::Bool)
+                        } else {
+                            Err(AnalyserError::type_error(
+                                expr.span.clone(),
+                                format!(
+                                    "Cannot compare incompatible types '{}' and '{}'",
+                                    type_to_string(&left_type),
+                                    type_to_string(&right_type)
+                                ),
+                            ))
+                        }
+                    }
+
+                    BinaryOp::Gt
                     | BinaryOp::GtE
                     | BinaryOp::And
                     | BinaryOp::Or
@@ -1312,6 +1580,110 @@ impl Analyser {
                     }
                 }
             }
+
+            ExprKind::UnionInit {
+                union_name,
+                tag,
+                generic_args,
+                args,
+            } => {
+                let concrete_ty = if generic_args.is_empty() {
+                    let template = self.unions.get(union_name).ok_or_else(|| {
+                        AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!("Undefined union '{}'.", union_name),
+                        )
+                    })?;
+                    if !template.generic_params.is_empty() {
+                        return Err(AnalyserError::type_error(
+                            expr.span.clone(),
+                            format!("Union '{}' requires generic arguments.", union_name),
+                        ));
+                    }
+                    Type::Union(union_name.clone())
+                } else {
+                    let resolved_args = generic_args
+                        .iter()
+                        .map(|arg| self.instantiate_generic_types(arg, &expr.span))
+                        .collect::<Result<Vec<Type>, AnalyserError>>()?;
+
+                    Type::GenericInstance {
+                        name: union_name.clone(),
+                        args: resolved_args,
+                    }
+                };
+
+                let (template_name, mapping) = match &concrete_ty {
+                    Type::Union(name) => (name.clone(), HashMap::new()),
+                    Type::GenericInstance { name, args } => {
+                        let template = self.unions.get(name).ok_or_else(|| {
+                            AnalyserError::semantic_error(
+                                expr.span.clone(),
+                                format!("Undefined union '{}'.", name),
+                            )
+                        })?;
+                        let mapping: HashMap<String, Type> = template
+                            .generic_params
+                            .iter()
+                            .cloned()
+                            .zip(args.iter().cloned())
+                            .collect();
+                        (name.clone(), mapping)
+                    }
+                    _ => unreachable!(),
+                };
+
+                let template = self.unions.get(&template_name).ok_or_else(|| {
+                    AnalyserError::semantic_error(
+                        expr.span.clone(),
+                        format!("Undefined union '{}'.", template_name),
+                    )
+                })?;
+
+                let raw_variant_type = template.variants.get(tag).cloned().ok_or_else(|| {
+                    AnalyserError::semantic_error(
+                        expr.span.clone(),
+                        format!("Union '{}' has no variant named '{}'.", template_name, tag),
+                    )
+                })?;
+
+                let variant_type = self.substitute_type(&raw_variant_type, &mapping);
+
+                if args.len() != 1 {
+                    return Err(AnalyserError::semantic_error(
+                        expr.span.clone(),
+                        format!(
+                            "Union variant '{}::{}' expects exactly 1 value, found {}.",
+                            union_name,
+                            tag,
+                            args.len()
+                        ),
+                    ));
+                }
+
+                let arg_type = self.check_expr(&args[0], Some(&variant_type))?;
+
+                if !types_match(&variant_type, &arg_type, TypeCheckMode::Coercive) {
+                    return Err(AnalyserError::type_error(
+                        expr.span.clone(),
+                        format!(
+                            "Cannot instantiate '{}::{}' with type '{}', expected '{}'.",
+                            union_name,
+                            tag,
+                            type_to_string(&arg_type),
+                            type_to_string(&variant_type)
+                        ),
+                    ));
+                }
+
+                Ok(concrete_ty)
+            }
+
+            ExprKind::UnionPatternCall { .. } => Err(AnalyserError::semantic_error(
+                expr.span.clone(),
+                "A union pattern like 'Value.Tag(x)' can only appear directly in a boolean expression"
+                    .to_string(),
+            )),
             ExprKind::Unary { op, expr: sub_expr } => {
                 let expr_type = self.check_expr(sub_expr, None)?;
                 match op {
@@ -1403,6 +1775,47 @@ impl Analyser {
                     &name.value,
                     generic_params.clone(),
                     struct_fields,
+                    name.location.clone(),
+                )?;
+
+                self.current_generic_params = prev_generic_params;
+
+                Ok(())
+            }
+
+            Stmt::Union {
+                name,
+                generic_params,
+                variants,
+            } => {
+                let mut union_variants = IndexMap::new();
+
+                let prev_generic_params =
+                    std::mem::replace(&mut self.current_generic_params, generic_params.clone());
+
+                for variant in variants {
+                    let variant_type = match &variant.ptype {
+                        Some(t) => t.clone(),
+                        None => Type::Any,
+                    };
+
+                    if union_variants.contains_key(&variant.name.value) {
+                        return Err(AnalyserError::SemanticError {
+                            location: variant.name.location.clone(),
+                            message: format!(
+                                "Semantic Error: Union '{}' contains duplicate variant '{}'",
+                                name.value, variant.name.value
+                            ),
+                        });
+                    }
+
+                    union_variants.insert(variant.name.value.clone(), variant_type);
+                }
+
+                self.declare_union(
+                    &name.value,
+                    generic_params.clone(),
+                    union_variants,
                     name.location.clone(),
                 )?;
 
@@ -1580,8 +1993,38 @@ impl Analyser {
                             ),
                         ));
                     }
+
+                    let active_variant = match expr {
+                        Some(Expr {
+                            kind: ExprKind::UnionInit { tag, .. },
+                            ..
+                        }) => Some(tag.clone()),
+                        _ => None,
+                    };
+
+                    if let Some(symbol) = self.scopes[self.current_scope]
+                        .symbols
+                        .get_mut(&ident.value)
+                    {
+                        symbol.active_union_variant = active_variant;
+                    }
                 } else {
                     self.declare_variable(&ident.value, variable_type, ident.location.clone())?;
+
+                    let active_variant = match expr {
+                        Some(Expr {
+                            kind: ExprKind::UnionInit { tag, .. },
+                            ..
+                        }) => Some(tag.clone()),
+                        _ => None,
+                    };
+
+                    if let Some(symbol) = self.scopes[self.current_scope]
+                        .symbols
+                        .get_mut(&ident.value)
+                    {
+                        symbol.active_union_variant = active_variant;
+                    }
                 }
 
                 Ok(())
@@ -1816,6 +2259,7 @@ impl Analyser {
 
                 Ok(())
             }
+
             Stmt::Function {
                 name,
                 public,

@@ -9,6 +9,7 @@ use crate::utils::typesafe::Type;
 pub struct Symbol {
     pub name: String,
     pub ty: Type,
+    pub active_union_variant: Option<String>,
 }
 
 #[derive(Debug)]
@@ -38,5 +39,12 @@ pub struct FunctionSignature {
     pub is_variadic: bool,
     pub variadic_param_name: Option<String>,
     pub return_type: Type,
+    pub location: Location,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnionSignature {
+    pub generic_params: Vec<String>,
+    pub variants: IndexMap<String, Type>,
     pub location: Location,
 }

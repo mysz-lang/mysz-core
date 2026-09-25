@@ -870,6 +870,15 @@ impl AtAliasRewriter {
                 ident,
                 expr: self.expr(expr),
             },
+            Stmt::Union {
+                name,
+                generic_params,
+                variants,
+            } => Stmt::Union {
+                name: self.decl(name),
+                generic_params,
+                variants: self.params(variants),
+            },
             Stmt::DerefReassignment { target, expr } => Stmt::DerefReassignment {
                 target: self.expr(target),
                 expr: self.expr(expr),
@@ -969,14 +978,59 @@ impl AtAliasRewriter {
                 elements: elements.into_iter().map(|e| self.expr(e)).collect(),
             }),
             ExprKind::Literal(lit) => ExprKind::Literal(lit),
+            ExprKind::Any => ExprKind::Any,
             ExprKind::Identifier(name) => ExprKind::Identifier(self.qualify(&name).unwrap_or(name)),
             ExprKind::Index { base, index } => ExprKind::Index {
                 base: Box::new(self.expr(*base)),
                 index: Box::new(self.expr(*index)),
             },
-            ExprKind::Field { base, field } => ExprKind::Field {
-                base: Box::new(self.expr(*base)),
-                field,
+            ExprKind::Field { base, field } => {
+                let base = self.expr(*base);
+
+                if let ExprKind::Identifier(union_name) = &base.kind {
+                    if self.own_names.contains(union_name)
+                        || self.imports.values().any(|name| name == union_name)
+                    {
+                        ExprKind::UnionPatternCall {
+                            union_name: union_name.clone(),
+                            tag: field,
+                            args: vec![Expr {
+                                kind: ExprKind::Any,
+                                span: span.clone(),
+                            }],
+                        }
+                    } else {
+                        ExprKind::Field {
+                            base: Box::new(base),
+                            field,
+                        }
+                    }
+                } else {
+                    ExprKind::Field {
+                        base: Box::new(base),
+                        field,
+                    }
+                }
+            }
+            ExprKind::UnionInit {
+                union_name,
+                tag,
+                generic_args,
+                args,
+            } => ExprKind::UnionInit {
+                union_name: self.qualify(&union_name).unwrap_or(union_name),
+                tag,
+                generic_args: generic_args.into_iter().map(|t| self.ty(t)).collect(),
+                args: args.into_iter().map(|a| self.expr(a)).collect(),
+            },
+            ExprKind::UnionPatternCall {
+                union_name,
+                tag,
+                args,
+            } => ExprKind::UnionPatternCall {
+                union_name: self.qualify(&union_name).unwrap_or(union_name),
+                tag,
+                args: args.into_iter().map(|a| self.expr(a)).collect(),
             },
             ExprKind::StructLiteral {
                 struct_name,
@@ -1317,6 +1371,10 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
             .to_string_lossy()
             .as_ref(),
     );
+
+    if ctx.debug {
+        println!("{:#?}", program);
+    }
 
     let mut analyser = Analyser::new();
 

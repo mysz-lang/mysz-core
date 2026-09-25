@@ -163,6 +163,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),
 
+            Type::Union(name) => self
+                .struct_types
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| panic!("unknown union '{}'", name))
+                .into(),
+
             Type::Array { element_type, size } => self.llvm_array_type(element_type, *size),
 
             Type::Str => self
@@ -643,20 +650,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         ]);
 
         Ok(result.as_basic_value().into_int_value())
-    }
-
-    fn struct_field_at_offset(&self, struct_name: &str, offset: i64) -> Result<&Type, String> {
-        let layout = self
-            .struct_defs
-            .get(struct_name)
-            .ok_or_else(|| format!("unknown struct '{}'", struct_name))?;
-
-        layout
-            .field_offsets
-            .values()
-            .find(|(field_offset, _)| *field_offset == offset)
-            .map(|(_, ty)| ty)
-            .ok_or_else(|| format!("struct '{}' has no field at offset {}", struct_name, offset))
     }
 
     fn llvm_address_of(&mut self, value: &Value) -> Result<PointerValue<'ctx>, String> {
@@ -1307,6 +1300,11 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .into_struct_type()
                     .const_zero()
                     .into(),
+                Type::Union(..) => self
+                    .llvm_type(to_type)
+                    .into_struct_type()
+                    .const_zero()
+                    .into(),
 
                 Type::GenericInstance { .. } => unreachable!(),
                 Type::GenericParam(..) => unreachable!(),
@@ -1536,25 +1534,23 @@ impl<'ctx> LlvmBackend<'ctx> {
         lhs: &Value,
         rhs: &Value,
     ) -> Result<(), String> {
-        let lhs_type = self.value_type(lhs)?;
+        let result_type = self
+            .var_types
+            .get(dst)
+            .cloned()
+            .ok_or_else(|| format!("missing type for temporary '{}'", dst))?;
 
-        let result_pointee = match &lhs_type {
-            Type::Ptr(inner) => match inner.as_ref() {
-                Type::Struct(name) => {
-                    if let Value::Const(offset) = rhs {
-                        self.struct_field_at_offset(name, *offset)?.clone()
-                    } else {
-                        inner.as_ref().clone()
-                    }
-                }
-
-                other => other.clone(),
-            },
-
-            Type::Str => Type::Char,
-
-            _ => unreachable!(),
+        let result_pointee = match result_type {
+            Type::Ptr(inner) => *inner,
+            other => {
+                return Err(format!(
+                    "pointer arithmetic destination '{}' is not a pointer: {}",
+                    dst,
+                    type_to_string(&other)
+                ));
+            }
         };
+
         let ptr = self.llvm_value(lhs)?.into_pointer_value();
         let offset = self.llvm_value(rhs)?.into_int_value();
 
@@ -1564,7 +1560,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                     .build_gep(self.context.i8_type(), ptr, &[offset], dst)
                     .map_err(|err| err.to_string())?
             },
-
             IrOp::Sub => {
                 let neg = self
                     .builder
@@ -1577,7 +1572,6 @@ impl<'ctx> LlvmBackend<'ctx> {
                         .map_err(|err| err.to_string())?
                 }
             }
-
             _ => {
                 return Err(format!("invalid pointer arithmetic operation {:?}", op));
             }
@@ -1585,7 +1579,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
         self.temps.insert(dst.to_string(), result.into());
         self.temp_types
-            .insert(dst.to_string(), Type::Ptr(Box::new(result_pointee.clone())));
+            .insert(dst.to_string(), Type::Ptr(Box::new(result_pointee)));
 
         Ok(())
     }
