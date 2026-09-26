@@ -53,9 +53,10 @@ fn json_error_from_string(file: &str, message: &str) -> JsonError {
 
 fn json_error_from_analyser_error(err: &AnalyserError) -> JsonError {
     let (location, message) = match err {
-        AnalyserError::TypeError { location, message } => (location, message),
-        AnalyserError::SemanticError { location, message } => (location, message),
-        AnalyserError::OverDefinitionError { location, message } => (location, message),
+        AnalyserError::TypeError { location, message }
+        | AnalyserError::SemanticError { location, message }
+        | AnalyserError::UndefinedError { location, message }
+        | AnalyserError::OverDefinitionError { location, message } => (location, message),
     };
     JsonError {
         file: location.file.to_string(),
@@ -604,9 +605,10 @@ fn format_analyser_error(
     root_source: Option<&str>,
 ) -> String {
     let (location, message) = match err {
-        AnalyserError::TypeError { location, message } => (location, message),
-        AnalyserError::SemanticError { location, message } => (location, message),
-        AnalyserError::OverDefinitionError { location, message } => (location, message),
+        AnalyserError::TypeError { location, message }
+        | AnalyserError::SemanticError { location, message }
+        | AnalyserError::UndefinedError { location, message }
+        | AnalyserError::OverDefinitionError { location, message } => (location, message),
     };
     let file_path_str = location.file.as_ref();
     let source = sources
@@ -1372,10 +1374,6 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
             .as_ref(),
     );
 
-    if ctx.debug {
-        println!("{:#?}", program);
-    }
-
     let mut analyser = Analyser::new();
 
     if let Err(err) = analyser.analyse(program) {
@@ -1383,12 +1381,14 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
             let location = match err.clone() {
                 AnalyserError::SemanticError { location, .. }
                 | AnalyserError::OverDefinitionError { location, .. }
+                | AnalyserError::UndefinedError { location, .. }
                 | AnalyserError::TypeError { location, .. } => location,
             };
 
             let message = match err.clone() {
                 AnalyserError::SemanticError { message, .. }
                 | AnalyserError::OverDefinitionError { message, .. }
+                | AnalyserError::UndefinedError { message, .. }
                 | AnalyserError::TypeError { message, .. } => message,
             };
 
@@ -1413,6 +1413,7 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
 
     let mut irgen = IRGen::new();
     irgen.analyser_constants = analyser.constants.clone();
+    irgen.analyser_functions = analyser.functions.clone();
 
     for (name, sig) in &analyser.structs {
         if !sig.generic_params.is_empty() {
@@ -1483,7 +1484,6 @@ pub fn compile_ast_program<'a, P: AsRef<Path>>(
         irgen,
         analyser.functions.clone(),
         tac_instructions,
-        public_functions,
         file_path,
         output_filename,
     )
@@ -1499,12 +1499,10 @@ fn is_generic_type(ty: &Type) -> bool {
     )
 }
 
-#[allow(unused)]
 fn compile_with_llvm(
     irgen: IRGen,
     functions: HashMap<String, FunctionSignature>,
     tac_instructions: Vec<Instruction>,
-    public_functions: HashSet<String>,
     file_path: &Path,
     output_filename: &str,
 ) -> Result<(), String> {

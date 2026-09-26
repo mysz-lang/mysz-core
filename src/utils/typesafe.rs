@@ -22,6 +22,10 @@ pub enum Type {
     Struct(String),
     Enum(String),
     Union(String),
+
+    // Becomes Struct/Enum/Union within analyser
+    TypeDef(String),
+
     // Generics
     GenericInstance {
         name: String,
@@ -107,8 +111,12 @@ impl Type {
             Type::GenericParam(s) => format!("gparam__{}", s),
             Type::VariadicPack { .. } => {
                 unreachable!(
-                    "VariadicPack is a symbolic placeholder and should never be mangled directly \
-                 — a concrete arg type was expected here. This indicates a compiler bug."
+                    "VariadicPack is a symbolic placeholder and should never be mangled directly a concrete arg type was expected here. This indicates a compiler bug."
+                )
+            }
+            Type::TypeDef(..) => {
+                unreachable!(
+                    "TypeDef is a placeholder before knowing a user-defined type and should never be mangled directly a concrete usertype was expected here. This indicates a compiler bug."
                 )
             }
         }
@@ -213,7 +221,7 @@ pub fn is_truthy_type(ty: &Type) -> bool {
     )
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum TypeCheckMode {
     Strict,   // exact match only
     Coercive, // allows implicit conversions
@@ -282,7 +290,9 @@ pub fn types_equal(expected: &Type, from: &Type) -> bool {
 
 pub fn type_to_string(ty: &Type) -> String {
     match ty {
-        Type::Struct(name) => name.clone(),
+        Type::Struct(name) => format!("struct<{}>", name.clone()),
+        Type::Enum(name) => format!("enum<{}>", name.clone()),
+        Type::Union(name) => format!("union<{}>", name.clone()),
         Type::Ptr(inner) => format!("ptr<{}>", type_to_string(inner)),
         Type::Array { element_type, size } => {
             format!("[{}; {}]", type_to_string(element_type), size)
@@ -317,6 +327,7 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::GenericInstance { .. } => "generic_instance".to_string(),
         Type::GenericParam(..) => "generic_param".to_string(),
         Type::VariadicPack { .. } => "variadic".to_string(),
+        Type::TypeDef(s) => s.to_string(),
     }
 }
 

@@ -245,7 +245,7 @@ impl Parser {
                         let args = self.parse_generic_args();
                         Some(Type::GenericInstance { name, args })
                     } else {
-                        Some(Type::Struct(name))
+                        Some(Type::TypeDef(name))
                     }
                 }
             },

@@ -13,6 +13,7 @@ pub enum AnalyserError {
     TypeError { location: Location, message: String },
     SemanticError { location: Location, message: String },
     OverDefinitionError { location: Location, message: String },
+    UndefinedError { location: Location, message: String },
 }
 impl AnalyserError {
     pub fn type_error(location: Location, message: impl Into<String>) -> Self {
@@ -29,6 +30,12 @@ impl AnalyserError {
     }
     pub fn overdef_error(location: Location, message: impl Into<String>) -> Self {
         AnalyserError::OverDefinitionError {
+            location,
+            message: message.into(),
+        }
+    }
+    pub fn undefined_error(location: Location, message: impl Into<String>) -> Self {
+        AnalyserError::UndefinedError {
             location,
             message: message.into(),
         }
@@ -114,15 +121,45 @@ impl Analyser {
         self.current_scope = parent;
     }
 
-    fn resolve_enum_type(&self, ty: &Type) -> Type {
+    fn resolve_enum_type(&self, ty: &Type, location: Location) -> Result<Type, AnalyserError> {
         match ty {
-            Type::Struct(name) if self.enums.contains_key(name) => Type::Enum(name.clone()),
-            Type::Ptr(inner) => Type::Ptr(Box::new(self.resolve_enum_type(inner))),
-            Type::Array { element_type, size } => Type::Array {
-                element_type: Box::new(self.resolve_enum_type(element_type)),
+            Type::Struct(name) if self.enums.contains_key(name) => Ok(Type::Enum(name.clone())),
+            Type::Ptr(inner) => Ok(Type::Ptr(Box::new(
+                self.resolve_enum_type(inner, location)?,
+            ))),
+            Type::Array { element_type, size } => Ok(Type::Array {
+                element_type: Box::new(self.resolve_enum_type(element_type, location)?),
                 size: *size,
-            },
-            _ => ty.clone(),
+            }),
+            Type::TypeDef(name) => {
+                let result = self.resolve_typedef(&name.to_string());
+                if result.is_none() {
+                    return Err(AnalyserError::SemanticError {
+                        location: location,
+                        message: format!(
+                            "User-defined type cannot be found: {}",
+                            type_to_string(ty)
+                        ),
+                    });
+                };
+
+                return Ok(result.unwrap());
+            }
+            _ => Ok(ty.clone()),
+        }
+    }
+
+    fn resolve_typedef(&self, name: &str) -> Option<Type> {
+        if self.structs.contains_key(name) {
+            Some(Type::Struct(name.to_string()))
+        } else if self.enums.contains_key(name) {
+            Some(Type::Enum(name.to_string()))
+        } else if self.unions.contains_key(name) {
+            Some(Type::Union(name.to_string()))
+        } else if let Some(symbol) = self.resolve_variable(name) {
+            Some(symbol.ty.clone())
+        } else {
+            None
         }
     }
 
@@ -173,6 +210,16 @@ impl Analyser {
                         ) = (&left.kind, &right.kind)
                         {
                             return Ok(a != b);
+                        }
+
+                        if let (
+                            ExprKind::Typeof { expr },
+                            ExprKind::Literal(Literal::String(expected)),
+                        ) = (&left.kind, &right.kind)
+                        {
+                            let actual = self.check_expr(expr, None, TypeCheckMode::Passive)?;
+
+                            return Ok(type_to_string(&actual) != *expected);
                         }
 
                         Ok(false)
@@ -400,6 +447,18 @@ impl Analyser {
 
                 Ok(Type::Struct(mangled))
             }
+
+            Type::TypeDef(s) => {
+                let resolved = self.resolve_typedef(&s.to_string());
+                if resolved.is_none() {
+                    return Err(AnalyserError::undefined_error(
+                        span.clone(),
+                        format!("Undefined user-type: {s}"),
+                    ));
+                };
+
+                return Ok(resolved.unwrap());
+            }
             Type::GenericParam(p) => Ok(Type::GenericParam(p.clone())),
             _ => Ok(ty.clone()),
         }
@@ -453,7 +512,10 @@ impl Analyser {
                     return Ok(());
                 }
 
-                if !self.structs.contains_key(name) && !self.enums.contains_key(name) {
+                if !self.structs.contains_key(name)
+                    && !self.enums.contains_key(name)
+                    && !self.unions.contains_key(name)
+                {
                     return Err(AnalyserError::SemanticError {
                         location: span.clone(),
                         message: format!(
@@ -640,19 +702,21 @@ impl Analyser {
         &mut self,
         expr: &Expr,
         expected_type: Option<&Type>,
+        mode: TypeCheckMode,
     ) -> Result<Type, AnalyserError> {
         match &expr.kind {
             ExprKind::Sizeof { .. } => Ok(Type::Int),
             ExprKind::Typeof { .. } => Ok(Type::Str),
             ExprKind::Any => Ok(Type::Any),
             ExprKind::Cast { left, right } => {
-                let leftty = self.check_expr(left.as_ref(), None)?;
+                let leftty = self.check_expr(left.as_ref(), None, mode)?;
+                let leftty = self.resolve_enum_type(&leftty, left.span.clone())?;
 
-                // Declared types name enums as `Struct(..)`; resolve both sides.
-                let leftty = self.resolve_enum_type(&leftty);
-                let target = self.resolve_enum_type(right);
+                let target = self.resolve_enum_type(right, left.span.clone())?;
 
-                if types_compatible(&leftty, &target) {
+                let based_mode = if mode == TypeCheckMode::Passive {mode} else {TypeCheckMode::Coercive};
+
+                if types_match(&leftty, &target, based_mode) {
                     return Ok(target);
                 }
 
@@ -696,12 +760,12 @@ impl Analyser {
                         ));
                         }
                     } else {
-                        self.check_expr(&elements[0], expected_elem_ty)?
+                        self.check_expr(&elements[0], expected_elem_ty, mode)?
                     };
 
                     for el in elements {
-                        let el_type = self.check_expr(el, Some(&element_type))?;
-                        if !types_equal(&element_type, &el_type) {
+                        let el_type = self.check_expr(el, Some(&element_type), mode)?;
+                        if !types_match(&element_type, &el_type, mode) {
                             return Err(AnalyserError::type_error(
                                 el.span.clone(),
                                 format!(
@@ -731,7 +795,17 @@ impl Analyser {
                     }
                     return Ok(Type::Enum(name.clone()));
                 }
-                let base_type = self.check_expr(base, None)?;
+                let base_type = self.check_expr(base, None, mode)?;
+
+                let base_type = match base_type {
+                    Type::TypeDef(name) => self.resolve_typedef(&name).ok_or_else(|| {
+                        AnalyserError::semantic_error(
+                            expr.span.clone(),
+                            format!("Unknown type '{}'.", name),
+                        )
+                    })?,
+                    other => other,
+                };
 
                 match base_type {
                     Type::Struct(struct_name) => {
@@ -948,8 +1022,8 @@ impl Analyser {
                         )
                     })?;
 
-                    let actual_ty = self.check_expr(field_expr, Some(expected_ty))?;
-                    if !types_equal(expected_ty, &actual_ty) {
+                    let actual_ty = self.check_expr(field_expr, Some(expected_ty), mode)?;
+                    if !types_match(expected_ty, &actual_ty, mode) {
                         return Err(AnalyserError::type_error(
                             field_expr.span.clone(),
                             format!(
@@ -966,8 +1040,8 @@ impl Analyser {
             }
 
             ExprKind::Index { base, index } => {
-                let base_type = self.check_expr(base, None)?;
-                let index_type = self.check_expr(index, Some(&Type::Int))?;
+                let base_type = self.check_expr(base, None, mode)?;
+                let index_type = self.check_expr(index, Some(&Type::Int), mode)?;
 
                 if !is_integer(&index_type) {
                     return Err(AnalyserError::type_error(
@@ -1218,7 +1292,7 @@ impl Analyser {
                     .zip(param_types.iter())
                     .enumerate()
                 {
-                    let arg_type = self.check_expr(arg, Some(expected))?;
+                    let arg_type = self.check_expr(arg, Some(expected), mode)?;
 
                     match (expected, &arg_type) {
                         (
@@ -1261,7 +1335,7 @@ impl Analyser {
                         }
 
                         _ => {
-                            if !types_equal(expected, &arg_type) {
+                            if !types_match(expected, &arg_type, mode) {
                                 return Err(AnalyserError::type_error(
                                     arg.span.clone(),
                                     format!(
@@ -1282,7 +1356,7 @@ impl Analyser {
                     let mut variadic_types = Vec::new();
 
                     for arg in variadic_args {
-                        variadic_types.push(self.check_expr(arg, None)?);
+                        variadic_types.push(self.check_expr(arg, None, mode)?);
                     }
 
                     let variadic_mangled_name =
@@ -1362,12 +1436,12 @@ impl Analyser {
                         && let ExprKind::Identifier(name) = &base.kind
                         && self.unions.contains_key(name)
                     {
-                        self.check_expr(left, None)?;
+                        self.check_expr(left, None, mode)?;
                         return Ok(Type::Bool);
                     }
 
                     if let ExprKind::UnionPatternCall { union_name, tag, args } = &right.kind {
-                        self.check_expr(left, None)?;
+                        self.check_expr(left, None, mode)?;
 
                         let signature = self.unions.get(union_name).ok_or_else(|| {
                             AnalyserError::semantic_error(
@@ -1395,7 +1469,7 @@ impl Analyser {
                             ));
                         }
 
-                        let arg_type = self.check_expr(&args[0], Some(&variant_type))?;
+                        let arg_type = self.check_expr(&args[0], Some(&variant_type), mode)?;
 
                         if !types_match(&variant_type, &arg_type, TypeCheckMode::Coercive) {
                             return Err(AnalyserError::type_error(
@@ -1414,8 +1488,8 @@ impl Analyser {
                     }
                 }
 
-                let left_type = self.check_expr(left, None)?;
-                let right_type = self.check_expr(right, Some(&left_type))?;
+                let left_type = self.check_expr(left, None, mode)?;
+                let right_type = self.check_expr(right, Some(&left_type), mode)?;
 
                 match op {
                     BinaryOp::Add => {
@@ -1648,7 +1722,7 @@ impl Analyser {
                     ));
                 }
 
-                let arg_type = self.check_expr(&args[0], Some(&variant_type))?;
+                let arg_type = self.check_expr(&args[0], Some(&variant_type), mode)?;
 
                 if !types_match(&variant_type, &arg_type, TypeCheckMode::Coercive) {
                     return Err(AnalyserError::type_error(
@@ -1672,7 +1746,7 @@ impl Analyser {
                     .to_string(),
             )),
             ExprKind::Unary { op, expr: sub_expr } => {
-                let expr_type = self.check_expr(sub_expr, None)?;
+                let expr_type = self.check_expr(sub_expr, None, mode)?;
                 match op {
                     UnaryOp::Positive | UnaryOp::Negative => {
                         if is_signed_integer(&expr_type) {
@@ -1832,9 +1906,22 @@ impl Analyser {
                 let return_type = match rttype {
                     Some(rt) => {
                         let instantiated = self.instantiate_generic_types(rt, &name.location)?;
+
                         self.validate_type_exists(&instantiated, &name.location)?;
-                        instantiated
+
+                        match instantiated {
+                            Type::TypeDef(type_name) => {
+                                self.resolve_typedef(&type_name).ok_or_else(|| {
+                                    AnalyserError::semantic_error(
+                                        name.location.clone(),
+                                        format!("Unknown type '{}'.", type_name),
+                                    )
+                                })?
+                            }
+                            other => other,
+                        }
                     }
+
                     None => Type::Void,
                 };
 
@@ -1854,8 +1941,20 @@ impl Analyser {
                         Some(pt) => {
                             let instantiated =
                                 self.instantiate_generic_types(pt, &param.name.location)?;
+
                             self.validate_type_exists(&instantiated, &param.name.location)?;
-                            instantiated
+
+                            match instantiated {
+                                Type::TypeDef(type_name) => {
+                                    self.resolve_typedef(&type_name).ok_or_else(|| {
+                                        AnalyserError::semantic_error(
+                                            param.name.location.clone(),
+                                            format!("Unknown type '{}'.", type_name),
+                                        )
+                                    })?
+                                }
+                                other => other,
+                            }
                         }
                         None => Type::Any,
                     };
@@ -1896,7 +1995,7 @@ impl Analyser {
                         let instantiated =
                             self.instantiate_generic_types(explicit_type, &name.location)?;
                         self.validate_type_exists(&instantiated, &name.location)?;
-                        let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
+                        let expr_type = self.check_expr(expr_node, Some(&instantiated), mode)?;
                         if !types_equal(&instantiated, &expr_type) {
                             return Err(AnalyserError::TypeError {
                                 location: expr_node.span.clone(),
@@ -1910,7 +2009,7 @@ impl Analyser {
                         }
                         instantiated
                     }
-                    (None, expr_node) => self.check_expr(expr_node, None)?,
+                    (None, expr_node) => self.check_expr(expr_node, None, mode)?,
                 };
 
                 if self.constants.contains_key(&name.value) {
@@ -1935,9 +2034,10 @@ impl Analyser {
                         let instantiated =
                             self.instantiate_generic_types(explicit_type, &ident.location)?;
                         self.validate_type_exists(&instantiated, &ident.location)?;
-                        let expr_type = self.check_expr(expr_node, Some(&instantiated))?;
 
-                        if !types_equal(&instantiated, &expr_type) {
+                        let expr_type = self.check_expr(expr_node, Some(&instantiated), mode)?;
+
+                        if !types_match(&instantiated, &expr_type, mode) {
                             return Err(AnalyserError::type_error(
                                 expr_node.span.clone(),
                                 format!(
@@ -1948,15 +2048,20 @@ impl Analyser {
                                 ),
                             ));
                         }
+
                         instantiated
                     }
+
                     (Some(explicit_type), None) => {
                         let instantiated =
                             self.instantiate_generic_types(explicit_type, &ident.location)?;
                         self.validate_type_exists(&instantiated, &ident.location)?;
+
                         instantiated
                     }
-                    (None, Some(expr_node)) => self.check_expr(expr_node, None)?,
+
+                    (None, Some(expr_node)) => self.check_expr(expr_node, None, mode)?,
+
                     (None, None) => {
                         return Err(AnalyserError::semantic_error(
                             ident.location.clone(),
@@ -1966,6 +2071,16 @@ impl Analyser {
                             ),
                         ));
                     }
+                };
+
+                let variable_type = match variable_type {
+                    Type::TypeDef(name) => self.resolve_typedef(&name).ok_or_else(|| {
+                        AnalyserError::semantic_error(
+                            ident.location.clone(),
+                            format!("Unknown type '{}'.", name),
+                        )
+                    })?,
+                    other => other,
                 };
 
                 if let Some(existing_symbol) = self.resolve_variable(&ident.value) {
@@ -2018,10 +2133,10 @@ impl Analyser {
             }
 
             Stmt::DerefReassignment { target, expr } => {
-                let target_resolved_type = self.check_expr(target, None)?;
-                let expr_type = self.check_expr(expr, Some(&target_resolved_type))?;
+                let target_resolved_type = self.check_expr(target, None, mode)?;
+                let expr_type = self.check_expr(expr, Some(&target_resolved_type), mode)?;
 
-                if !types_equal(&target_resolved_type, &expr_type) {
+                if !types_match(&target_resolved_type, &expr_type, mode) {
                     return Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
@@ -2046,9 +2161,9 @@ impl Analyser {
                         )
                     })?;
 
-                let expr_type = self.check_expr(expr, Some(&expected_ty))?;
+                let expr_type = self.check_expr(expr, Some(&expected_ty), mode)?;
 
-                if !types_equal(&expected_ty, &expr_type) {
+                if !types_match(&expected_ty, &expr_type, mode) {
                     return Err(AnalyserError::type_error(
                         expr.span.clone(),
                         format!(
@@ -2064,12 +2179,12 @@ impl Analyser {
             }
 
             Stmt::Expr(expr) => {
-                self.check_expr(expr, None)?;
+                self.check_expr(expr, None, mode)?;
                 Ok(())
             }
 
             Stmt::While { cond, body } => {
-                let cond_type = self.check_expr(cond, None)?;
+                let cond_type = self.check_expr(cond, None, mode)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(AnalyserError::type_error(
                         cond.span.clone(),
@@ -2099,7 +2214,7 @@ impl Analyser {
 
                 self.check_stmt(init.as_ref(), mode)?;
 
-                let cond_type = self.check_expr(cond, None)?;
+                let cond_type = self.check_expr(cond, None, mode)?;
                 if !self.check_truthiness(&cond_type) {
                     self.leave_scope();
                     return Err(AnalyserError::type_error(
@@ -2126,7 +2241,7 @@ impl Analyser {
                 target_expr,
                 body,
             } => {
-                let target_type = self.check_expr(target_expr, None)?;
+                let target_type = self.check_expr(target_expr, None, mode)?;
 
                 if let Type::VariadicPack { types, .. } = &target_type {
                     let iter_types = if types.is_empty() {
@@ -2196,7 +2311,7 @@ impl Analyser {
                 else_if_branches,
                 else_branch,
             } => {
-                let cond_type = self.check_expr(cond, None)?;
+                let cond_type = self.check_expr(cond, None, mode)?;
                 if !self.check_truthiness(&cond_type) {
                     return Err(AnalyserError::type_error(
                         cond.span.clone(),
@@ -2216,7 +2331,7 @@ impl Analyser {
                 }
 
                 for (cond, body) in else_if_branches {
-                    let cond_type = self.check_expr(cond, None)?;
+                    let cond_type = self.check_expr(cond, None, mode)?;
                     if !self.check_truthiness(&cond_type) {
                         return Err(AnalyserError::type_error(
                             cond.span.clone(),
@@ -2334,7 +2449,7 @@ impl Analyser {
 
                 let prev_return_type = self.current_return_type.replace(return_type.clone());
 
-                let body_mode = if is_variadic {
+                let body_mode = if is_generic || is_variadic {
                     TypeCheckMode::Passive
                 } else {
                     mode
@@ -2378,11 +2493,11 @@ impl Analyser {
                 })?;
 
                 let actual_type = match value {
-                    Some(e) => self.check_expr(e, Some(&expected))?,
+                    Some(e) => self.check_expr(e, Some(&expected), mode)?,
                     None => Type::Void,
                 };
 
-                if !types_equal(&expected, &actual_type) {
+                if !types_match(&expected, &actual_type, mode) {
                     return Err(AnalyserError::TypeError {
                         location: span.clone(),
                         message: format!(

@@ -188,6 +188,13 @@ impl<'ctx> LlvmBackend<'ctx> {
                 panic!("ICE: void used where an LLVM value type was required")
             }
 
+            Type::TypeDef(name) => {
+                panic!(
+                    "ICE: TypeDef used where an LLVM value was required: it should have been resolved to a concrete user defined type: {}",
+                    name
+                )
+            }
+
             Type::Nil => self
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
@@ -714,10 +721,24 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .copied()
                 .ok_or_else(|| format!("unknown struct '{}'", name))?;
 
-            let field_types = layout
-                .field_offsets
-                .values()
-                .map(|(_, ty)| self.llvm_type(ty))
+            let mut physical_fields: Vec<(i64, BasicTypeEnum)> = Vec::new();
+
+            for (offset, ty) in layout.field_offsets.values() {
+                let llvm_ty = self.llvm_type(ty);
+
+                if let Some((_, existing_ty)) = physical_fields
+                    .iter_mut()
+                    .find(|(existing_offset, _)| existing_offset == offset)
+                {
+                    *existing_ty = llvm_ty;
+                } else {
+                    physical_fields.push((*offset, llvm_ty));
+                }
+            }
+
+            let field_types = physical_fields
+                .into_iter()
+                .map(|(_, ty)| ty)
                 .collect::<Vec<_>>();
 
             struct_type.set_body(&field_types, false);
@@ -841,8 +862,6 @@ impl<'ctx> LlvmBackend<'ctx> {
         let ptr_ty = self.value_type(ptr)?;
 
         let pointee_ty = match ptr {
-            // A Var operand denotes the variable's own storage (llvm_ptr returns
-            // its alloca), so the pointee is the variable's declared type.
             Value::Var(_) => ptr_ty.clone(),
             _ => match &ptr_ty {
                 Type::Ptr(inner) => inner.as_ref().clone(),
@@ -1051,14 +1070,15 @@ impl<'ctx> LlvmBackend<'ctx> {
                 .basic()
                 .ok_or_else(|| format!("call to '{}' used as a value but returns void", name))?;
 
-            let sig = self
-                .func_defs
-                .get(signature)
-                .or_else(|| self.func_defs.get(name))
-                .ok_or_else(|| format!("unknown function signature '{}'", signature))?;
-
             self.temps.insert(dst.clone(), ret_val);
-            self.temp_types.insert(dst.clone(), sig.return_type.clone());
+
+            let return_type = self
+                .var_types
+                .get(dst)
+                .cloned()
+                .ok_or_else(|| format!("unknown temporary type '{}'", dst))?;
+
+            self.temp_types.insert(dst.clone(), return_type);
         }
 
         Ok(())
@@ -1308,6 +1328,7 @@ impl<'ctx> LlvmBackend<'ctx> {
 
                 Type::GenericInstance { .. } => unreachable!(),
                 Type::GenericParam(..) => unreachable!(),
+                Type::TypeDef(..) => unreachable!(),
                 Type::VariadicPack { .. } => unreachable!(),
             };
 

@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 
 use crate::ir::tac::{CastType, Instruction, IrOp, ScopedMap, Value};
 use crate::parse::parsing::{BinaryOp, Expr, ExprKind, Literal, Parameter, Program, Stmt, UnaryOp};
+use crate::semantics::analysis::FunctionSignature;
 use crate::utils::location::Location;
 use crate::utils::typesafe::{Type, is_decimal, type_to_string};
 
@@ -84,6 +85,7 @@ pub struct IRGen {
     functions: FunctionGen,
     loop_exits: Vec<String>,
     pub analyser_constants: HashMap<String, (Type, Expr)>,
+    pub analyser_functions: HashMap<String, FunctionSignature>,
     pub evaluated_constants: HashMap<String, Value>,
     pub var_types: ScopedMap,
     pub struct_defs: HashMap<String, StructLayout>,
@@ -120,6 +122,7 @@ impl IRGen {
             current_function: String::new(),
 
             analyser_constants: HashMap::new(),
+            analyser_functions: HashMap::new(),
             evaluated_constants: HashMap::new(),
 
             fn_blueprints: HashMap::new(),
@@ -336,10 +339,11 @@ impl IRGen {
     pub fn next_temp_with_type(&mut self, ty: Type) -> String {
         let base_name = self.temps.next_temp();
         let qualified_name = if self.current_function.is_empty() {
-            base_name
+            base_name.clone()
         } else {
             format!("{}::{}", self.current_function, base_name)
         };
+
         self.var_types.insert(qualified_name.clone(), ty);
         qualified_name
     }
@@ -394,6 +398,13 @@ impl IRGen {
 
     fn substitute_type(&self, ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
         match ty {
+            Type::TypeDef(name) => {
+                panic!(
+                    "ICE: TypeDef reached substitute_type: it should have been resolved to a concrete user defined type: {}",
+                    name
+                )
+            }
+
             Type::Struct(name) => substitutions
                 .get(name)
                 .cloned()
@@ -698,7 +709,7 @@ impl IRGen {
             Type::Bool => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
-            Type::Array { element_type, size } => self.element_size(element_type) * (*size as i64),
+            Type::Array { element_type, size } => self.type_size(element_type) * (*size as i64),
             Type::GenericParam(name) => {
                 panic!("Cannot get size of unresolved generic parameter: {}", name)
             }
@@ -729,6 +740,12 @@ impl IRGen {
                     "ICE: VariadicPack reached type_size: it should have been resolved to a concrete __variadic__ struct before size queries."
                 )
             }
+            Type::TypeDef(name) => {
+                panic!(
+                    "ICE: TypeDef reached type_size: it should have been resolved to a concrete user defined type: {}",
+                    name
+                )
+            }
 
             Type::Void | Type::Nil => 0,
             Type::Any => 8, // default value, since any is unsafe anyway
@@ -749,7 +766,13 @@ impl IRGen {
             }
             Type::Union(..) => {
                 panic!(
-                    "Union reached type_size: it should have been resolved to a concrete struct via resolve_type() first."
+                    "Union reached type_alignment: it should have been resolved to a concrete struct via resolve_type() first."
+                )
+            }
+            Type::TypeDef(name) => {
+                panic!(
+                    "ICE: TypeDef reached type_alignment: it should have been resolved to a concrete user defined type: {}",
+                    name
                 )
             }
             Type::Char => 1,
@@ -780,10 +803,6 @@ impl IRGen {
             Type::Void | Type::Nil => 0,
             Type::Any => 8,
         }
-    }
-
-    fn element_size(&self, ty: &Type) -> i64 {
-        self.type_size(ty)
     }
 
     fn emit_binary(&mut self, op: IrOp, lhs: Value, rhs: Value) -> Value {
@@ -833,29 +852,21 @@ impl IRGen {
     }
 
     fn extern_return_type(&mut self, name: &str, concrete_args: &[Type]) -> Option<Type> {
-        let Some(Stmt::ExternFn {
-            generic_params,
-            rttype,
-            ..
-        }) = self
-            .fn_blueprints
-            .get(&format!("extern::{}", name))
-            .cloned()
-        else {
-            return None;
-        };
+        let signature = self.analyser_functions.get(name)?.clone();
 
-        let substitutions: HashMap<String, Type> = generic_params
+        let substitutions: HashMap<String, Type> = signature
+            .generic_params
             .iter()
             .cloned()
             .zip(concrete_args.iter().cloned())
             .collect();
 
-        let unresolved = rttype.unwrap_or(Type::Void);
-        let substituted = self.substitute_type(&unresolved, &substitutions);
+        let substituted = self.substitute_type(&signature.return_type, &substitutions);
 
         let old_subs = std::mem::replace(&mut self.current_substitutions, substitutions);
+
         let resolved = self.resolve_type(&substituted);
+
         self.current_substitutions = old_subs;
 
         Some(resolved)
@@ -1348,7 +1359,7 @@ impl IRGen {
                     _ => panic!("Cannot index value of type: {:?}", base_type),
                 };
 
-                let stride = self.element_size(&element_type);
+                let stride = self.type_size(&element_type);
 
                 let offset_temp = self.next_temp_with_type(Type::Int);
 
@@ -1570,7 +1581,7 @@ impl IRGen {
                     } else {
                         Type::Int
                     };
-                    let stride = self.element_size(&element_type);
+                    let stride = self.type_size(&element_type);
 
                     let base_val = match target_dest {
                         Some(dest) => dest,
@@ -2241,11 +2252,6 @@ impl IRGen {
                         if vtype.is_none() {
                             let computed_ty = self.get_value_type(&value);
                             let resolved_computed = self.resolve_type(&computed_ty);
-
-                            println!(
-                                "ASSIGN {}: value={:?}, computed_ty={:?}, resolved_ty={:?}",
-                                mangled_name, value, computed_ty, resolved_computed
-                            );
 
                             self.var_types
                                 .insert(mangled_name.clone(), resolved_computed);
