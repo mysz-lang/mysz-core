@@ -444,6 +444,10 @@ impl IRGen {
             | Type::UInt
             | Type::Int8
             | Type::UInt8
+            | Type::Int16
+            | Type::UInt16
+            | Type::Int32
+            | Type::UInt32
             | Type::Double
             | Type::Float
             | Type::Bool
@@ -706,6 +710,8 @@ impl IRGen {
             Type::Enum(..) | Type::Int | Type::UInt | Type::Double => 8,
             Type::Float => 4,
             Type::Int8 | Type::UInt8 => 1,
+            Type::Int16 | Type::UInt16 => 2,
+            Type::Int32 | Type::UInt32 => 4,
             Type::Bool => 1,
             Type::Str => 8,
             Type::Ptr(_) => 8,
@@ -757,6 +763,8 @@ impl IRGen {
             Type::Enum(..) | Type::Int | Type::UInt | Type::Double => 8,
             Type::Float => 4,
             Type::Int8 | Type::UInt8 => 1,
+            Type::Int16 | Type::UInt16 => 2,
+            Type::Int32 | Type::UInt32 => 4,
             Type::Bool => 1,
             Type::GenericParam(name) => {
                 panic!(
@@ -1517,12 +1525,20 @@ impl IRGen {
                         | Type::UInt
                         | Type::Int8
                         | Type::UInt8
+                        | Type::Int16
+                        | Type::UInt16
+                        | Type::Int32
+                        | Type::UInt32
                         | Type::Char
                         | Type::Enum(..),
                         Type::Int
                         | Type::UInt
                         | Type::Int8
                         | Type::UInt8
+                        | Type::Int16
+                        | Type::UInt16
+                        | Type::Int32
+                        | Type::UInt32
                         | Type::Char
                         | Type::Enum(..),
                     ) => {

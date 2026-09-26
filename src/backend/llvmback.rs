@@ -153,6 +153,10 @@ impl<'ctx> LlvmBackend<'ctx> {
 
             Type::Int8 | Type::UInt8 | Type::Char => self.context.i8_type().into(),
 
+            Type::Int16 | Type::UInt16 => self.context.i16_type().into(),
+
+            Type::Int32 | Type::UInt32 => self.context.i32_type().into(),
+
             Type::Double => self.context.f64_type().into(),
             Type::Float => self.context.f32_type().into(),
 
@@ -1300,6 +1304,10 @@ impl<'ctx> LlvmBackend<'ctx> {
                 | Type::Int8
                 | Type::Char
                 | Type::UInt8
+                | Type::Int16
+                | Type::UInt16
+                | Type::Int32
+                | Type::UInt32
                 | Type::Bool
                 | Type::Enum(..)
                 | Type::UInt => self.llvm_type(to_type).into_int_type().const_zero().into(),

@@ -1,0 +1,12 @@
+[DUMP_START]
+extern fn mysz_stdout
+extern fn mysz_write
+extern fn mysz_malloc
+main:
+param main::argc
+param main::argv
+main::t1 = Const(2) as i16 [casttype: Truncate]
+main::a = Temp("main::t1")
+return Const(0)
+[DUMP_END]
+Compilation successful!

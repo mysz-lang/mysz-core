@@ -167,11 +167,14 @@ impl Parser {
         match tk.ttype {
             TokenType::LBracket => {
                 self.advance();
+
                 let element_type = self.parse_type()?;
+
                 self.expect(TokenType::SemiColon)?;
 
                 let size_tk = self.expect(TokenType::IntLiteral)?;
                 let size = size_tk.value.parse::<usize>().unwrap();
+
                 self.expect(TokenType::RBracket)?;
 
                 Some(Type::Array {
@@ -180,81 +183,40 @@ impl Parser {
                 })
             }
 
-            TokenType::Identifier => match tk.value.as_str() {
-                "int" => {
-                    self.advance();
-                    Some(Type::Int)
-                }
-                "uint" => {
-                    self.advance();
-                    Some(Type::UInt)
-                }
-                "i8" => {
-                    self.advance();
-                    Some(Type::Int8)
-                }
-                "u8" => {
-                    self.advance();
-                    Some(Type::UInt8)
-                }
-                "bool" => {
-                    self.advance();
-                    Some(Type::Bool)
-                }
-                "float" => {
-                    self.advance();
-                    Some(Type::Float)
-                }
-                "double" => {
-                    self.advance();
-                    Some(Type::Double)
-                }
-                "str" => {
-                    self.advance();
-                    Some(Type::Str)
-                }
-                "void" => {
-                    self.advance();
-                    Some(Type::Void)
-                }
-                "nil" => {
-                    self.advance();
-                    Some(Type::Nil)
-                }
-                "ptr" => {
-                    self.advance();
-                    self.expect(TokenType::LessThan)?;
-                    let inner = self.parse_type()?;
-                    self.expect(TokenType::GreaterThan)?;
-                    Some(Type::Ptr(Box::new(inner)))
-                }
-                "char" => {
-                    self.advance();
-                    Some(Type::Char)
-                }
-                other => {
-                    let name = other.to_string();
-                    self.advance();
+            TokenType::Identifier => {
+                let name = tk.value.to_string();
 
-                    if self.generic_params.contains(&name) {
-                        Some(Type::GenericParam(name))
-                    } else if matches!(
-                        self.get_token().map(|t| &t.ttype),
-                        Some(TokenType::LessThan)
-                    ) {
-                        let args = self.parse_generic_args();
-                        Some(Type::GenericInstance { name, args })
-                    } else {
-                        Some(Type::TypeDef(name))
-                    }
+                self.advance();
+
+                if self.generic_params.contains(&name) {
+                    Some(Type::GenericParam(name))
+                } else if name == "ptr" {
+                    self.expect(TokenType::LessThan)?;
+
+                    let inner = self.parse_type()?;
+
+                    self.expect(TokenType::GreaterThan)?;
+
+                    Some(Type::Ptr(Box::new(inner)))
+                } else if matches!(
+                    self.get_token().map(|t| &t.ttype),
+                    Some(TokenType::LessThan)
+                ) {
+                    let args = self.parse_generic_args();
+
+                    Some(Type::GenericInstance { name, args })
+                } else {
+                    Some(Type::from(&name))
                 }
-            },
+            }
+
             _ => {
                 self.throw(
                     ParserErrorType::UnexpectedTokenTypeError,
                     format!("Expected type metadata, found {:?}", tk.ttype),
                     tk.location,
                 );
+
                 None
             }
         }

@@ -8,6 +8,13 @@ pub enum Type {
     UInt,
     Int8,
     UInt8,
+
+    Int16,
+    UInt16,
+
+    Int32,
+    UInt32,
+
     Double,
     Float,
     Bool,
@@ -49,6 +56,10 @@ impl From<&str> for Type {
             "uint" => Type::UInt,
             "int8" | "i8" => Type::Int8,
             "uint8" | "u8" => Type::UInt8,
+            "int16" | "i16" => Type::Int16,
+            "uint16" | "u16" => Type::UInt16,
+            "int32" | "i32" => Type::Int32,
+            "uint32" | "u32" => Type::UInt32,
             "double" => Type::Double,
             "float" => Type::Float,
             "bool" => Type::Bool,
@@ -57,7 +68,7 @@ impl From<&str> for Type {
             "void" => Type::Void,
             "any" => Type::Any,
             "nil" => Type::Nil,
-            _ => Type::Struct(value.to_string()),
+            _ => Type::TypeDef(value.to_string()),
         }
     }
 }
@@ -87,6 +98,10 @@ impl Type {
             Type::UInt => "uint".to_string(),
             Type::Int8 => "int8".to_string(),
             Type::UInt8 => "uint8".to_string(),
+            Type::Int16 => "int16".to_string(),
+            Type::UInt16 => "uint16".to_string(),
+            Type::Int32 => "int32".to_string(),
+            Type::UInt32 => "uint32".to_string(),
             Type::Float => "float".to_string(),
             Type::Double => "double".to_string(),
             Type::Bool => "bool".to_string(),
@@ -184,18 +199,30 @@ pub fn both_way_allow(found: &Type, expected: &Type, a: Type, b: Type) -> bool {
 pub fn is_integer(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::Int | Type::UInt | Type::Int8 | Type::UInt8 | Type::Char | Type::Enum(_)
+        Type::Int
+            | Type::UInt
+            | Type::Int8
+            | Type::UInt8
+            | Type::Char
+            | Type::Enum(_)
+            | Type::Int16
+            | Type::UInt16
+            | Type::Int32
+            | Type::UInt32
     )
 }
 
 #[inline]
 pub fn is_signed_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Int8)
+    matches!(ty, Type::Int | Type::Int8 | Type::Int16 | Type::Int32)
 }
 
 #[inline]
 pub fn is_unsigned_integer(ty: &Type) -> bool {
-    matches!(ty, Type::UInt | Type::UInt8 | Type::Char)
+    matches!(
+        ty,
+        Type::UInt | Type::UInt8 | Type::Char | Type::UInt16 | Type::UInt32
+    )
 }
 
 #[inline]
@@ -208,9 +235,13 @@ pub fn is_truthy_type(ty: &Type) -> bool {
     matches!(
         ty,
         Type::Int
-            | Type::UInt
             | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::UInt
             | Type::UInt8
+            | Type::UInt16
+            | Type::UInt32
             | Type::Bool
             | Type::Str
             | Type::Enum(..)
@@ -313,6 +344,10 @@ pub fn typeof_string(ty: &Type) -> String {
         Type::UInt => "uint".to_string(),
         Type::Int8 => "i8".to_string(),
         Type::UInt8 => "u8".to_string(),
+        Type::Int32 => "i32".to_string(),
+        Type::UInt32 => "u32".to_string(),
+        Type::Int16 => "i16".to_string(),
+        Type::UInt16 => "u16".to_string(),
         Type::Float => "float".to_string(),
         Type::Double => "double".to_string(),
         Type::Bool => "bool".to_string(),
